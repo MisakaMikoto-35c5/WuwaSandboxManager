@@ -50,7 +50,8 @@ internal sealed class FileSandboxRepository : ISandboxInstanceRepository, ISingl
             instance.Runtime,
             instance.FaultReason,
             instance.CreatedUtc,
-            instance.UpdatedUtc);
+            instance.UpdatedUtc,
+            instance.Engine);
 
         var json = JsonSerializer.Serialize(record, JsonOptions);
         await File.WriteAllTextAsync(InstancePath(instance.Id), json, cancellationToken).ConfigureAwait(false);
@@ -82,7 +83,8 @@ internal sealed class FileSandboxRepository : ISandboxInstanceRepository, ISingl
             record.Runtime,
             record.FaultReason,
             record.CreatedUtc,
-            record.UpdatedUtc);
+            record.UpdatedUtc,
+            record.Engine);
     }
 
     public async Task<IReadOnlyList<SandboxInstance>> ListAsync(CancellationToken cancellationToken = default)
@@ -105,7 +107,8 @@ internal sealed class FileSandboxRepository : ISandboxInstanceRepository, ISingl
                 record.Runtime,
                 record.FaultReason,
                 record.CreatedUtc,
-                record.UpdatedUtc));
+                record.UpdatedUtc,
+                record.Engine));
         }
 
         return results.OrderBy(i => i.CreatedUtc).ToArray();
@@ -141,4 +144,5 @@ internal sealed record SandboxInstanceRecord(
     SandboxRuntimeInfo? Runtime,
     string? FaultReason,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset UpdatedUtc);
+    DateTimeOffset UpdatedUtc,
+    SandboxEngineKind? Engine = null);

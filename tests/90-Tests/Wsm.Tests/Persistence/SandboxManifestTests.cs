@@ -28,6 +28,7 @@ public sealed class SandboxManifestTests
             Id = id,
             Name = "Ribbon",
             RailMode = true,
+            Engine = SandboxEngineKind.HcsSandbox,
             CreatedUtc = DateTimeOffset.UtcNow,
             UpdatedUtc = DateTimeOffset.UtcNow,
             Recipe = recipe,
@@ -40,6 +41,7 @@ public sealed class SandboxManifestTests
         Assert.Equal(id, parsed.Id);
         Assert.Equal("Ribbon", parsed.Name);
         Assert.True(parsed.RailMode);
+        Assert.Equal(SandboxEngineKind.HcsSandbox, parsed.Engine);
         Assert.Equal("RemoteApp", parsed.Type);
         Assert.Equal(8192, parsed.Recipe.Memory.MemoryMb);
         Assert.Equal(6, parsed.Recipe.Cpu.CoreCount);
@@ -75,6 +77,19 @@ public sealed class SandboxManifestTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void Manifest_from_instance_copies_the_engine()
+    {
+        var instance = SandboxInstance.Create(new SandboxName("Eng"), engine: SandboxEngineKind.WindowsSandbox);
+
+        var manifest = SandboxManifest.FromInstance(instance);
+        Assert.Equal(SandboxEngineKind.WindowsSandbox, manifest.Engine);
+
+        var parsed = SandboxManifest.FromJson(manifest.ToJson());
+        Assert.NotNull(parsed);
+        Assert.Equal(SandboxEngineKind.WindowsSandbox, parsed!.Engine);
     }
 
     [Fact]

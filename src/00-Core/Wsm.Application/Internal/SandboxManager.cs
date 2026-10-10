@@ -36,11 +36,12 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         _manifests = manifests;
     }
 
-    public async Task<SandboxInstanceDto> CreateAsync(string? name, SandboxRecipe recipe, CancellationToken cancellationToken = default)
+    public async Task<SandboxInstanceDto> CreateAsync(string? name, SandboxRecipe recipe, SandboxEngineKind? engine = null, CancellationToken cancellationToken = default)
     {
         var instance = SandboxInstance.Create(
             name is null ? null : new SandboxName(name),
-            recipe);
+            recipe,
+            engine: engine);
 
         await PersistAsync(instance, cancellationToken).ConfigureAwait(false);
         return ToDto(instance);
@@ -99,6 +100,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             Id = instance.Id,
             Recipe = instance.Recipe.ForConnectionMode(mode),
             ConnectionMode = mode,
+            PreferredEngine = instance.Engine,
         };
 
         var engine = _selector.Select(request);
@@ -270,6 +272,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     {
         Id = instance.Id,
         Recipe = instance.Recipe,
+        PreferredEngine = instance.Engine,
     };
 
     private static void EnsureCheckpointsSupported(ISandboxEngine engine)
@@ -291,5 +294,6 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             instance.FaultReason,
             instance.CreatedUtc,
             instance.UpdatedUtc,
+            instance.Engine,
             _manifests.GetManifestPath(instance.Id));
 }

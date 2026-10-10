@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
+using Wsm.Domain.ValueObjects;
 using Wsm.Engines.Abstractions;
 using Wsm.Ui.WinUI.Localization;
 

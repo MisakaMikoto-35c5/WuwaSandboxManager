@@ -94,6 +94,12 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
     [ObservableProperty] private string _stateLabel = string.Empty;
 
+    /// <summary>The engine pinned to this instance, or <c>null</c> for automatic selection.</summary>
+    [ObservableProperty] private SandboxEngineKind? _engine;
+
+    /// <summary>Human-readable engine label for the detail/settings surfaces.</summary>
+    [ObservableProperty] private string _engineLabel = string.Empty;
+
     [ObservableProperty] private string _runtimeSummary = string.Empty;
 
     [ObservableProperty] private string _status = string.Empty;
@@ -174,6 +180,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         DiskSizeMb = dto.Recipe.Storage.DiskSizeMb;
         State = dto.State;
         StateLabel = LocalizeState(dto.State);
+        Engine = dto.Engine;
+        EngineLabel = LocalizeEngine(dto.Engine);
         ManifestPath = dto.ManifestPath;
 
         MappedFolders.Clear();
@@ -356,7 +364,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             var recipe = BuildRecipe();
             var name = Name;
             await _manager.DeleteAsync(Id);
-            var dto = await _manager.CreateAsync(name, recipe);
+            var dto = await _manager.CreateAsync(name, recipe, Engine);
             Apply(dto);
             await _owner.ReloadAsync(Id);
             _owner.Status = _l["Status.Saved.Text"];
@@ -564,5 +572,14 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         VirtualGpuMode.Enabled => _l["Vgpu.Enabled.Text"],
         VirtualGpuMode.Disabled => _l["Vgpu.Disabled.Text"],
         _ => _l["Vgpu.Default.Text"],
+    };
+
+    private string LocalizeEngine(SandboxEngineKind? kind) => kind switch
+    {
+        null => _l["Engine.Auto.Text"],
+        SandboxEngineKind.HcsSandbox => "HCS",
+        SandboxEngineKind.WindowsSandbox => "Windows Sandbox",
+        SandboxEngineKind.WindowsContainer => _l["EngineReserved.Text"],
+        _ => kind.ToString()!,
     };
 }

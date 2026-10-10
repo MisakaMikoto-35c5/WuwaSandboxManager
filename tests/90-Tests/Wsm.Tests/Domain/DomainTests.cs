@@ -72,6 +72,53 @@ public class DomainTests
     }
 
     [Fact]
+    public void Engine_can_be_set_and_cleared_while_not_running()
+    {
+        var instance = SandboxInstance.Create(new SandboxName("Engine"), engine: SandboxEngineKind.WindowsSandbox);
+        Assert.Equal(SandboxEngineKind.WindowsSandbox, instance.Engine);
+
+        instance.SetEngine(SandboxEngineKind.HcsSandbox);
+        Assert.Equal(SandboxEngineKind.HcsSandbox, instance.Engine);
+
+        instance.SetEngine(null);
+        Assert.Null(instance.Engine);
+    }
+
+    [Fact]
+    public void Engine_defaults_to_null_for_automatic_selection()
+        => Assert.Null(SandboxInstance.Create().Engine);
+
+    [Fact]
+    public void Engine_cannot_change_while_running()
+    {
+        var instance = SandboxInstance.Create();
+        instance.BeginStart();
+        instance.MarkRunning(new SandboxRuntimeInfo { SandboxId = instance.Id, VmId = Guid.NewGuid() });
+
+        Assert.Throws<SandboxDomainException>(() => instance.SetEngine(SandboxEngineKind.HcsSandbox));
+    }
+
+    [Fact]
+    public void Rehydrate_restores_the_engine()
+    {
+        var id = SandboxInstanceId.New();
+        var source = SandboxInstance.Create(new SandboxName("R"), id: id, engine: SandboxEngineKind.HcsSandbox);
+
+        var rehydrated = SandboxInstance.Rehydrate(
+            id,
+            source.Name,
+            source.Recipe,
+            source.State,
+            null,
+            null,
+            source.CreatedUtc,
+            source.UpdatedUtc,
+            source.Engine);
+
+        Assert.Equal(SandboxEngineKind.HcsSandbox, rehydrated.Engine);
+    }
+
+    [Fact]
     public void ForConnectionMode_sets_rail_flag()
     {
         var recipe = SandboxRecipe.Default;

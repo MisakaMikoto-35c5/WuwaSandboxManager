@@ -32,6 +32,9 @@ public sealed record SandboxManifest
     /// <summary>True for RemoteApp/RAIL windows, false for a full desktop session.</summary>
     public bool RailMode { get; init; }
 
+    /// <summary>The preferred sandbox engine, or <c>null</c> for automatic selection.</summary>
+    public SandboxEngineKind? Engine { get; init; }
+
     /// <summary>Human-readable type derived from <see cref="RailMode"/> (not persisted).</summary>
     [JsonIgnore]
     public string Type => RailMode ? "RemoteApp" : "FullDesktop";
@@ -49,6 +52,7 @@ public sealed record SandboxManifest
         Id = instance.Id.Value,
         Name = instance.Name.Value,
         RailMode = instance.Recipe.RailMode,
+        Engine = instance.Engine,
         CreatedUtc = instance.CreatedUtc,
         UpdatedUtc = instance.UpdatedUtc,
         Recipe = instance.Recipe,

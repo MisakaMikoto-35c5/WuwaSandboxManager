@@ -22,6 +22,13 @@ public sealed class SandboxInstance : AggregateRoot
 
     public SandboxRuntimeInfo? Runtime { get; private set; }
 
+    /// <summary>
+    /// The engine chosen when the sandbox was created, or <c>null</c> for
+    /// automatic selection (the selector's HCS-first routing). Honoured as a
+    /// preference whenever the instance is started or connected.
+    /// </summary>
+    public SandboxEngineKind? Engine { get; private set; }
+
     public string? FaultReason { get; private set; }
 
     public DateTimeOffset CreatedUtc { get; }
@@ -42,13 +49,17 @@ public sealed class SandboxInstance : AggregateRoot
     public static SandboxInstance Create(
         SandboxName? name = null,
         SandboxRecipe? recipe = null,
-        SandboxInstanceId? id = null)
+        SandboxInstanceId? id = null,
+        SandboxEngineKind? engine = null)
     {
         var actualId = id ?? SandboxInstanceId.New();
         var actualName = name ?? SandboxName.Default();
         var actualRecipe = (recipe ?? SandboxRecipe.Default) with { Name = actualName };
 
-        var instance = new SandboxInstance(actualId, actualName, actualRecipe, DateTimeOffset.UtcNow);
+        var instance = new SandboxInstance(actualId, actualName, actualRecipe, DateTimeOffset.UtcNow)
+        {
+            Engine = engine,
+        };
         instance.Raise(new SandboxInstanceCreatedEvent(actualId, actualName));
         return instance;
     }
@@ -62,7 +73,8 @@ public sealed class SandboxInstance : AggregateRoot
         SandboxRuntimeInfo? runtime,
         string? faultReason,
         DateTimeOffset createdUtc,
-        DateTimeOffset updatedUtc)
+        DateTimeOffset updatedUtc,
+        SandboxEngineKind? engine = null)
     {
         var instance = new SandboxInstance(id, name, recipe, createdUtc)
         {
@@ -70,6 +82,7 @@ public sealed class SandboxInstance : AggregateRoot
             Runtime = runtime,
             FaultReason = faultReason,
             UpdatedUtc = updatedUtc,
+            Engine = engine,
         };
         return instance;
     }
@@ -144,6 +157,21 @@ public sealed class SandboxInstance : AggregateRoot
         Recipe = recipe with { Name = Name };
         Touch();
         Raise(new SandboxConfigurationChangedEvent(Id, Recipe));
+    }
+
+    /// <summary>
+    /// Sets the preferred engine, or clears it (with <c>null</c>) back to
+    /// automatic selection. Only allowed while not running.
+    /// </summary>
+    public void SetEngine(SandboxEngineKind? engine)
+    {
+        if (State.IsLive())
+        {
+            throw new SandboxDomainException("The engine cannot be changed while the sandbox is running.");
+        }
+
+        Engine = engine;
+        Touch();
     }
 
     /// <summary>Records a folder mapping (runtime mapping requires a running instance).</summary>

@@ -31,6 +31,8 @@
   <data name="EngineAvailable.Text" xml:space="preserve"><value>Available</value></data>
   <data name="EngineReserved.Text" xml:space="preserve"><value>Reserved</value></data>
   <data name="EngineUnavailable.Text" xml:space="preserve"><value>Unavailable</value></data>
+  <data name="EngineAutoOption.Text" xml:space="preserve"><value>Auto (recommended)</value></data>
+  <data name="Engine.Auto.Text" xml:space="preserve"><value>Auto (recommended)</value></data>
   <data name="Cap.Multi.Text" xml:space="preserve"><value>Multiple instances</value></data>
   <data name="Cap.Cpu.Text" xml:space="preserve"><value>Custom CPU</value></data>
   <data name="Cap.Storage.Text" xml:space="preserve"><value>Custom storage</value></data>
@@ -56,6 +58,7 @@
   <data name="CreateTypeHeader.Text" xml:space="preserve"><value>Type</value></data>
   <data name="CreateTypeRemoteApp.Content" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="CreateTypeDesktop.Content" xml:space="preserve"><value>Full desktop</value></data>
+  <data name="CreateEngineHeader.Text" xml:space="preserve"><value>Engine</value></data>
   <data name="CreateStorageHeader.Text" xml:space="preserve"><value>Data location</value></data>
   <data name="BrowseButton.Content" xml:space="preserve"><value>Browse</value></data>
   <data name="CreateStorageHint.Text" xml:space="preserve"><value>Leave empty to use the platform default.</value></data>
@@ -70,6 +73,7 @@
   <data name="SummaryMemory.Text" xml:space="preserve"><value>Memory (MB)</value></data>
   <data name="SummaryCpu.Text" xml:space="preserve"><value>CPU cores</value></data>
   <data name="SummaryLocation.Text" xml:space="preserve"><value>Data location</value></data>
+  <data name="SummaryEngine.Text" xml:space="preserve"><value>Engine</value></data>
   <data name="Summary.LocationDefault.Text" xml:space="preserve"><value>Platform default</value></data>
   <data name="Type.RemoteApp.Text" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="Type.Desktop.Text" xml:space="preserve"><value>Full desktop</value></data>
@@ -85,6 +89,7 @@
   <data name="InstanceSettingsDialog.CloseButtonText" xml:space="preserve"><value>Close</value></data>
   <data name="IdentitySection.Text" xml:space="preserve"><value>Identity</value></data>
   <data name="NameBox.Header" xml:space="preserve"><value>Name</value></data>
+  <data name="EngineLabelHeader.Text" xml:space="preserve"><value>Engine</value></data>
   <data name="ConfigCaption.Text" xml:space="preserve"><value>Saving re-creates this definition.</value></data>
   <data name="ResourcesSection.Text" xml:space="preserve"><value>Resources</value></data>
   <data name="MemoryBox.Header" xml:space="preserve"><value>Memory (MB)</value></data>

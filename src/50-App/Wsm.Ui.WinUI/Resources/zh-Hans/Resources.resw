@@ -31,6 +31,8 @@
   <data name="EngineAvailable.Text" xml:space="preserve"><value>可用</value></data>
   <data name="EngineReserved.Text" xml:space="preserve"><value>预留</value></data>
   <data name="EngineUnavailable.Text" xml:space="preserve"><value>不可用</value></data>
+  <data name="EngineAutoOption.Text" xml:space="preserve"><value>自动（推荐）</value></data>
+  <data name="Engine.Auto.Text" xml:space="preserve"><value>自动（推荐）</value></data>
   <data name="Cap.Multi.Text" xml:space="preserve"><value>多实例</value></data>
   <data name="Cap.Cpu.Text" xml:space="preserve"><value>自定义 CPU</value></data>
   <data name="Cap.Storage.Text" xml:space="preserve"><value>自定义存储</value></data>
@@ -56,6 +58,7 @@
   <data name="CreateTypeHeader.Text" xml:space="preserve"><value>类型</value></data>
   <data name="CreateTypeRemoteApp.Content" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="CreateTypeDesktop.Content" xml:space="preserve"><value>完整桌面</value></data>
+  <data name="CreateEngineHeader.Text" xml:space="preserve"><value>引擎</value></data>
   <data name="CreateStorageHeader.Text" xml:space="preserve"><value>数据位置</value></data>
   <data name="BrowseButton.Content" xml:space="preserve"><value>浏览</value></data>
   <data name="CreateStorageHint.Text" xml:space="preserve"><value>留空则使用平台默认位置。</value></data>
@@ -70,6 +73,7 @@
   <data name="SummaryMemory.Text" xml:space="preserve"><value>内存 (MB)</value></data>
   <data name="SummaryCpu.Text" xml:space="preserve"><value>CPU 核数</value></data>
   <data name="SummaryLocation.Text" xml:space="preserve"><value>数据位置</value></data>
+  <data name="SummaryEngine.Text" xml:space="preserve"><value>引擎</value></data>
   <data name="Summary.LocationDefault.Text" xml:space="preserve"><value>平台默认</value></data>
   <data name="Type.RemoteApp.Text" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="Type.Desktop.Text" xml:space="preserve"><value>完整桌面</value></data>
@@ -85,6 +89,7 @@
   <data name="InstanceSettingsDialog.CloseButtonText" xml:space="preserve"><value>关闭</value></data>
   <data name="IdentitySection.Text" xml:space="preserve"><value>标识</value></data>
   <data name="NameBox.Header" xml:space="preserve"><value>名称</value></data>
+  <data name="EngineLabelHeader.Text" xml:space="preserve"><value>引擎</value></data>
   <data name="ConfigCaption.Text" xml:space="preserve"><value>保存会重建该定义。</value></data>
   <data name="ResourcesSection.Text" xml:space="preserve"><value>资源</value></data>
   <data name="MemoryBox.Header" xml:space="preserve"><value>内存 (MB)</value></data>

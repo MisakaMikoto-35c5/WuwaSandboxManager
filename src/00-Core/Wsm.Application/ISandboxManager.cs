@@ -10,8 +10,8 @@ namespace Wsm.Application;
 /// </summary>
 public interface ISandboxManager
 {
-    /// <summary>Creates (defines) a new sandbox instance.</summary>
-    Task<SandboxInstanceDto> CreateAsync(string? name, SandboxRecipe recipe, CancellationToken cancellationToken = default);
+    /// <summary>Creates (defines) a new sandbox instance, optionally pinned to an engine.</summary>
+    Task<SandboxInstanceDto> CreateAsync(string? name, SandboxRecipe recipe, SandboxEngineKind? engine = null, CancellationToken cancellationToken = default);
 
     /// <summary>Lists all known sandbox instances.</summary>
     Task<IReadOnlyList<SandboxInstanceDto>> ListAsync(CancellationToken cancellationToken = default);

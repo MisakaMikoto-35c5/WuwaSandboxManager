@@ -16,4 +16,5 @@ public sealed record SandboxInstanceDto(
     string? FaultReason,
     DateTimeOffset CreatedUtc,
     DateTimeOffset UpdatedUtc,
+    SandboxEngineKind? Engine = null,
     string? ManifestPath = null);

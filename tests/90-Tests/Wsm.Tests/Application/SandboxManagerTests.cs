@@ -38,6 +38,50 @@ public sealed class SandboxManagerTests
     }
 
     [Fact]
+    public async Task Create_records_the_requested_engine()
+    {
+        var manager = Manager(new InMemoryRepository(), new StubEngine());
+
+        var pinned = await manager.CreateAsync("Box", SandboxRecipe.Default, SandboxEngineKind.WindowsSandbox);
+        Assert.Equal(SandboxEngineKind.WindowsSandbox, pinned.Engine);
+
+        var auto = await manager.CreateAsync("Auto", SandboxRecipe.Default);
+        Assert.Null(auto.Engine);
+    }
+
+    [Fact]
+    public async Task Start_passes_the_instance_engine_as_the_preferred_engine()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var manager = Manager(repository, engine);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default, SandboxEngineKind.WindowsSandbox);
+
+        var started = await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        // The stub is the only registered engine, so the selector falls back to
+        // it -- but the request must still carry the instance's preference.
+        Assert.NotNull(engine.LastStartRequest);
+        Assert.Equal(SandboxEngineKind.WindowsSandbox, engine.LastStartRequest!.PreferredEngine);
+        Assert.Equal(SandboxEngineKind.WindowsSandbox, started.Engine);
+    }
+
+    [Fact]
+    public async Task Start_leaves_the_preference_null_for_automatic_selection()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var manager = Manager(repository, engine);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.NotNull(engine.LastStartRequest);
+        Assert.Null(engine.LastStartRequest!.PreferredEngine);
+    }
+
+    [Fact]
     public async Task Stop_transitions_to_stopped()
     {
         var repository = new InMemoryRepository();
@@ -304,6 +348,8 @@ public sealed class SandboxManagerTests
 
         public SandboxCheckpoint? LastRestored { get; private set; }
 
+        public SandboxStartRequest? LastStartRequest { get; private set; }
+
         public string Name => "stub";
 
         public SandboxEngineKind Kind => SandboxEngineKind.HcsSandbox;
@@ -316,12 +362,15 @@ public sealed class SandboxManagerTests
             => Task.FromResult<IReadOnlyList<SandboxInstanceId>>(Array.Empty<SandboxInstanceId>());
 
         public Task<SandboxRuntimeInfo> StartAsync(SandboxStartRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new SandboxRuntimeInfo
+        {
+            LastStartRequest = request;
+            return Task.FromResult(new SandboxRuntimeInfo
             {
                 SandboxId = request.Id,
                 VmId = request.Id.Value,
                 Transport = RdpTransportKind.NamedPipe,
             });
+        }
 
         public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
             => Task.CompletedTask;

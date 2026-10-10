@@ -43,6 +43,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         Instances.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasInstances));
         BuildEngines();
+        NewEngineOptions = BuildEngineOptions();
         Languages = LanguageOption.CreateDefaults();
         SelectedLanguage = LanguageOption.Resolve(_l.CurrentCulture.Name);
         UpdateEnvironmentSummary();
@@ -52,6 +53,9 @@ public sealed partial class MainViewModel : ObservableObject
     public ObservableCollection<SandboxInstanceViewModel> Instances { get; } = [];
 
     public ObservableCollection<EngineOptionViewModel> Engines { get; } = [];
+
+    /// <summary>Engine choices for the creation dialog ("Auto" first, then engines).</summary>
+    public IReadOnlyList<EngineSelectOption> NewEngineOptions { get; }
 
     public IReadOnlyList<LanguageOption> Languages { get; }
 
@@ -89,6 +93,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private double _newCpuCores = 4;
 
+    /// <summary>The engine chosen for a new sandbox; the "Auto" entry has a null kind.</summary>
+    [ObservableProperty] private EngineSelectOption? _newEngineOption;
+
+    /// <summary>The engine kind pinned for the new sandbox, or <c>null</c> for auto.</summary>
+    public SandboxEngineKind? NewEngine => NewEngineOption?.Kind;
+
     public bool HasSelection => Selected is not null;
 
     public bool HasInstances => Instances.Count > 0;
@@ -105,6 +115,7 @@ public sealed partial class MainViewModel : ObservableObject
         NewStoragePath = string.Empty;
         NewMemoryMb = SandboxMemoryConfiguration.DefaultMemoryMb;
         NewCpuCores = Math.Max(1, Math.Min(Environment.ProcessorCount / 2, 64));
+        NewEngineOption = NewEngineOptions.FirstOrDefault();
     }
 
     /// <summary>
@@ -131,7 +142,7 @@ public sealed partial class MainViewModel : ObservableObject
             };
 
             var name = string.IsNullOrWhiteSpace(NewName) ? null : NewName.Trim();
-            var dto = await _manager.CreateAsync(name, recipe);
+            var dto = await _manager.CreateAsync(name, recipe, NewEngine);
             await ReloadAsync(dto.Id);
             Status = _l["Status.Created.Text"];
             return true;
@@ -197,6 +208,28 @@ public sealed partial class MainViewModel : ObservableObject
             option.IsSelected = true;
             SelectedEngine = option;
         }
+    }
+
+    private IReadOnlyList<EngineSelectOption> BuildEngineOptions()
+    {
+        var options = new List<EngineSelectOption>
+        {
+            new(null, _l["EngineAutoOption.Text"], isEnabled: true),
+        };
+
+        foreach (var engine in _registry.Engines.OrderBy(engine => (int)engine.Kind))
+        {
+            var reserved = engine.Kind == SandboxEngineKind.WindowsContainer;
+            var display = reserved
+                ? $"{engine.Name} — {_l["EngineReserved.Text"]}"
+                : engine.IsAvailable
+                    ? engine.Name
+                    : $"{engine.Name} — {_l["EngineUnavailable.Text"]}";
+
+            options.Add(new EngineSelectOption(engine.Kind, display, isEnabled: engine.IsAvailable));
+        }
+
+        return options;
     }
 
     private void OnEnginePropertyChanged(object? sender, PropertyChangedEventArgs e)

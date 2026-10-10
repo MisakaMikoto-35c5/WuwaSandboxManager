@@ -232,6 +232,10 @@
                                                TextTrimming="CharacterEllipsis"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 </StackPanel>
+                                <StackPanel Spacing="2">
+                                    <TextBlock x:Uid="SummaryEngine" Text="Engine" Style="{StaticResource MetaText}" />
+                                    <TextBlock Text="{Binding Selected.EngineLabel}" FontSize="14" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 
@@ -383,6 +387,24 @@
                 </StackPanel>
 
                 <StackPanel Spacing="6">
+                    <TextBlock x:Uid="CreateEngineHeader" Text="Engine" Style="{StaticResource FieldLabel}" />
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding NewEngineOptions}"
+                              SelectedItem="{Binding NewEngineOption, Mode=TwoWay}">
+                        <ComboBox.ItemContainerStyle>
+                            <Style TargetType="ComboBoxItem">
+                                <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
+                            </Style>
+                        </ComboBox.ItemContainerStyle>
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:EngineSelectOption">
+                                <TextBlock Text="{x:Bind DisplayName}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
                     <TextBlock x:Uid="CreateStorageHeader" Text="Data location" Style="{StaticResource FieldLabel}" />
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
@@ -440,6 +462,12 @@
                         <StackPanel Spacing="10">
                             <TextBlock x:Uid="IdentitySection" Text="Identity" Style="{StaticResource SectionTitle}" />
                             <TextBox x:Uid="NameBox" Header="Name" Text="{Binding Selected.Name, Mode=TwoWay}" />
+                            <StackPanel Spacing="2">
+                                <TextBlock x:Uid="EngineLabelHeader" Text="Engine" Style="{StaticResource FieldLabel}" />
+                                <TextBlock Text="{Binding Selected.EngineLabel}"
+                                           FontSize="13"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
                             <TextBlock x:Uid="ConfigCaption"
                                        Text="Saving re-creates this definition."
                                        FontSize="11"

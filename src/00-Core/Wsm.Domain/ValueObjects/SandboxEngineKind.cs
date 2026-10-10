@@ -1,4 +1,4 @@
-namespace Wsm.Engines.Abstractions;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>
 /// Identifies a concrete sandbox engine implementation. Registration order of

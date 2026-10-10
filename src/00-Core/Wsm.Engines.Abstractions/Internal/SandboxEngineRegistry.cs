@@ -1,5 +1,6 @@
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Engines.Abstractions.Internal;
 

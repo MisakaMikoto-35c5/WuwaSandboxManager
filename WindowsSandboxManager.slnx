@@ -44,6 +44,9 @@
   </Folder>
   <Folder Name="/src/50-App/">
     <Project Path="src/50-App/Wsm.Cli/Wsm.Cli.csproj" />
+    <Project Path="src/50-App/Wsm.Ui.WinUI/Wsm.Ui.WinUI.csproj">
+      <Platform Project="x64" />
+    </Project>
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WindowsSandboxManager.Tests/WindowsSandboxManager.Tests.csproj" />

@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+
+  <!-- Header -->
+  <data name="AppTitle.Text" xml:space="preserve"><value>Windows Sandbox 管理器</value></data>
+  <data name="AppSubtitle.Text" xml:space="preserve"><value>跨引擎控制 Windows Sandbox</value></data>
+  <data name="LanguageLabel.Header" xml:space="preserve"><value>语言</value></data>
+  <data name="NewButton.Content" xml:space="preserve"><value>新建沙箱</value></data>
+  <data name="RefreshButton.Content" xml:space="preserve"><value>刷新</value></data>
+  <data name="ElevateButton.Content" xml:space="preserve"><value>以管理员重启</value></data>
+
+  <!-- Engines -->
+  <data name="EnginesSection.Text" xml:space="preserve"><value>引擎</value></data>
+  <data name="EnginesCaption.Text" xml:space="preserve"><value>自动路由：提权时使用 HCS，否则使用 Windows Sandbox。预留引擎不可选择。</value></data>
+  <data name="EngineAvailable.Text" xml:space="preserve"><value>可用</value></data>
+  <data name="EngineReserved.Text" xml:space="preserve"><value>预留</value></data>
+  <data name="EngineUnavailable.Text" xml:space="preserve"><value>不可用</value></data>
+  <data name="Cap.Multi.Text" xml:space="preserve"><value>多实例</value></data>
+  <data name="Cap.Cpu.Text" xml:space="preserve"><value>自定义 CPU</value></data>
+  <data name="Cap.Storage.Text" xml:space="preserve"><value>自定义存储</value></data>
+  <data name="Cap.BaseImage.Text" xml:space="preserve"><value>自定义基础镜像</value></data>
+  <data name="Cap.Checkpoints.Text" xml:space="preserve"><value>检查点</value></data>
+  <data name="Cap.HotMapping.Text" xml:space="preserve"><value>热映射目录</value></data>
+  <data name="Cap.Exec.Text" xml:space="preserve"><value>来宾进程执行</value></data>
+  <data name="Cap.Enumeration.Text" xml:space="preserve"><value>枚举实例</value></data>
+  <data name="Cap.Elevation.Text" xml:space="preserve"><value>需要提权</value></data>
+  <data name="Cap.None.Text" xml:space="preserve"><value>无附加能力</value></data>
+
+  <!-- Common / environment -->
+  <data name="Common.Yes.Text" xml:space="preserve"><value>是</value></data>
+  <data name="Common.No.Text" xml:space="preserve"><value>否</value></data>
+  <data name="Env.Elevated.Text" xml:space="preserve"><value>已提权</value></data>
+  <data name="Env.MultiInstance.Text" xml:space="preserve"><value>多实例</value></data>
+  <data name="Env.Build.Text" xml:space="preserve"><value>分支</value></data>
+
+  <!-- Instance list -->
+  <data name="InstancesSection.Text" xml:space="preserve"><value>实例</value></data>
+  <data name="InstanceListEmpty.Text" xml:space="preserve"><value>尚无实例。新建一个开始使用。</value></data>
+
+  <!-- Configuration -->
+  <data name="ConfigSection.Text" xml:space="preserve"><value>配置</value></data>
+  <data name="IdentitySection.Text" xml:space="preserve"><value>标识</value></data>
+  <data name="ResourcesSection.Text" xml:space="preserve"><value>资源</value></data>
+  <data name="SessionSection.Text" xml:space="preserve"><value>会话</value></data>
+  <data name="StorageSection.Text" xml:space="preserve"><value>存储（HCS 引擎）</value></data>
+  <data name="FoldersSection.Text" xml:space="preserve"><value>映射文件夹</value></data>
+  <data name="LogonSection.Text" xml:space="preserve"><value>登录命令</value></data>
+  <data name="ActionsSection.Text" xml:space="preserve"><value>操作</value></data>
+  <data name="CheckpointsSection.Text" xml:space="preserve"><value>检查点（HCS 引擎）</value></data>
+  <data name="RuntimeSection.Text" xml:space="preserve"><value>运行时</value></data>
+  <data name="EmptySelection.Text" xml:space="preserve"><value>选择实例，或新建一个沙箱。</value></data>
+  <data name="ConfigCaption.Text" xml:space="preserve"><value>保存会重建该定义，因此需要先停止沙箱。</value></data>
+
+  <!-- Fields -->
+  <data name="NameBox.Header" xml:space="preserve"><value>名称</value></data>
+  <data name="MemoryBox.Header" xml:space="preserve"><value>内存 (MB)</value></data>
+  <data name="CpuBox.Header" xml:space="preserve"><value>CPU 核数（HCS 引擎）</value></data>
+  <data name="NetworkingBox.Header" xml:space="preserve"><value>网络</value></data>
+  <data name="VgpuBox.Header" xml:space="preserve"><value>虚拟 GPU</value></data>
+  <data name="RailSwitch.Header" xml:space="preserve"><value>RemoteApp (RAIL) 模式</value></data>
+  <data name="FullScreenSwitch.Header" xml:space="preserve"><value>全屏</value></data>
+  <data name="ProtectedSwitch.Header" xml:space="preserve"><value>受保护客户端</value></data>
+  <data name="RebootSwitch.Header" xml:space="preserve"><value>允许来宾重启</value></data>
+  <data name="StoragePathBox.Header" xml:space="preserve"><value>用户数据位置</value></data>
+  <data name="StoragePathBox.PlaceholderText" xml:space="preserve"><value>（默认）C:\ProgramData\Microsoft\Windows\Containers\ContainerStorages\&lt;id&gt;</value></data>
+  <data name="DiskSizeBox.Header" xml:space="preserve"><value>磁盘大小 (MB，0 为默认)</value></data>
+  <data name="NewFolderBox.PlaceholderText" xml:space="preserve"><value>C:\主机\文件夹路径</value></data>
+  <data name="NewFolderReadOnly.Content" xml:space="preserve"><value>只读</value></data>
+  <data name="NewLogonBox.PlaceholderText" xml:space="preserve"><value>cmd.exe /c echo hello</value></data>
+  <data name="ExecBox.PlaceholderText" xml:space="preserve"><value>在沙箱内执行的命令</value></data>
+  <data name="CheckpointTemplateSwitch.Header" xml:space="preserve"><value>保存为模板</value></data>
+
+  <!-- Buttons -->
+  <data name="AddButton.Content" xml:space="preserve"><value>添加</value></data>
+  <data name="RemoveButton.Content" xml:space="preserve"><value>移除</value></data>
+  <data name="MapNowButton.Content" xml:space="preserve"><value>立即映射</value></data>
+  <data name="SaveButton.Content" xml:space="preserve"><value>保存更改</value></data>
+  <data name="StartDesktopButton.Content" xml:space="preserve"><value>启动（桌面）</value></data>
+  <data name="StartRemoteAppButton.Content" xml:space="preserve"><value>启动（RemoteApp）</value></data>
+  <data name="StopButton.Content" xml:space="preserve"><value>停止</value></data>
+  <data name="ConnectDesktopButton.Content" xml:space="preserve"><value>连接（桌面）</value></data>
+  <data name="ConnectRemoteAppButton.Content" xml:space="preserve"><value>连接（RemoteApp）</value></data>
+  <data name="DeleteButton.Content" xml:space="preserve"><value>删除</value></data>
+  <data name="SaveCheckpointButton.Content" xml:space="preserve"><value>保存检查点</value></data>
+  <data name="RefreshCheckpointsButton.Content" xml:space="preserve"><value>刷新</value></data>
+  <data name="RestoreCheckpointButton.Content" xml:space="preserve"><value>恢复所选</value></data>
+  <data name="ExecButton.Content" xml:space="preserve"><value>运行</value></data>
+  <data name="RefreshIpButton.Content" xml:space="preserve"><value>获取 IP</value></data>
+
+  <!-- Folder access -->
+  <data name="Folder.ReadOnly.Text" xml:space="preserve"><value>只读</value></data>
+  <data name="Folder.ReadWrite.Text" xml:space="preserve"><value>读写</value></data>
+
+  <!-- States -->
+  <data name="State.Created.Text" xml:space="preserve"><value>已创建</value></data>
+  <data name="State.Starting.Text" xml:space="preserve"><value>启动中</value></data>
+  <data name="State.Running.Text" xml:space="preserve"><value>运行中</value></data>
+  <data name="State.Rebooting.Text" xml:space="preserve"><value>重启中</value></data>
+  <data name="State.Stopped.Text" xml:space="preserve"><value>已停止</value></data>
+  <data name="State.Terminated.Text" xml:space="preserve"><value>已终止</value></data>
+  <data name="State.Faulted.Text" xml:space="preserve"><value>故障</value></data>
+  <data name="RuntimeNotRunning.Text" xml:space="preserve"><value>未运行</value></data>
+
+  <!-- Networking / vGPU options -->
+  <data name="Networking.Default.Text" xml:space="preserve"><value>默认</value></data>
+  <data name="Networking.Enabled.Text" xml:space="preserve"><value>启用</value></data>
+  <data name="Networking.Disabled.Text" xml:space="preserve"><value>禁用</value></data>
+  <data name="Vgpu.Default.Text" xml:space="preserve"><value>默认</value></data>
+  <data name="Vgpu.Enabled.Text" xml:space="preserve"><value>启用</value></data>
+  <data name="Vgpu.Disabled.Text" xml:space="preserve"><value>禁用</value></data>
+
+  <!-- Status messages -->
+  <data name="Status.Ready.Text" xml:space="preserve"><value>就绪。</value></data>
+  <data name="Status.Created.Text" xml:space="preserve"><value>沙箱已创建。</value></data>
+  <data name="Status.Saved.Text" xml:space="preserve"><value>定义已更新。</value></data>
+  <data name="Status.Stopped.Text" xml:space="preserve"><value>已停止。</value></data>
+  <data name="Status.Starting.Text" xml:space="preserve"><value>正在启动…</value></data>
+  <data name="Status.Running.Text" xml:space="preserve"><value>运行中。</value></data>
+  <data name="Status.Connected.Text" xml:space="preserve"><value>会话已启动。</value></data>
+  <data name="Status.Deleted.Text" xml:space="preserve"><value>已删除。</value></data>
+  <data name="Status.FolderAdded.Text" xml:space="preserve"><value>文件夹已添加（记得保存）。</value></data>
+  <data name="Status.FolderRemoved.Text" xml:space="preserve"><value>文件夹已移除（记得保存）。</value></data>
+  <data name="Status.LogonAdded.Text" xml:space="preserve"><value>登录命令已添加（记得保存）。</value></data>
+  <data name="Status.LogonRemoved.Text" xml:space="preserve"><value>登录命令已移除（记得保存）。</value></data>
+  <data name="Status.CheckpointSaved.Text" xml:space="preserve"><value>检查点已保存。</value></data>
+  <data name="Status.CheckpointsRefreshed.Text" xml:space="preserve"><value>{0} 个检查点。</value></data>
+  <data name="Status.CheckpointRestored.Text" xml:space="preserve"><value>已恢复为 {0}。</value></data>
+  <data name="Status.SelectCheckpoint.Text" xml:space="preserve"><value>请选择要恢复的检查点。</value></data>
+  <data name="Status.StopBeforeSave.Text" xml:space="preserve"><value>更改配置前请先停止沙箱。</value></data>
+  <data name="Status.RuntimeMapped.Text" xml:space="preserve"><value>已映射到运行中的沙箱。</value></data>
+  <data name="Status.Executed.Text" xml:space="preserve"><value>命令已结束，退出码 {0}。</value></data>
+  <data name="Status.IpAddresses.Text" xml:space="preserve"><value>IP 地址：{0}</value></data>
+  <data name="Status.ElevationDeclined.Text" xml:space="preserve"><value>已取消提权。</value></data>
+</root>

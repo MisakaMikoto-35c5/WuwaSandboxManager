@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+
+  <!-- Header -->
+  <data name="AppTitle.Text" xml:space="preserve"><value>Windows Sandbox Manager</value></data>
+  <data name="AppSubtitle.Text" xml:space="preserve"><value>Control Windows Sandbox across engines</value></data>
+  <data name="LanguageLabel.Header" xml:space="preserve"><value>Language</value></data>
+  <data name="NewButton.Content" xml:space="preserve"><value>New sandbox</value></data>
+  <data name="RefreshButton.Content" xml:space="preserve"><value>Refresh</value></data>
+  <data name="ElevateButton.Content" xml:space="preserve"><value>Restart elevated</value></data>
+
+  <!-- Engines -->
+  <data name="EnginesSection.Text" xml:space="preserve"><value>Engines</value></data>
+  <data name="EnginesCaption.Text" xml:space="preserve"><value>Routing is automatic: HCS when elevated, otherwise Windows Sandbox. Reserved engines cannot be selected.</value></data>
+  <data name="EngineAvailable.Text" xml:space="preserve"><value>Available</value></data>
+  <data name="EngineReserved.Text" xml:space="preserve"><value>Reserved</value></data>
+  <data name="EngineUnavailable.Text" xml:space="preserve"><value>Unavailable</value></data>
+  <data name="Cap.Multi.Text" xml:space="preserve"><value>Multiple instances</value></data>
+  <data name="Cap.Cpu.Text" xml:space="preserve"><value>Custom CPU</value></data>
+  <data name="Cap.Storage.Text" xml:space="preserve"><value>Custom storage</value></data>
+  <data name="Cap.BaseImage.Text" xml:space="preserve"><value>Custom base image</value></data>
+  <data name="Cap.Checkpoints.Text" xml:space="preserve"><value>Checkpoints</value></data>
+  <data name="Cap.HotMapping.Text" xml:space="preserve"><value>Hot folder mapping</value></data>
+  <data name="Cap.Exec.Text" xml:space="preserve"><value>In-guest exec</value></data>
+  <data name="Cap.Enumeration.Text" xml:space="preserve"><value>Enumerate</value></data>
+  <data name="Cap.Elevation.Text" xml:space="preserve"><value>Requires elevation</value></data>
+  <data name="Cap.None.Text" xml:space="preserve"><value>No optional capabilities</value></data>
+
+  <!-- Common / environment -->
+  <data name="Common.Yes.Text" xml:space="preserve"><value>yes</value></data>
+  <data name="Common.No.Text" xml:space="preserve"><value>no</value></data>
+  <data name="Env.Elevated.Text" xml:space="preserve"><value>Elevated</value></data>
+  <data name="Env.MultiInstance.Text" xml:space="preserve"><value>Multi-instance</value></data>
+  <data name="Env.Build.Text" xml:space="preserve"><value>Build</value></data>
+
+  <!-- Instance list -->
+  <data name="InstancesSection.Text" xml:space="preserve"><value>Instances</value></data>
+  <data name="InstanceListEmpty.Text" xml:space="preserve"><value>No instances yet. Create one to get started.</value></data>
+
+  <!-- Configuration -->
+  <data name="ConfigSection.Text" xml:space="preserve"><value>Configuration</value></data>
+  <data name="IdentitySection.Text" xml:space="preserve"><value>Identity</value></data>
+  <data name="ResourcesSection.Text" xml:space="preserve"><value>Resources</value></data>
+  <data name="SessionSection.Text" xml:space="preserve"><value>Session</value></data>
+  <data name="StorageSection.Text" xml:space="preserve"><value>Storage (HCS engine)</value></data>
+  <data name="FoldersSection.Text" xml:space="preserve"><value>Mapped folders</value></data>
+  <data name="LogonSection.Text" xml:space="preserve"><value>Logon commands</value></data>
+  <data name="ActionsSection.Text" xml:space="preserve"><value>Actions</value></data>
+  <data name="CheckpointsSection.Text" xml:space="preserve"><value>Checkpoints (HCS engine)</value></data>
+  <data name="RuntimeSection.Text" xml:space="preserve"><value>Runtime</value></data>
+  <data name="EmptySelection.Text" xml:space="preserve"><value>Select an instance, or create a new sandbox.</value></data>
+  <data name="ConfigCaption.Text" xml:space="preserve"><value>Saving re-creates this definition, so the sandbox must be stopped first.</value></data>
+
+  <!-- Fields -->
+  <data name="NameBox.Header" xml:space="preserve"><value>Name</value></data>
+  <data name="MemoryBox.Header" xml:space="preserve"><value>Memory (MB)</value></data>
+  <data name="CpuBox.Header" xml:space="preserve"><value>CPU cores (HCS engine)</value></data>
+  <data name="NetworkingBox.Header" xml:space="preserve"><value>Networking</value></data>
+  <data name="VgpuBox.Header" xml:space="preserve"><value>Virtual GPU</value></data>
+  <data name="RailSwitch.Header" xml:space="preserve"><value>RemoteApp (RAIL) mode</value></data>
+  <data name="FullScreenSwitch.Header" xml:space="preserve"><value>Full screen</value></data>
+  <data name="ProtectedSwitch.Header" xml:space="preserve"><value>Protected client</value></data>
+  <data name="RebootSwitch.Header" xml:space="preserve"><value>Allow guest reboot</value></data>
+  <data name="StoragePathBox.Header" xml:space="preserve"><value>User-data location</value></data>
+  <data name="StoragePathBox.PlaceholderText" xml:space="preserve"><value>(default) C:\ProgramData\Microsoft\Windows\Containers\ContainerStorages\&lt;id&gt;</value></data>
+  <data name="DiskSizeBox.Header" xml:space="preserve"><value>Disk size (MB, 0 = default)</value></data>
+  <data name="NewFolderBox.PlaceholderText" xml:space="preserve"><value>C:\path\to\host\folder</value></data>
+  <data name="NewFolderReadOnly.Content" xml:space="preserve"><value>Read only</value></data>
+  <data name="NewLogonBox.PlaceholderText" xml:space="preserve"><value>cmd.exe /c echo hello</value></data>
+  <data name="ExecBox.PlaceholderText" xml:space="preserve"><value>Command to run inside the sandbox</value></data>
+  <data name="CheckpointTemplateSwitch.Header" xml:space="preserve"><value>Save as template</value></data>
+
+  <!-- Buttons -->
+  <data name="AddButton.Content" xml:space="preserve"><value>Add</value></data>
+  <data name="RemoveButton.Content" xml:space="preserve"><value>Remove</value></data>
+  <data name="MapNowButton.Content" xml:space="preserve"><value>Map now</value></data>
+  <data name="SaveButton.Content" xml:space="preserve"><value>Save changes</value></data>
+  <data name="StartDesktopButton.Content" xml:space="preserve"><value>Start (Desktop)</value></data>
+  <data name="StartRemoteAppButton.Content" xml:space="preserve"><value>Start (RemoteApp)</value></data>
+  <data name="StopButton.Content" xml:space="preserve"><value>Stop</value></data>
+  <data name="ConnectDesktopButton.Content" xml:space="preserve"><value>Connect (Desktop)</value></data>
+  <data name="ConnectRemoteAppButton.Content" xml:space="preserve"><value>Connect (RemoteApp)</value></data>
+  <data name="DeleteButton.Content" xml:space="preserve"><value>Delete</value></data>
+  <data name="SaveCheckpointButton.Content" xml:space="preserve"><value>Save checkpoint</value></data>
+  <data name="RefreshCheckpointsButton.Content" xml:space="preserve"><value>Refresh</value></data>
+  <data name="RestoreCheckpointButton.Content" xml:space="preserve"><value>Restore selected</value></data>
+  <data name="ExecButton.Content" xml:space="preserve"><value>Run</value></data>
+  <data name="RefreshIpButton.Content" xml:space="preserve"><value>Get IPs</value></data>
+
+  <!-- Folder access -->
+  <data name="Folder.ReadOnly.Text" xml:space="preserve"><value>read only</value></data>
+  <data name="Folder.ReadWrite.Text" xml:space="preserve"><value>read/write</value></data>
+
+  <!-- States -->
+  <data name="State.Created.Text" xml:space="preserve"><value>Created</value></data>
+  <data name="State.Starting.Text" xml:space="preserve"><value>Starting</value></data>
+  <data name="State.Running.Text" xml:space="preserve"><value>Running</value></data>
+  <data name="State.Rebooting.Text" xml:space="preserve"><value>Rebooting</value></data>
+  <data name="State.Stopped.Text" xml:space="preserve"><value>Stopped</value></data>
+  <data name="State.Terminated.Text" xml:space="preserve"><value>Terminated</value></data>
+  <data name="State.Faulted.Text" xml:space="preserve"><value>Faulted</value></data>
+  <data name="RuntimeNotRunning.Text" xml:space="preserve"><value>Not running</value></data>
+
+  <!-- Networking / vGPU options -->
+  <data name="Networking.Default.Text" xml:space="preserve"><value>Default</value></data>
+  <data name="Networking.Enabled.Text" xml:space="preserve"><value>Enabled</value></data>
+  <data name="Networking.Disabled.Text" xml:space="preserve"><value>Disabled</value></data>
+  <data name="Vgpu.Default.Text" xml:space="preserve"><value>Default</value></data>
+  <data name="Vgpu.Enabled.Text" xml:space="preserve"><value>Enabled</value></data>
+  <data name="Vgpu.Disabled.Text" xml:space="preserve"><value>Disabled</value></data>
+
+  <!-- Status messages -->
+  <data name="Status.Ready.Text" xml:space="preserve"><value>Ready.</value></data>
+  <data name="Status.Created.Text" xml:space="preserve"><value>Sandbox created.</value></data>
+  <data name="Status.Saved.Text" xml:space="preserve"><value>Definition updated.</value></data>
+  <data name="Status.Stopped.Text" xml:space="preserve"><value>Stopped.</value></data>
+  <data name="Status.Starting.Text" xml:space="preserve"><value>Starting...</value></data>
+  <data name="Status.Running.Text" xml:space="preserve"><value>Running.</value></data>
+  <data name="Status.Connected.Text" xml:space="preserve"><value>Session launched.</value></data>
+  <data name="Status.Deleted.Text" xml:space="preserve"><value>Deleted.</value></data>
+  <data name="Status.FolderAdded.Text" xml:space="preserve"><value>Folder added (remember to save).</value></data>
+  <data name="Status.FolderRemoved.Text" xml:space="preserve"><value>Folder removed (remember to save).</value></data>
+  <data name="Status.LogonAdded.Text" xml:space="preserve"><value>Logon command added (remember to save).</value></data>
+  <data name="Status.LogonRemoved.Text" xml:space="preserve"><value>Logon command removed (remember to save).</value></data>
+  <data name="Status.CheckpointSaved.Text" xml:space="preserve"><value>Checkpoint saved.</value></data>
+  <data name="Status.CheckpointsRefreshed.Text" xml:space="preserve"><value>{0} checkpoint(s).</value></data>
+  <data name="Status.CheckpointRestored.Text" xml:space="preserve"><value>Restored as {0}.</value></data>
+  <data name="Status.SelectCheckpoint.Text" xml:space="preserve"><value>Select a checkpoint to restore.</value></data>
+  <data name="Status.StopBeforeSave.Text" xml:space="preserve"><value>Stop the sandbox before changing its configuration.</value></data>
+  <data name="Status.RuntimeMapped.Text" xml:space="preserve"><value>Folder mapped into the running sandbox.</value></data>
+  <data name="Status.Executed.Text" xml:space="preserve"><value>Command finished with exit code {0}.</value></data>
+  <data name="Status.IpAddresses.Text" xml:space="preserve"><value>IP addresses: {0}</value></data>
+  <data name="Status.ElevationDeclined.Text" xml:space="preserve"><value>Elevation was declined.</value></data>
+</root>

@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>Wsm.Ui.WinUI</RootNamespace>
+    <AssemblyName>Wsm.Ui.WinUI</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- MVVMTK0045: [ObservableProperty] on fields is fine here; the app is not NativeAOT-published. -->
+    <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
+    <Description>WinUI3 management UI for Windows Sandbox instances (ABP-hosted, multi-engine).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="Volo.Abp.Core" />
+    <PackageReference Include="Volo.Abp.Autofac" />
+    <PackageReference Include="Volo.Abp.Localization" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Application\Wsm.Application.csproj" />
+    <ProjectReference Include="..\..\00-Core\Wsm.Application.EngineSelection\Wsm.Application.EngineSelection.csproj" />
+    <ProjectReference Include="..\..\20-Engines\Wsm.Engine.Hcs\Wsm.Engine.Hcs.csproj" />
+    <ProjectReference Include="..\..\20-Engines\Wsm.Engine.WindowsSandbox\Wsm.Engine.WindowsSandbox.csproj" />
+    <ProjectReference Include="..\..\20-Engines\Wsm.Engine.WindowsContainer\Wsm.Engine.WindowsContainer.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Localization\Wsm.Localization.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Host.Policy\Wsm.Host.Policy.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,12 +1,13 @@
+using WindowsSandboxManager.Domain.Exceptions;
 using WindowsSandboxManager.Domain.ValueObjects;
 
 namespace Wsm.Engines.Abstractions;
 
 /// <summary>
 /// The single contract every sandbox engine implements. Optional capabilities
-/// are declared via <see cref="Capabilities"/> and gated by the caller; the
-/// optional methods are declared here as plain members (a default-throwing
-/// behaviour is layered on later).
+/// are declared via <see cref="Capabilities"/> and gated by the caller: the
+/// optional members below carry default-throwing implementations so an engine
+/// only overrides what it actually supports.
 /// </summary>
 public interface ISandboxEngine
 {
@@ -35,17 +36,29 @@ public interface ISandboxEngine
     Task<SandboxRuntimeInfo?> GetRuntimeAsync(SandboxInstanceId id, CancellationToken cancellationToken = default);
 
     /// <summary>Maps a host folder into a running instance.</summary>
-    Task MapFolderAsync(SandboxInstanceId id, MappedFolder folder, CancellationToken cancellationToken = default);
+    Task MapFolderAsync(SandboxInstanceId id, MappedFolder folder, CancellationToken cancellationToken = default)
+        => throw NotSupported(nameof(MapFolderAsync));
 
     /// <summary>Executes a command inside the instance and returns its exit code.</summary>
-    Task<int> ExecuteAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default);
+    Task<int> ExecuteAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
+        => throw NotSupported(nameof(ExecuteAsync));
 
     /// <summary>Returns the guest IP addresses.</summary>
-    Task<IReadOnlyList<string>> GetIpAddressesAsync(SandboxInstanceId id, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<string>> GetIpAddressesAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+        => throw NotSupported(nameof(GetIpAddressesAsync));
 
     /// <summary>Saves a checkpoint of the instance.</summary>
-    Task<SandboxCheckpoint> SaveCheckpointAsync(SandboxInstanceId id, string name, SandboxCheckpointType type, CancellationToken cancellationToken = default);
+    Task<SandboxCheckpoint> SaveCheckpointAsync(SandboxInstanceId id, string name, SandboxCheckpointType type, CancellationToken cancellationToken = default)
+        => throw NotSupported(nameof(SaveCheckpointAsync));
+
+    /// <summary>Lists the checkpoints known for the instance.</summary>
+    Task<IReadOnlyList<SandboxCheckpoint>> ListCheckpointsAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+        => throw NotSupported(nameof(ListCheckpointsAsync));
 
     /// <summary>Restores the instance from a checkpoint and returns the resulting VM id.</summary>
-    Task<Guid> RestoreCheckpointAsync(SandboxInstanceId id, SandboxCheckpoint checkpoint, CancellationToken cancellationToken = default);
+    Task<Guid> RestoreCheckpointAsync(SandboxInstanceId id, SandboxCheckpoint checkpoint, CancellationToken cancellationToken = default)
+        => throw NotSupported(nameof(RestoreCheckpointAsync));
+
+    private static SandboxNotSupportedException NotSupported(string member)
+        => new($"The sandbox engine does not support '{member}'.");
 }

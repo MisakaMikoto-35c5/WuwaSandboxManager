@@ -1,4 +1,3 @@
-using System.Security.Principal;
 using Microsoft.Win32;
 using Volo.Abp.DependencyInjection;
 
@@ -6,7 +5,7 @@ namespace Wsm.Hcs.Layout.Internal;
 
 /// <summary>
 /// Default <see cref="IHcsHostLayout"/>: resolves the container stack's on-disk
-/// layout, the registered layers and the process elevation state.
+/// layout and the registered layers.
 /// </summary>
 [ExposeServices(typeof(IHcsHostLayout))]
 internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
@@ -31,9 +30,6 @@ internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
     public string GetStorageDirectory(string id) => Path.Combine(StorageRoot, id);
 
     public string GetSnapshotDirectory(string id) => Path.Combine(SnapshotsRoot, id);
-
-    /// <summary>True when the process can call HCS (administrator / Hyper-V admins).</summary>
-    public bool IsElevated => IsProcessElevated();
 
     /// <summary>Enumerates the registered layers (newest sequence number first).</summary>
     public IReadOnlyList<HcsLayerInfo> ListLayers()
@@ -116,12 +112,6 @@ internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
         }
 
         return null;
-    }
-
-    private static bool IsProcessElevated()
-    {
-        using var identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
     private static int ToInt(object? value) => value switch

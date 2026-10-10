@@ -12,6 +12,9 @@
     <ProjectReference Include="..\..\..\src\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
     <ProjectReference Include="..\..\..\src\00-Core\Wsm.Engines.Abstractions\Wsm.Engines.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\src\00-Core\Wsm.Application\Wsm.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\00-Core\Wsm.Application.EngineSelection\Wsm.Application.EngineSelection.csproj" />
+    <ProjectReference Include="..\..\..\src\20-Engines\Wsm.Engine.Hcs\Wsm.Engine.Hcs.csproj" />
+    <ProjectReference Include="..\..\..\src\20-Engines\Wsm.Engine.WindowsSandbox\Wsm.Engine.WindowsSandbox.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Interop\Wsm.Hcs.Interop.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Layout\Wsm.Hcs.Layout.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Json.Sandbox\Wsm.Hcs.Json.Sandbox.csproj" />

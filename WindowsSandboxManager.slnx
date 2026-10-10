@@ -11,6 +11,11 @@
     <Project Path="src/00-Core/Wsm.Domain/Wsm.Domain.csproj" />
     <Project Path="src/00-Core/Wsm.Engines.Abstractions/Wsm.Engines.Abstractions.csproj" />
     <Project Path="src/00-Core/Wsm.Application/Wsm.Application.csproj" />
+    <Project Path="src/00-Core/Wsm.Application.EngineSelection/Wsm.Application.EngineSelection.csproj" />
+  </Folder>
+  <Folder Name="/src/20-Engines/">
+    <Project Path="src/20-Engines/Wsm.Engine.Hcs/Wsm.Engine.Hcs.csproj" />
+    <Project Path="src/20-Engines/Wsm.Engine.WindowsSandbox/Wsm.Engine.WindowsSandbox.csproj" />
   </Folder>
   <Folder Name="/src/10-Hcs/">
     <Project Path="src/10-Hcs/Wsm.Hcs.Interop/Wsm.Hcs.Interop.csproj" />

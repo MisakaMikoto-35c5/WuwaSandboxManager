@@ -18,9 +18,6 @@ public interface IHcsHostLayout
 
     string SnapshotsRoot { get; }
 
-    /// <summary>True when the process can call HCS (administrator / Hyper-V admins).</summary>
-    bool IsElevated { get; }
-
     string GetStorageDirectory(string id);
 
     string GetSnapshotDirectory(string id);

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Engine.Hcs</RootNamespace>
+    <AssemblyName>Wsm.Engine.Hcs</AssemblyName>
+    <Description>HCS (Host Compute Service) sandbox engine, driven directly through computecore.dll.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+    <ProjectReference Include="..\..\00-Core\Wsm.Engines.Abstractions\Wsm.Engines.Abstractions.csproj" />
+    <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Interop\Wsm.Hcs.Interop.csproj" />
+    <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Layout\Wsm.Hcs.Layout.csproj" />
+    <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Json.Sandbox\Wsm.Hcs.Json.Sandbox.csproj" />
+    <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Storage\Wsm.Hcs.Storage.csproj" />
+    <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Checkpoint\Wsm.Hcs.Checkpoint.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+</Project>

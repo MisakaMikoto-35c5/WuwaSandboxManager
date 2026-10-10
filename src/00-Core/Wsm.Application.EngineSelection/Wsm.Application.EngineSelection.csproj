@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Wsm.Application.EngineSelection</RootNamespace>
+    <AssemblyName>Wsm.Application.EngineSelection</AssemblyName>
+    <Description>Selects the sandbox engine to serve a start request (HCS first by default).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Wsm.Domain\Wsm.Domain.csproj" />
+    <ProjectReference Include="..\Wsm.Engines.Abstractions\Wsm.Engines.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
+  </ItemGroup>
+
+</Project>

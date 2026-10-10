@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>Wsm.Application</RootNamespace>
     <AssemblyName>Wsm.Application</AssemblyName>
     <Description>Application layer (use cases) orchestrating sandbox engines.</Description>
@@ -10,10 +10,16 @@
   <ItemGroup>
     <ProjectReference Include="..\Wsm.Domain\Wsm.Domain.csproj" />
     <ProjectReference Include="..\Wsm.Engines.Abstractions\Wsm.Engines.Abstractions.csproj" />
+    <ProjectReference Include="..\Wsm.Application.EngineSelection\Wsm.Application.EngineSelection.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Persistence\Wsm.Persistence.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
   </ItemGroup>
 
 </Project>

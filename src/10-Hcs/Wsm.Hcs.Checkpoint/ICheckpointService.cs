@@ -24,4 +24,12 @@ public interface ICheckpointService
     /// Returns the id of the new compute system.
     /// </summary>
     string Restore(HcsSandboxDefinition definition, SandboxCheckpoint checkpoint);
+
+    /// <summary>
+    /// Releases the <c>HCS_SYSTEM</c> handle held for a restored compute system.
+    /// The configuration sets <c>ShouldTerminateOnLastHandleClosed=true</c>, so
+    /// releasing the last handle terminates the system; the engine calls this
+    /// from its stop path.
+    /// </summary>
+    void Release(string systemId);
 }

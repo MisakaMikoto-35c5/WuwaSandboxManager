@@ -18,14 +18,18 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
 
     public string Build(HcsSandboxDefinition definition)
     {
-        var services = new List<object>
+        // HCS serializes HvSocketConfig.ServiceTable as a JSON *object* keyed by
+        // the service GUID (each value has no ServiceId member). Emitting an
+        // array here is what made HCS reject the document at Construct time
+        // (0x8037010D): the property is a map, not a list.
+        var serviceTable = new Dictionary<string, object?>
         {
-            Service(HcsSandboxConstants.LsmServiceId),
-            Service(HcsSandboxConstants.NlmServiceId),
+            [HcsSandboxConstants.LsmServiceId.ToString()] = Service("D:P(A;;FA;;;SY)"),
+            [HcsSandboxConstants.NlmServiceId.ToString()] = Service("D:P(A;;FA;;;LS)"),
         };
         foreach (var guid in definition.AdditionalHvSocketServices)
         {
-            services.Add(Service(guid));
+            serviceTable[guid.ToString()] = Service("D:P(A;;FA;;;SY)");
         }
 
         var shares = new List<object>
@@ -89,7 +93,7 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
                 {
                     ["DefaultBindSecurityDescriptor"] = "D:P(A;;FA;;;SY)",
                     ["DefaultConnectSecurityDescriptor"] = "D:P(A;;FA;;;SY)",
-                    ["ServiceTable"] = services,
+                    ["ServiceTable"] = serviceTable,
                 },
             },
             ["VirtualSmb"] = new Dictionary<string, object?>
@@ -97,30 +101,55 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
                 ["Shares"] = shares,
                 ["DirectFileMappingInMB"] = 2048,
             },
-            ["GuestCrashReporting"] = new Dictionary<string, object?>
+            ["Licensing"] = new Dictionary<string, object?>
             {
-                ["WindowsCrashSettings"] = new Dictionary<string, object?>
-                {
-                    ["DumpType"] = "Full",
-                    ["MaxDumpSize"] = 4362076160L,
-                },
+                ["ContainerID"] = Guid.Empty.ToString(),
+                ["PackageFamilyNames"] = Array.Empty<string>(),
             },
             ["Battery"] = new Dictionary<string, object?>(),
             ["KernelIntegration"] = new Dictionary<string, object?>(),
         };
 
-        if (definition.EnableVirtualGpu)
+        // HCS creates a "Microsoft Guest Crash Dump" virtual device from this
+        // section. Its DumpFileName must point at an existing directory or Start
+        // fails with 0x80070003; omit the section entirely when no path is known.
+        if (!string.IsNullOrWhiteSpace(definition.DumpFilePath))
         {
-            devices["EnhancedModeVideo"] = new Dictionary<string, object?>
+            devices["GuestCrashReporting"] = new Dictionary<string, object?>
             {
-                ["ConnectionOptions"] = new Dictionary<string, object?>
+                ["WindowsCrashSettings"] = new Dictionary<string, object?>
                 {
-                    ["AccessSids"] = definition.RdpAccessSids.ToArray(),
-                    ["NamedPipe"] = definition.RdpNamedPipe ?? $@"\\.\pipe\{definition.Id}",
+                    ["DumpFileName"] = definition.DumpFilePath,
+                    ["DumpType"] = "Full",
+                    ["MaxDumpSize"] = 4362076160L,
                 },
             };
         }
 
+        if (definition.EnableVirtualGpu)
+        {
+            var connectionOptions = new Dictionary<string, object?>
+            {
+                ["NamedPipe"] = definition.RdpNamedPipe ?? $@"\\.\pipe\{definition.Id}",
+            };
+
+            // AccessSids is optional; an empty array is not meaningful and some
+            // HCS builds reject it, so only emit it when the caller supplied SIDs.
+            if (definition.RdpAccessSids.Count > 0)
+            {
+                connectionOptions["AccessSids"] = definition.RdpAccessSids.ToArray();
+            }
+
+            devices["EnhancedModeVideo"] = new Dictionary<string, object?>
+            {
+                ["ConnectionOptions"] = connectionOptions,
+            };
+        }
+
+        // A NetworkAdapter is only valid with a real HNS endpoint id. HCS does
+        // not create network resources, and the HNS endpoint service is not
+        // implemented yet, so the adapter is omitted entirely (no networking in
+        // the guest) unless an explicit endpoint id was supplied.
         if (!string.IsNullOrWhiteSpace(definition.NetworkEndpointId))
         {
             devices["NetworkAdapters"] = new Dictionary<string, object?>
@@ -225,11 +254,11 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
         return JsonSerializer.Serialize(root, Options);
     }
 
-    private static object Service(Guid id) => new Dictionary<string, object?>
+    private static object Service(string descriptor) => new Dictionary<string, object?>
     {
-        ["ServiceId"] = id.ToString(),
-        ["BindSecurityDescriptor"] = "D:P(A;;FA;;;SY)",
-        ["ConnectSecurityDescriptor"] = "D:P(A;;FA;;;SY)",
+        ["BindSecurityDescriptor"] = descriptor,
+        ["ConnectSecurityDescriptor"] = descriptor,
+        ["AllowWildcardBinds"] = true,
     };
 
     private static string ShareName(string sandboxPath)

@@ -7,7 +7,8 @@ namespace Wsm.Connection.Legacy;
 /// <summary>
 /// ABP module for the legacy connection path. Writes a temporary <c>.wsb</c>
 /// recipe and launches the classic <c>WindowsSandbox.exe</c> full-desktop client
-/// through <see cref="ILegacySandboxLauncher"/>.
+/// through <see cref="ILegacySandboxLauncher"/>. This starts a new sandbox; it is
+/// not a reconnect to an existing instance.
 /// </summary>
 [DependsOn(
     typeof(WsbRecipeSerializationModule),

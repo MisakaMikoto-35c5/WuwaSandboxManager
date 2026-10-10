@@ -21,6 +21,8 @@ internal sealed class SandboxEnvironment : ISandboxEnvironment, ISingletonDepend
     private const string SystemDirectoryRelativeExe = "WindowsSandbox.exe";
     private const string RemoteSessionAlias = "WindowsSandboxRemoteSession.exe";
     private const string ServerAlias = "WindowsSandboxServer.exe";
+    private const string ClientAlias = "WindowsSandboxClient.exe";
+    private const string SandboxCliAlias = "wsb.exe";
 
     private readonly IMultiInstancePolicy _policy;
     private readonly IElevationService _elevation;
@@ -71,7 +73,9 @@ internal sealed class SandboxEnvironment : ISandboxEnvironment, ISingletonDepend
         }
     }
 
-    public string? RemoteSessionExecutablePath => ResolveAlias(RemoteSessionAlias);
+    public string? RemoteSessionExecutablePath => ResolveModernClient();
+
+    public string? SandboxCliExecutablePath => ResolveAlias(SandboxCliAlias);
 
     public string? ServerExecutablePath => ResolveAlias(ServerAlias);
 
@@ -150,12 +154,24 @@ internal sealed class SandboxEnvironment : ISandboxEnvironment, ISingletonDepend
         return File.Exists(candidate) ? candidate : null;
     }
 
+    private string? ResolveModernClient()
+    {
+        var local = System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
+        var windowsApps = Path.Combine(local, "Microsoft", "WindowsApps");
+        return SandboxClientResolver.Resolve(
+            PackageInstallPath,
+            windowsApps,
+            System.Environment.SystemDirectory,
+            File.Exists);
+    }
+
     private static string? ResolvePackagePath()
     {
         // Enumerating C:\Program Files\WindowsApps is denied for unelevated
         // processes, so resolve the package through its AppExecutionAlias
-        // reparse point instead.
-        foreach (var alias in new[] { ServerAlias, RemoteSessionAlias })
+        // reparse point instead. The alias is an IO_REPARSE_TAG_APPEXECLINK
+        // (not a symlink), so read the reparse data directly.
+        foreach (var alias in new[] { ServerAlias, RemoteSessionAlias, ClientAlias })
         {
             var aliasPath = ResolveAlias(alias);
             if (aliasPath is null)
@@ -163,28 +179,34 @@ internal sealed class SandboxEnvironment : ISandboxEnvironment, ISingletonDepend
                 continue;
             }
 
-            try
+            var target = AppExecLink.TryGetTarget(aliasPath);
+            if (target is null)
             {
-                var target = File.ResolveLinkTarget(aliasPath, returnFinalTarget: true);
-                if (target is null)
+                try
                 {
-                    continue;
+                    var link = File.ResolveLinkTarget(aliasPath, returnFinalTarget: true);
+                    target = link is FileInfo file ? file.FullName : link?.FullName;
                 }
-
-                var current = target is FileInfo ? Path.GetDirectoryName(target.FullName) : target.FullName;
-                for (var i = 0; i < 8 && current is not null; i++)
+                catch
                 {
-                    if (File.Exists(Path.Combine(current, "AppxManifest.xml")))
-                    {
-                        return current;
-                    }
-
-                    current = Path.GetDirectoryName(current);
+                    // Alias is not a resolvable link; fall through.
                 }
             }
-            catch
+
+            if (target is null)
             {
-                // Alias is not a resolvable link; fall through.
+                continue;
+            }
+
+            var current = Path.GetDirectoryName(target);
+            for (var i = 0; i < 8 && current is not null; i++)
+            {
+                if (File.Exists(Path.Combine(current, "AppxManifest.xml")))
+                {
+                    return current;
+                }
+
+                current = Path.GetDirectoryName(current);
             }
         }
 

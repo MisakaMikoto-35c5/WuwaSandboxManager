@@ -34,25 +34,55 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         using var operation = new HcsOperation();
         var hr = HcsNative.HcsEnumerateComputeSystems(query ?? "{}", operation.Handle);
         var document = operation.Complete(hr, nameof(HcsNative.HcsEnumerateComputeSystems));
+        return ParseList(document);
+    }
 
+    /// <summary>
+    /// Parses an <c>HcsEnumerateComputeSystems</c> result document. The result
+    /// is normally an object carrying a <c>ComputeSystems</c> array, but some
+    /// HCS builds return a bare JSON array instead. Both shapes are accepted;
+    /// anything else (including empty or malformed input) yields an empty list
+    /// rather than throwing.
+    /// </summary>
+    internal static IReadOnlyList<HcsComputeSystemInfo> ParseList(string? document)
+    {
         var results = new List<HcsComputeSystemInfo>();
         if (string.IsNullOrWhiteSpace(document))
         {
             return results;
         }
 
-        using var json = JsonDocument.Parse(document);
-        if (!json.RootElement.TryGetProperty("ComputeSystems", out var systems))
+        try
         {
+            using var json = JsonDocument.Parse(document);
+            var root = json.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("ComputeSystems", out var systems) &&
+                systems.ValueKind == JsonValueKind.Array)
+            {
+                Append(systems, results);
+            }
+            else if (root.ValueKind == JsonValueKind.Array)
+            {
+                Append(root, results);
+            }
+        }
+        catch (JsonException)
+        {
+            // A malformed enumerate result carries no usable compute systems.
             return results;
         }
 
-        foreach (var element in systems.EnumerateArray())
+        return results;
+    }
+
+    private static void Append(JsonElement array, List<HcsComputeSystemInfo> results)
+    {
+        foreach (var element in array.EnumerateArray())
         {
             results.Add(Parse(element));
         }
-
-        return results;
     }
 
     public HcsComputeSystemInfo? Get(string id)
@@ -148,8 +178,12 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
 
     private static HcsComputeSystem Open(string id)
     {
-        // 0x20000 == GENERIC_ALL; HCS accepts 0 for a default access mask.
-        var hr = HcsNative.HcsOpenComputeSystem(id, 0, out var handle);
+        // 0x10000000 == GENERIC_ALL. HCS rejects an access mask of 0 with
+        // E_INVALIDARG (0x80070057), which leaves a null handle that makes the
+        // subsequent Start/Terminate AV (0xC0000005). GENERIC_ALL is what the
+        // platform's own stack requests.
+        const uint GenericAll = 0x10000000;
+        var hr = HcsNative.HcsOpenComputeSystem(id, GenericAll, out var handle);
         if (hr < 0)
         {
             return new HcsComputeSystem(IntPtr.Zero);

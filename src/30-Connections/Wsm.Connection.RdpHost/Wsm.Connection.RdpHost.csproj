@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>Wsm.Connection.RdpHost</RootNamespace>
+    <AssemblyName>Wsm.Connection.RdpHost</AssemblyName>
+    <Description>Hosts the mstscax (MsRdpClient10) ActiveX control to present an RDP-over-named-pipe session, including RAIL/RemoteApp mode.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
+  </ItemGroup>
+
+</Project>

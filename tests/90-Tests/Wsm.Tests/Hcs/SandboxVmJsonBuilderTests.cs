@@ -120,9 +120,86 @@ public sealed class SandboxVmJsonBuilderTests
         using var doc = JsonDocument.Parse(json);
         var table = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
             .GetProperty("HvSocket").GetProperty("HvSocketConfig").GetProperty("ServiceTable");
-        var ids = table.EnumerateArray().Select(e => e.GetProperty("ServiceId").GetString()).ToArray();
-        Assert.Contains(HcsSandboxConstants.LsmServiceId.ToString(), ids);
-        Assert.Contains(HcsSandboxConstants.NlmServiceId.ToString(), ids);
+
+        // HCS expects the service table as an object keyed by the service GUID
+        // (an array is rejected at Construct time).
+        Assert.Equal(JsonValueKind.Object, table.ValueKind);
+        Assert.True(table.TryGetProperty(HcsSandboxConstants.LsmServiceId.ToString(), out _));
+        Assert.True(table.TryGetProperty(HcsSandboxConstants.NlmServiceId.ToString(), out _));
+        return true;
+    });
+
+    [Fact]
+    public Task Licensing_device_is_emitted() => WithBuilderAsync(builder =>
+    {
+        var json = builder.Build(Definition());
+        using var doc = JsonDocument.Parse(json);
+        var licensing = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .GetProperty("Licensing");
+
+        Assert.Equal(Guid.Empty.ToString(), licensing.GetProperty("ContainerID").GetString());
+        Assert.Equal(0, licensing.GetProperty("PackageFamilyNames").GetArrayLength());
+        return true;
+    });
+
+    [Fact]
+    public Task Guest_crash_reporting_is_omitted_without_a_dump_path() => WithBuilderAsync(builder =>
+    {
+        var json = builder.Build(Definition());
+        using var doc = JsonDocument.Parse(json);
+        Assert.False(doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .TryGetProperty("GuestCrashReporting", out _));
+        return true;
+    });
+
+    [Fact]
+    public Task Guest_crash_reporting_uses_the_supplied_dump_path() => WithBuilderAsync(builder =>
+    {
+        var json = builder.Build(Definition() with { DumpFilePath = @"E:\userdata\sandbox.dmp" });
+        using var doc = JsonDocument.Parse(json);
+        var settings = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .GetProperty("GuestCrashReporting").GetProperty("WindowsCrashSettings");
+
+        // HCS opens this file at Start; without a valid path it fails with
+        // 0x80070003 / 0x80070002.
+        Assert.Equal(@"E:\userdata\sandbox.dmp", settings.GetProperty("DumpFileName").GetString());
+        Assert.Equal("Full", settings.GetProperty("DumpType").GetString());
+        return true;
+    });
+
+    [Fact]
+    public Task Enhanced_mode_video_omits_empty_access_sids() => WithBuilderAsync(builder =>
+    {
+        var json = builder.Build(Definition());
+        using var doc = JsonDocument.Parse(json);
+        var options = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .GetProperty("EnhancedModeVideo").GetProperty("ConnectionOptions");
+
+        // An empty AccessSids array is meaningless (and rejected by some HCS
+        // builds), so it must not be emitted; the named pipe always is.
+        Assert.False(options.TryGetProperty("AccessSids", out _));
+        Assert.Equal(@"\\.\pipe\11111111-2222-3333-4444-555555555555", options.GetProperty("NamedPipe").GetString());
+        return true;
+    });
+
+    [Fact]
+    public Task Network_adapter_is_omitted_without_an_endpoint() => WithBuilderAsync(builder =>
+    {
+        var json = builder.Build(Definition() with { EnableNetworking = true });
+        using var doc = JsonDocument.Parse(json);
+        Assert.False(doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .TryGetProperty("NetworkAdapters", out _));
+        return true;
+    });
+
+    [Fact]
+    public Task Network_adapter_is_emitted_when_an_endpoint_exists() => WithBuilderAsync(builder =>
+    {
+        var json = builder.Build(Definition() with { NetworkEndpointId = "endpoint-123" });
+        using var doc = JsonDocument.Parse(json);
+        var adapter = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .GetProperty("NetworkAdapters").GetProperty("0");
+        Assert.Equal("endpoint-123", adapter.GetProperty("EndpointId").GetString());
         return true;
     });
 }

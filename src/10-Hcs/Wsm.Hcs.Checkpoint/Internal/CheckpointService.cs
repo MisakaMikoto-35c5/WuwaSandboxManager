@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.ValueObjects;
@@ -23,6 +24,16 @@ internal sealed class CheckpointService : ICheckpointService, ISingletonDependen
     private readonly IHcsClient _hcs;
     private readonly IHcsHostLayout _layout;
     private readonly ISandboxVmJsonBuilder _json;
+
+    /// <summary>
+    /// Native <c>HCS_SYSTEM</c> handles for restored systems, keyed by the new
+    /// compute-system id. The configuration sets
+    /// <c>ShouldTerminateOnLastHandleClosed=true</c>, so the handle must be held
+    /// for the restored instance's lifetime; <see cref="Release"/> (called by
+    /// the engine's stop path) disposes it and terminates the system.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, IDisposable> _systems =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public CheckpointService(IHcsClient hcs, IHcsHostLayout layout, ISandboxVmJsonBuilder json)
     {
@@ -102,8 +113,33 @@ internal sealed class CheckpointService : ICheckpointService, ISingletonDependen
             RestoreStateFilePath = checkpoint.StatePath,
         };
 
-        using var system = _hcs.Create(newId, _json.Build(restored));
-        _hcs.Start(newId);
+        var system = _hcs.Create(newId, _json.Build(restored));
+        try
+        {
+            _hcs.Start(newId);
+        }
+        catch
+        {
+            system.Dispose();
+            throw;
+        }
+
+        // Hold the handle for the restored system's lifetime; releasing it (via
+        // Release) is what terminates the system.
+        if (_systems.TryRemove(newId, out var stale))
+        {
+            stale.Dispose();
+        }
+
+        _systems[newId] = system;
         return newId;
+    }
+
+    public void Release(string systemId)
+    {
+        if (_systems.TryRemove(systemId, out var system))
+        {
+            system.Dispose();
+        }
     }
 }

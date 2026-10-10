@@ -24,6 +24,7 @@
     <Project Path="src/30-Connections/Wsm.SandboxServer.Client/Wsm.SandboxServer.Client.csproj" />
     <Project Path="src/30-Connections/Wsm.Recipe.Serialization/Wsm.Recipe.Serialization.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.RdpBase/Wsm.Connection.RdpBase.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RdpHost/Wsm.Connection.RdpHost.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Session/Wsm.Connection.Session.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Legacy/Wsm.Connection.Legacy.csproj" />
   </Folder>

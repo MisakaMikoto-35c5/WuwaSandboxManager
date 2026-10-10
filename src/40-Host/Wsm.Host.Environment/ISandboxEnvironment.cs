@@ -27,8 +27,23 @@ public interface ISandboxEnvironment
     /// <summary>Legacy full-desktop client (<c>WindowsSandbox.exe</c>).</summary>
     string? LegacyExecutablePath { get; }
 
-    /// <summary>Modern per-instance RDP client (<c>WindowsSandboxRemoteSession.exe</c>).</summary>
+    /// <summary>
+    /// Modern per-instance RDP client, resolved across candidate names and
+    /// locations: <c>WindowsSandboxRemoteSession.exe</c> and
+    /// <c>WindowsSandboxClient.exe</c>, in the packaged AppExecutionAlias
+    /// directory (<c>%LocalAppData%\Microsoft\WindowsApps</c>), the package
+    /// install directory and <c>System32</c>. The first existing candidate wins.
+    /// </summary>
     string? RemoteSessionExecutablePath { get; }
+
+    /// <summary>
+    /// The platform command-line interface (<c>wsb.exe</c>), resolved through its
+    /// AppExecutionAlias in <c>%LocalAppData%\Microsoft\WindowsApps</c>. Its
+    /// <c>connect --id &lt;id&gt;</c> subcommand opens a remote session for a
+    /// sandbox known to <c>WindowsSandboxServer</c> and is the preferred way to
+    /// reconnect to a running instance.
+    /// </summary>
+    string? SandboxCliExecutablePath { get; }
 
     /// <summary>Control-plane server executable (<c>WindowsSandboxServer.exe</c>).</summary>
     string? ServerExecutablePath { get; }

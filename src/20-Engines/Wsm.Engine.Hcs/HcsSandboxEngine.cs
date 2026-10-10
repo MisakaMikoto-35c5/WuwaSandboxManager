@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.Exceptions;
@@ -39,6 +40,23 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     private readonly ICheckpointService _checkpoints;
     private readonly IElevationService _elevation;
     private readonly ILogger<HcsSandboxEngine> _logger;
+
+    /// <summary>
+    /// Live compute systems created by this engine, keyed by compute-system id.
+    /// The native <c>HCS_SYSTEM</c> handle <b>must</b> be held for the instance's
+    /// whole lifetime: the configuration sets
+    /// <c>ShouldTerminateOnLastHandleClosed=true</c>, so dropping the handle (as
+    /// a <c>using</c> in <see cref="StartAsync"/> would) terminates the sandbox
+    /// the instant the start call returns. The handle is released in
+    /// <see cref="StopAsync"/>, which is what terminates the compute system.
+    /// The runtime info is cached alongside so <see cref="GetRuntimeAsync"/> can
+    /// report the real connection settings (RAIL mode, full-screen, title, …)
+    /// rather than a synthesized default.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, LiveSystem> _systems =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record LiveSystem(IDisposable Handle, SandboxRuntimeInfo Runtime);
 
     public HcsSandboxEngine(
         IHcsClient hcs,
@@ -106,7 +124,19 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             ? recipe.Storage.StoragePath!
             : _layout.GetStorageDirectory(id.ToString());
 
-        var storage = _storage.Provision(storageDirectory);
+        StorageLayout storage;
+        try
+        {
+            storage = _storage.Provision(storageDirectory, recipe.Storage.DiskSizeMb);
+        }
+        catch (SandboxBackendException ex)
+        {
+            throw new SandboxBackendException(
+                $"Failed to provision the user-data storage for sandbox {id} at " +
+                $"'{storageDirectory}': {ex.Message}",
+                ex.HResult,
+                ex);
+        }
 
         var definition = new HcsSandboxDefinition
         {
@@ -114,6 +144,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             BaseLayerPath = baseLayer,
             StorageDiskPath = storage.DiskPath,
             GuestStatePath = storage.GuestStatePath,
+            DumpFilePath = EnsureDumpPlaceholder(storageDirectory, id.ToString()),
             MemoryMb = (uint)recipe.Memory.MemoryMb,
             CpuCount = recipe.Cpu.CoreCount,
             EnableVirtualGpu = recipe.VirtualGpu != VirtualGpuMode.Disabled,
@@ -125,12 +156,50 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         };
 
         var json = _json.Build(definition);
-        _logger.LogInformation("Creating HCS compute system {SandboxId} (base={BaseLayer})", id, baseLayer);
+        _logger.LogInformation(
+            "Creating HCS compute system {SandboxId} (base={BaseLayer}, storage={StorageDirectory}, " +
+            "memory={MemoryMb}MB, cpus={CpuCount})",
+            id, baseLayer, storage.Directory, definition.MemoryMb, definition.CpuCount);
 
-        using var system = _hcs.Create(id.ToString(), json);
-        _hcs.Start(id.ToString());
+        var system = _hcs.Create(id.ToString(), json);
 
-        return Task.FromResult(new SandboxRuntimeInfo
+        try
+        {
+            // The compute system runs as a different identity than this process,
+            // so grant it explicit access to the freshly-provisioned storage.
+            // Best effort: storage created under ProgramData normally inherits
+            // SYSTEM's full control already, and a genuine access problem will
+            // surface clearly from Start.
+            GrantVmAccessQuietly(id.ToString(), storage.DiskPath);
+            GrantVmAccessQuietly(id.ToString(), storage.GuestStatePath);
+            if (!string.IsNullOrWhiteSpace(definition.DumpFilePath))
+            {
+                GrantVmAccessQuietly(id.ToString(), definition.DumpFilePath);
+            }
+
+            _hcs.Start(id.ToString());
+        }
+        catch (SandboxBackendException ex)
+        {
+            system.Dispose();
+            _logger.LogError(ex, "HCS rejected or failed to start compute system {SandboxId}", id);
+            throw new SandboxBackendException(
+                $"HCS rejected the configuration or failed to start sandbox {id}: {ex.Message}",
+                ex.HResult,
+                ex);
+        }
+        catch (SandboxDomainException)
+        {
+            system.Dispose();
+            throw;
+        }
+        catch
+        {
+            system.Dispose();
+            throw;
+        }
+
+        var runtime = new SandboxRuntimeInfo
         {
             SandboxId = id,
             VmId = id.Value,
@@ -140,19 +209,52 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             WindowTitle = recipe.Name.Value,
             UserName = "WDAGUtilityAccount",
             Redirections = recipe.Redirections,
-        });
+        };
+
+        // Keep the handle (and the runtime info) for the instance's lifetime;
+        // releasing it is what stops the sandbox.
+        RememberSystem(id.ToString(), system, runtime);
+
+        return Task.FromResult(runtime);
     }
 
     public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
     {
         EnsureElevated();
-        _hcs.Terminate(id.ToString());
+        var key = id.ToString();
+
+        // Disposing the held HCS_SYSTEM handle closes the last handle to the
+        // compute system; with ShouldTerminateOnLastHandleClosed=true that
+        // terminates it. Fall back to an explicit terminate for systems this
+        // engine did not create in this process.
+        if (_systems.TryRemove(key, out var live))
+        {
+            live.Handle.Dispose();
+        }
+        else
+        {
+            _hcs.Terminate(key);
+        }
+
+        // A checkpoint-restored system holds its handle in the checkpoint
+        // service; release it so the system can terminate.
+        _checkpoints.Release(key);
+
         return Task.CompletedTask;
     }
 
     public Task<SandboxRuntimeInfo?> GetRuntimeAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
     {
         EnsureElevated();
+
+        // Prefer the runtime captured at start: it carries the real RAIL mode,
+        // full-screen flag, title and redirections. A system we did not start in
+        // this process can only be described with HCS defaults.
+        if (_systems.TryGetValue(id.ToString(), out var live))
+        {
+            return Task.FromResult<SandboxRuntimeInfo?>(live.Runtime);
+        }
+
         var info = _hcs.Get(id.ToString());
         if (info is null)
         {
@@ -212,6 +314,62 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         if (!_elevation.IsElevated)
         {
             throw new SandboxNotSupportedException(ElevationMessage);
+        }
+    }
+
+    /// <summary>
+    /// Creates the zero-byte guest crash dump placeholder HCS expects. The
+    /// "Microsoft Guest Crash Dump" device opens this file at Start and fails
+    /// with <c>0x80070002</c> when it is absent, so the file (and its directory)
+    /// must already exist. Returns the resolved path.
+    /// </summary>
+    private static string EnsureDumpPlaceholder(string storageDirectory, string id)
+    {
+        var dumpPath = Path.Combine(storageDirectory, $"{id}.dmp");
+        var directory = Path.GetDirectoryName(dumpPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        if (!File.Exists(dumpPath))
+        {
+            using var _ = File.Create(dumpPath);
+        }
+
+        return dumpPath;
+    }
+
+    private void RememberSystem(string key, IDisposable handle, SandboxRuntimeInfo runtime)
+    {
+        var live = new LiveSystem(handle, runtime);
+
+        // A duplicate id should not occur (HCS rejects it), but never leak the
+        // previous handle if it does.
+        if (_systems.TryRemove(key, out var stale))
+        {
+            try
+            {
+                stale.Handle.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Replacing the handle for {SandboxId} failed.", key);
+            }
+        }
+
+        _systems[key] = live;
+    }
+
+    private void GrantVmAccessQuietly(string id, string path)
+    {
+        try
+        {
+            _hcs.GrantVmAccess(id, path);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Granting VM access to '{Path}' for {SandboxId} failed (continuing).", path, id);
         }
     }
 }

@@ -18,6 +18,14 @@ public sealed record HcsSandboxDefinition
     /// <summary>Guest state file path (<c>sandbox.vmgs</c>).</summary>
     public required string GuestStatePath { get; init; }
 
+    /// <summary>
+    /// Host path for the guest crash dump (<c>GuestCrashReporting.WindowsCrashSettings.DumpFileName</c>).
+    /// Its directory must already exist; when null the guest crash reporting
+    /// device is omitted entirely (HCS otherwise fails Start with
+    /// <c>0x80070003</c> because its default dump path is not present).
+    /// </summary>
+    public string? DumpFilePath { get; init; }
+
     public string Owner { get; init; } = "WindowsSandbox";
 
     public uint MemoryMb { get; init; } = 4096;

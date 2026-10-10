@@ -28,6 +28,7 @@ public sealed class SandboxManagerTests
 
         var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
         Assert.Equal(SandboxState.Created, created.State);
+        Assert.NotNull(created.ManifestPath);
 
         var started = await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
 
@@ -178,7 +179,29 @@ public sealed class SandboxManagerTests
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
-        return new SandboxManager(repository, selector, new StubSessionLauncher());
+        return new SandboxManager(repository, selector, new StubSessionLauncher(), new StubManifestStore());
+    }
+
+    /// <summary>Records manifest writes/deletes without touching the file system.</summary>
+    private sealed class StubManifestStore : ISandboxManifestStore
+    {
+        public List<SandboxInstanceId> Saved { get; } = new();
+
+        public List<SandboxInstanceId> Deleted { get; } = new();
+
+        public string GetManifestPath(SandboxInstanceId id) => $"manifests/{id.Value:D}.wsbx";
+
+        public Task SaveAsync(SandboxInstance instance, CancellationToken cancellationToken = default)
+        {
+            Saved.Add(instance.Id);
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+        {
+            Deleted.Add(id);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubSessionLauncher : ISessionLauncher

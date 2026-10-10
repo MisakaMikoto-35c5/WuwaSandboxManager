@@ -1,7 +1,10 @@
-using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
+using System.Globalization;
 using Microsoft.UI.Xaml;
 using Volo.Abp;
 using Volo.Abp.Autofac;
+using Wsm.Application;
+using Wsm.Persistence;
 
 namespace Wsm.Ui.WinUI;
 
@@ -9,16 +12,35 @@ namespace Wsm.Ui.WinUI;
 /// WinUI 3 application host. Boots the ABP module graph in <see cref="OnLaunched"/>
 /// (the same pattern the CLI and the bootstrap tests use), resolves the UI
 /// services from <c>app.ServiceProvider</c>, and shuts the container down when the
-/// last window closes. Switching language rebuilds the window so the XAML
-/// <c>x:Uid</c> strings re-resolve against the new culture.
+/// last window closes.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Language</b>: the chosen culture is persisted in <c>ui-settings.json</c> and
+/// applied here, in the constructor, before any window or resource lookup. A
+/// genuine change in the settings dialog persists the choice and calls
+/// <see cref="Relaunch"/>; for a non-packaged WinUI app the framework caches its
+/// resource context, so a full process restart is the only reliable way to
+/// re-resolve XAML <c>x:Uid</c> strings.
+/// </para>
+/// <para>
+/// <b>Open with</b>: when launched with a <c>.wsbx</c> manifest path argument the
+/// manifest is parsed and its sandbox id is passed to the main window so the UI
+/// opens on that instance.
+/// </para>
+/// </remarks>
 public partial class App : Microsoft.UI.Xaml.Application
 {
     private IAbpApplicationWithInternalServiceProvider? _abp;
     private Window? _window;
-    private bool _rebuilding;
 
-    public App() => InitializeComponent();
+    public App()
+    {
+        // Must run before InitializeComponent: the XAML resource context is
+        // created lazily on first use and caches the active language.
+        ApplyPersistedCulture();
+        InitializeComponent();
+    }
 
     /// <summary>The ABP service provider, available once <see cref="OnLaunched"/> has run.</summary>
     public IServiceProvider Services { get; private set; } = null!;
@@ -32,7 +54,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         // is app.ServiceProvider.
         Services = _abp.ServiceProvider;
 
-        ShowMainWindow(null);
+        TryRegisterFileAssociation();
+
+        ShowMainWindow(ResolveSelectId());
     }
 
     private void ShowMainWindow(Guid? selectId)
@@ -43,15 +67,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         window.Activate();
     }
 
-    private async void OnWindowClosed(object sender, WindowEventArgs args)
-    {
-        if (_rebuilding)
-        {
-            return;
-        }
-
-        await ShutdownAsync();
-    }
+    private async void OnWindowClosed(object sender, WindowEventArgs args) => await ShutdownAsync();
 
     private async Task ShutdownAsync()
     {
@@ -67,21 +83,90 @@ public partial class App : Microsoft.UI.Xaml.Application
     }
 
     /// <summary>
-    /// Rebuilds the main window after a language change. The new window is shown
-    /// before the old one is closed so the app never runs windowless.
+    /// Restarts the process so the persisted language is fully re-resolved, then
+    /// shuts the current app down. Callers must persist the choice first.
     /// </summary>
-    public void RebuildForLanguage(Guid? selectId)
+    public void Relaunch()
     {
-        _rebuilding = true;
-        var old = _window;
-        if (old is not null)
+        try
         {
-            old.Closed -= OnWindowClosed;
+            var exe = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(exe))
+            {
+                Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+            }
+        }
+        catch
+        {
+            // If the relaunch cannot start, keep the current process alive; the
+            // persisted choice still applies on the next manual start.
         }
 
-        ShowMainWindow(selectId);
-        _rebuilding = false;
+        _window?.Close();
+    }
 
-        old?.Close();
+    private Guid? ResolveSelectId()
+    {
+        try
+        {
+            var manifestPath = WsmLaunchArguments.GetManifestPath(Environment.GetCommandLineArgs());
+            return manifestPath is null ? null : SandboxManifest.TryReadFile(manifestPath)?.Id;
+        }
+        catch
+        {
+            // Unknown/malformed arguments must never take the app down.
+            return null;
+        }
+    }
+
+    private static void TryRegisterFileAssociation()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(exe))
+            {
+                FileAssociationRegistrar.Register(exe);
+            }
+        }
+        catch
+        {
+            // Registering the association is a convenience; never fatal.
+        }
+    }
+
+    private static void ApplyPersistedCulture()
+    {
+        try
+        {
+            var settings = UiSettingsStore.Load();
+            if (string.IsNullOrWhiteSpace(settings.CultureName))
+            {
+                return;
+            }
+
+            var culture = new CultureInfo(settings.CultureName);
+            CultureInfo.DefaultThreadCurrentUICulture = culture;
+            CultureInfo.CurrentUICulture = culture;
+            CultureInfo.DefaultThreadCurrentCulture = culture;
+            CultureInfo.CurrentCulture = culture;
+
+            try
+            {
+                // Windows App SDK's ApplicationLanguages (unlike the UWP one)
+                // honours the override for unpackaged apps too. Must be set
+                // before InitializeComponent / the first resource lookup.
+                Microsoft.Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride = settings.CultureName;
+            }
+            catch
+            {
+                // Not supported for some hosts; the culture set above still
+                // drives the view-model strings.
+            }
+        }
+        catch
+        {
+            // Fall back to the system culture.
+        }
     }
 }

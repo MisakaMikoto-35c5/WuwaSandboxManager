@@ -29,7 +29,10 @@ public sealed partial class EngineOptionViewModel : ObservableObject
             : IsAvailable
                 ? localizer["EngineAvailable.Text"]
                 : localizer["EngineUnavailable.Text"];
-        CapabilitySummary = BuildSummary(engine.Capabilities, localizer);
+
+        var capabilities = BuildCapabilityLabels(engine.Capabilities, localizer);
+        ShortSummary = BuildShortSummary(capabilities, localizer);
+        CapabilityTooltip = BuildTooltip(engine.Kind.ToString(), capabilities, localizer);
 
         var color = IsReserved ? ReservedColor : IsAvailable ? AvailableColor : UnavailableColor;
         StatusBrush = new SolidColorBrush(color);
@@ -46,11 +49,13 @@ public sealed partial class EngineOptionViewModel : ObservableObject
 
     public SandboxEngineCapabilities Capabilities { get; }
 
-    public string KindLabel => Kind.ToString();
-
     public string StatusLabel { get; }
 
-    public string CapabilitySummary { get; }
+    /// <summary>A compact one-line capability summary for the engine card.</summary>
+    public string ShortSummary { get; }
+
+    /// <summary>The full capability list, shown on hover instead of on the card.</summary>
+    public string CapabilityTooltip { get; }
 
     public Brush StatusBrush { get; }
 
@@ -58,7 +63,11 @@ public sealed partial class EngineOptionViewModel : ObservableObject
 
     [ObservableProperty] private bool _isSelected;
 
-    private static string BuildSummary(SandboxEngineCapabilities caps, IAppLocalizer localizer)
+    private const int SummaryLimit = 3;
+
+    private static IReadOnlyList<string> BuildCapabilityLabels(
+        SandboxEngineCapabilities caps,
+        IAppLocalizer localizer)
     {
         var parts = new List<string>();
         if (caps.SupportsMultipleInstances) parts.Add(localizer["Cap.Multi.Text"]);
@@ -69,7 +78,24 @@ public sealed partial class EngineOptionViewModel : ObservableObject
         if (caps.SupportsRuntimeFolderMapping) parts.Add(localizer["Cap.HotMapping.Text"]);
         if (caps.SupportsProcessExecution) parts.Add(localizer["Cap.Exec.Text"]);
         if (caps.RequiresElevation) parts.Add(localizer["Cap.Elevation.Text"]);
+        return parts;
+    }
 
-        return parts.Count == 0 ? localizer["Cap.None.Text"] : string.Join(" · ", parts);
+    private static string BuildShortSummary(IReadOnlyList<string> capabilities, IAppLocalizer localizer)
+    {
+        if (capabilities.Count == 0)
+        {
+            return localizer["Cap.None.Text"];
+        }
+
+        var shown = capabilities.Take(SummaryLimit);
+        var summary = string.Join(" · ", shown);
+        return capabilities.Count > SummaryLimit ? $"{summary} · …" : summary;
+    }
+
+    private static string BuildTooltip(string kind, IReadOnlyList<string> capabilities, IAppLocalizer localizer)
+    {
+        var body = capabilities.Count == 0 ? localizer["Cap.None.Text"] : string.Join(" · ", capabilities);
+        return $"{kind}\n{body}";
     }
 }

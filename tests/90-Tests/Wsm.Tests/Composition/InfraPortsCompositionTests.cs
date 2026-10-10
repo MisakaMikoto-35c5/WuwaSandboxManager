@@ -74,4 +74,31 @@ public sealed class InfraPortsCompositionTests
             await app.ShutdownAsync();
         }
     }
+
+    [Fact]
+    public async Task Manifest_store_writes_and_deletes_a_wsbx_file()
+    {
+        using var app = await AbpApplicationFactory.CreateAsync<InfraPortsTestModule>();
+        await app.InitializeAsync();
+
+        try
+        {
+            var manifests = app.ServiceProvider.GetRequiredService<ISandboxManifestStore>();
+            var instance = SandboxInstance.Create(new SandboxName("M"));
+
+            await manifests.SaveAsync(instance);
+            var path = manifests.GetManifestPath(instance.Id);
+
+            Assert.True(File.Exists(path));
+            Assert.EndsWith(".wsbx", path, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(instance.Id.Value, SandboxManifest.TryReadFile(path)?.Id);
+
+            await manifests.DeleteAsync(instance.Id);
+            Assert.False(File.Exists(path));
+        }
+        finally
+        {
+            await app.ShutdownAsync();
+        }
+    }
 }

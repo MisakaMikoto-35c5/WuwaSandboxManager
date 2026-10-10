@@ -11,9 +11,10 @@ using Wsm.Ui.WinUI.Localization;
 namespace Wsm.Ui.WinUI.ViewModels;
 
 /// <summary>
-/// View model for a single sandbox instance: editable definition fields plus the
-/// lifecycle, connection, folder-mapping and checkpoint commands, all driven by
-/// the new <see cref="ISandboxManager"/> API.
+/// View model for a single sandbox instance: the lifecycle/connection state
+/// machine, the editable definition fields (surfaced in the settings dialog) and
+/// the folder-mapping, checkpoint and runtime commands. All driven by the new
+/// <see cref="ISandboxManager"/> API.
 /// </summary>
 public sealed partial class SandboxInstanceViewModel : ObservableObject
 {
@@ -26,6 +27,12 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     private readonly ISandboxManager _manager;
     private readonly MainViewModel _owner;
     private readonly IAppLocalizer _l;
+
+    /// <summary>
+    /// Set when the user explicitly disconnects: suppresses auto-connect and keeps
+    /// the primary action on Connect until they ask for it again.
+    /// </summary>
+    private bool _userDisconnected;
 
     public SandboxInstanceViewModel(
         ISandboxManager manager,
@@ -56,6 +63,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     public IReadOnlyList<EnumOption<NetworkingMode>> NetworkingOptions { get; }
 
     public IReadOnlyList<EnumOption<VirtualGpuMode>> VgpuOptions { get; }
+
+    public string DefaultStoragePath => _owner.DefaultStoragePath;
 
     [ObservableProperty] private Guid _id;
 
@@ -101,9 +110,42 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
     [ObservableProperty] private SandboxCheckpoint? _selectedCheckpoint;
 
+    /// <summary>
+    /// Path to this sandbox's manifest file. Left unset here; a follow-up pass
+    /// defines the per-sandbox manifest and supplies the real path.
+    /// </summary>
+    [ObservableProperty] private string? _manifestPath;
+
     public string ShortId => Id.ToString()[..8];
 
     public bool IsLive => State.IsLive();
+
+    public bool IsRunning => State == SandboxState.Running;
+
+    public bool CanStart => !State.IsLive();
+
+    public bool ShowStop => State.IsLive();
+
+    /// <summary>Primary action is Start when idle, Connect when running.</summary>
+    public bool IsPrimaryEnabled => State is not (SandboxState.Starting or SandboxState.Rebooting);
+
+    public string PrimaryActionLabel => IsRunning
+        ? _l["PrimaryConnectButton.Content"]
+        : _l["PrimaryStartButton.Content"];
+
+    /// <summary>The instance's type: RAIL/RemoteApp vs full desktop.</summary>
+    public string TypeLabel => RailMode ? _l["Type.RemoteApp.Text"] : _l["Type.Desktop.Text"];
+
+    public SandboxConnectionMode ConnectionMode
+        => RailMode ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop;
+
+    public string StorageLocationDisplay => string.IsNullOrWhiteSpace(StoragePath)
+        ? _l["Summary.LocationDefault.Text"]
+        : StoragePath;
+
+    public bool HasManifest => !string.IsNullOrWhiteSpace(ManifestPath);
+
+    public string ManifestDisplay => HasManifest ? ManifestPath! : _l["Manifest.Missing.Text"];
 
     public bool CanMapAtRuntime => _owner.SelectedEngine?.Capabilities.SupportsRuntimeFolderMapping == true;
 
@@ -132,6 +174,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         DiskSizeMb = dto.Recipe.Storage.DiskSizeMb;
         State = dto.State;
         StateLabel = LocalizeState(dto.State);
+        ManifestPath = dto.ManifestPath;
 
         MappedFolders.Clear();
         foreach (var folder in dto.Recipe.MappedFolders)
@@ -151,8 +194,38 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
         OnPropertyChanged(nameof(ShortId));
         OnPropertyChanged(nameof(IsLive));
+        OnPropertyChanged(nameof(IsRunning));
+        OnPropertyChanged(nameof(CanStart));
+        OnPropertyChanged(nameof(ShowStop));
+        OnPropertyChanged(nameof(IsPrimaryEnabled));
+        OnPropertyChanged(nameof(PrimaryActionLabel));
         OnPropertyChanged(nameof(StateBrush));
         OnPropertyChanged(nameof(CanMapAtRuntime));
+    }
+
+    partial void OnStateChanged(SandboxState value)
+    {
+        OnPropertyChanged(nameof(IsLive));
+        OnPropertyChanged(nameof(IsRunning));
+        OnPropertyChanged(nameof(CanStart));
+        OnPropertyChanged(nameof(ShowStop));
+        OnPropertyChanged(nameof(IsPrimaryEnabled));
+        OnPropertyChanged(nameof(PrimaryActionLabel));
+        OnPropertyChanged(nameof(StateBrush));
+    }
+
+    partial void OnRailModeChanged(bool value)
+    {
+        OnPropertyChanged(nameof(TypeLabel));
+        OnPropertyChanged(nameof(ConnectionMode));
+    }
+
+    partial void OnStoragePathChanged(string value) => OnPropertyChanged(nameof(StorageLocationDisplay));
+
+    partial void OnManifestPathChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasManifest));
+        OnPropertyChanged(nameof(ManifestDisplay));
     }
 
     public SandboxRecipe BuildRecipe() => new()
@@ -187,17 +260,23 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         return storage;
     }
 
-    [RelayCommand]
-    private Task StartDesktopAsync() => StartAsync(SandboxConnectionMode.FullDesktop);
+    // --------------------------- Lifecycle ---------------------------
 
+    /// <summary>
+    /// The single primary action: Start while idle, Connect while running.
+    /// </summary>
     [RelayCommand]
-    private Task StartRemoteAppAsync() => StartAsync(SandboxConnectionMode.RemoteApp);
-
-    [RelayCommand]
-    private Task ConnectDesktopAsync() => ConnectAsync(SandboxConnectionMode.FullDesktop);
-
-    [RelayCommand]
-    private Task ConnectRemoteAppAsync() => ConnectAsync(SandboxConnectionMode.RemoteApp);
+    private async Task PrimaryActionAsync()
+    {
+        if (State == SandboxState.Running)
+        {
+            await ConnectCoreAsync();
+        }
+        else if (CanStart)
+        {
+            await StartCoreAsync();
+        }
+    }
 
     [RelayCommand]
     private async Task StopAsync()
@@ -205,7 +284,56 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         await GuardAsync(async () =>
         {
             await _manager.StopAsync(Id);
+            _userDisconnected = false;
+            var dto = await _manager.GetAsync(Id);
+            Apply(dto);
             Status = _l["Status.Stopped.Text"];
+        });
+    }
+
+    /// <summary>Explicitly ends the session; no automatic reconnect afterwards.</summary>
+    [RelayCommand]
+    private void Disconnect()
+    {
+        _userDisconnected = true;
+        Status = _l["Status.Disconnected.Text"];
+        _owner.Status = Status;
+    }
+
+    private async Task StartCoreAsync()
+    {
+        await GuardAsync(async () =>
+        {
+            Status = _l["Status.Starting.Text"];
+            var dto = await _manager.StartAsync(Id, ConnectionMode);
+            Apply(dto);
+            Status = _l["Status.Running.Text"];
+
+            // Auto-connect after a successful start, unless the user explicitly
+            // disconnected this session.
+            if (!_userDisconnected)
+            {
+                try
+                {
+                    await _manager.ConnectAsync(Id, ConnectionMode);
+                    Status = _l["Status.Connected.Text"];
+                }
+                catch (Exception ex)
+                {
+                    // The sandbox is up; a failed session launch is not fatal.
+                    Status = ex.Message;
+                }
+            }
+        });
+    }
+
+    private async Task ConnectCoreAsync()
+    {
+        await GuardAsync(async () =>
+        {
+            await _manager.ConnectAsync(Id, ConnectionMode);
+            _userDisconnected = false;
+            Status = _l["Status.Connected.Text"];
         });
     }
 
@@ -245,6 +373,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             await _owner.ReloadAsync(null);
         });
     }
+
+    // --------------------------- Checkpoints ---------------------------
 
     [RelayCommand]
     private async Task SaveCheckpointAsync()
@@ -289,6 +419,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             Status = _l.Get("Status.CheckpointRestored.Text", newId);
         });
     }
+
+    // --------------------------- Folders ---------------------------
 
     [RelayCommand]
     private void AddFolder()
@@ -340,6 +472,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         });
     }
 
+    // --------------------------- Logon commands ---------------------------
+
     [RelayCommand]
     private void AddLogon()
     {
@@ -365,6 +499,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         Status = _l["Status.LogonRemoved.Text"];
     }
 
+    // --------------------------- Runtime ---------------------------
+
     [RelayCommand]
     private async Task ExecuteAsync()
     {
@@ -387,26 +523,6 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         {
             var addresses = await _manager.GetIpAddressesAsync(Id);
             Status = _l.Get("Status.IpAddresses.Text", string.Join(", ", addresses));
-        });
-    }
-
-    private async Task StartAsync(SandboxConnectionMode mode)
-    {
-        await GuardAsync(async () =>
-        {
-            Status = _l["Status.Starting.Text"];
-            var dto = await _manager.StartAsync(Id, mode);
-            Apply(dto);
-            Status = _l["Status.Running.Text"];
-        });
-    }
-
-    private async Task ConnectAsync(SandboxConnectionMode mode)
-    {
-        await GuardAsync(async () =>
-        {
-            await _manager.ConnectAsync(Id, mode);
-            Status = _l["Status.Connected.Text"];
         });
     }
 

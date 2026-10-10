@@ -12,9 +12,9 @@ using Wsm.Ui.WinUI.Localization;
 namespace Wsm.Ui.WinUI.ViewModels;
 
 /// <summary>
-/// Root view model: the instance list, the engine selector, the language choice
-/// and the host status line. Everything is driven by the new
-/// <see cref="ISandboxManager"/> API.
+/// Root view model: the instance list, the creation dialog fields, the engine
+/// routing choice, the language choice and the host status line. Everything is
+/// driven by the new <see cref="ISandboxManager"/> API.
 /// </summary>
 public sealed partial class MainViewModel : ObservableObject
 {
@@ -39,12 +39,14 @@ public sealed partial class MainViewModel : ObservableObject
         BuildBranch = _policy.CurrentBuildBranch ?? "—";
         MultiInstanceAllowed = _policy.AllowsMultipleInstances;
         Status = _l["Status.Ready.Text"];
+        DefaultStoragePath = _l["StoragePathBox.PlaceholderText"];
 
         Instances.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasInstances));
         BuildEngines();
         Languages = LanguageOption.CreateDefaults();
         SelectedLanguage = LanguageOption.Resolve(_l.CurrentCulture.Name);
         UpdateEnvironmentSummary();
+        ResetNewInstance();
     }
 
     public ObservableCollection<SandboxInstanceViewModel> Instances { get; } = [];
@@ -52,6 +54,9 @@ public sealed partial class MainViewModel : ObservableObject
     public ObservableCollection<EngineOptionViewModel> Engines { get; } = [];
 
     public IReadOnlyList<LanguageOption> Languages { get; }
+
+    /// <summary>Placeholder shown for the platform-default user-data location.</summary>
+    public string DefaultStoragePath { get; }
 
     [ObservableProperty] private SandboxInstanceViewModel? _selected;
 
@@ -71,6 +76,19 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private string _buildBranch;
 
+    // --- New sandbox (creation dialog) ---
+
+    [ObservableProperty] private string _newName = string.Empty;
+
+    /// <summary>0 = RemoteApp (RAIL), 1 = full desktop.</summary>
+    [ObservableProperty] private int _newTypeIndex = 1;
+
+    [ObservableProperty] private string _newStoragePath = string.Empty;
+
+    [ObservableProperty] private double _newMemoryMb = SandboxMemoryConfiguration.DefaultMemoryMb;
+
+    [ObservableProperty] private double _newCpuCores = 4;
+
     public bool HasSelection => Selected is not null;
 
     public bool HasInstances => Instances.Count > 0;
@@ -79,19 +97,49 @@ public sealed partial class MainViewModel : ObservableObject
 
     public Task InitializeAsync(Guid? selectId = null) => ReloadAsync(selectId);
 
-    [RelayCommand]
-    private async Task CreateAsync()
+    /// <summary>Resets the creation dialog fields to their defaults.</summary>
+    public void ResetNewInstance()
+    {
+        NewName = string.Empty;
+        NewTypeIndex = 1;
+        NewStoragePath = string.Empty;
+        NewMemoryMb = SandboxMemoryConfiguration.DefaultMemoryMb;
+        NewCpuCores = Math.Max(1, Math.Min(Environment.ProcessorCount / 2, 64));
+    }
+
+    /// <summary>
+    /// Creates an instance from the creation-dialog fields. Returns false (and
+    /// surfaces the message in <see cref="Status"/>) when creation fails so the
+    /// dialog can stay open.
+    /// </summary>
+    public async Task<bool> CreateFromDialogAsync()
     {
         try
         {
             IsBusy = true;
-            var dto = await _manager.CreateAsync(null, SandboxRecipe.Default);
+
+            var recipe = new SandboxRecipe
+            {
+                Memory = new SandboxMemoryConfiguration(
+                    double.IsFinite(NewMemoryMb) ? (int)Math.Round(NewMemoryMb) : SandboxMemoryConfiguration.DefaultMemoryMb),
+                Cpu = new SandboxCpuConfiguration(
+                    double.IsFinite(NewCpuCores) ? (int)Math.Round(NewCpuCores) : 4),
+                RailMode = NewTypeIndex == 0,
+                Storage = string.IsNullOrWhiteSpace(NewStoragePath)
+                    ? SandboxStorageOptions.Default
+                    : SandboxStorageOptions.Default.WithPath(NewStoragePath),
+            };
+
+            var name = string.IsNullOrWhiteSpace(NewName) ? null : NewName.Trim();
+            var dto = await _manager.CreateAsync(name, recipe);
             await ReloadAsync(dto.Id);
             Status = _l["Status.Created.Text"];
+            return true;
         }
         catch (Exception ex)
         {
             Status = ex.Message;
+            return false;
         }
         finally
         {

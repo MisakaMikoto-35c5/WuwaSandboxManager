@@ -15,53 +15,73 @@ HCS 直连可提供：多实例、CPU 核数、自定义用户数据位置、自
 
 ---
 
-## 两种控制面
+## 三种引擎
 
-| | **HCS 后端（主）** | **gRPC 后端（回退）** |
-| --- | --- | --- |
-| 入口 | `computecore.dll`（operation-based） | `WindowsSandboxServer` gRPC over named pipe |
-| 提权 | **需要管理员 / Hyper-V 管理员** | 不需要 |
-| 多实例 | ✅ 无许可门槛 | ⚠️ 受许可策略限制（`CO_E_APPSINGLEUSE`） |
-| CPU 核数 | ✅ `Processor.Count` | ✖ |
-| 自定义用户数据位置 | ✅ `Scsi.Attachments[].Path` | ✖（仅大小） |
-| 自定义基础镜像层 | ✅ `VirtualSmb.Shares` / `RunInSilo` | ✖ |
-| 检查点 | ✅ `HcsSaveComputeSystem` | ✖ |
-| 运行期热映射目录 | ✖（创建时映射） | ✅ `MapFolder` |
-| in-guest 进程执行 | ✖ | ✅ `CreateProcess` |
-| 获取 IP | ✖（由 HNS 维护） | ✅ `GetIpAddress` |
+引擎统一由 `ISandboxEngine`（`Wsm.Engines.Abstractions`）契约描述；选择器 `ISandboxEngineSelector`
+**仅考虑 `IsAvailable == true` 的引擎**，按 recipe 所需能力匹配后，再按 `SandboxEngineKind` 升序
+（HCS 优先）选择；无可用引擎时抛 `SandboxNotSupportedException`（含提权提示）。
 
-引擎在提权时**自动选用 HCS**，否则回退 gRPC。`wsm env` 会显示当前选中的后端与能力。
+| | **HCS（默认）** | **Windows Sandbox（gRPC）** | **Windows Container（预留）** |
+| --- | --- | --- | --- |
+| `SandboxEngineKind` | `HcsSandbox = 0` | `WindowsSandbox = 1` | `WindowsContainer = 2` |
+| 入口 | `computecore.dll`（operation-based） | `WindowsSandboxServer` gRPC over named pipe | 轻量隔离（Docker 式，未实现） |
+| `IsAvailable` | 提权时 `true` | 恒 `true` | 恒 `false`（不可被选中） |
+| 提权 | **需要管理员 / Hyper-V 管理员** | 不需要 | 需要 |
+| 多实例 | ✅ 无许可门槛 | ⚠️ 受许可策略限制（`CO_E_APPSINGLEUSE`） | 计划 ✅ |
+| CPU 核数 | ✅ `Processor.Count` | ✖ | 计划 ✅ |
+| 自定义用户数据位置 | ✅ `Scsi.Attachments[].Path` | ✖（仅大小） | 计划 ✅ |
+| 自定义基础镜像层 | ✅ `VirtualSmb.Shares` / `RunInSilo` | ✖ | 计划 ✅ |
+| 检查点 | ✅ `HcsSaveComputeSystem` | ✖ | 计划 ✅ |
+| 运行期热映射目录 | ✖（创建时映射） | ✅ `MapFolder` | 计划 ✅ |
+| in-guest 进程执行 | ✖ | ✅ `CreateProcess` | 计划 ✅ |
+| 获取 IP | ✖（由 HNS 维护） | ✅ `GetIpAddress` | 计划 ✅ |
+
+引擎在提权时**自动选用 HCS**（`HcsSandboxEngine.IsAvailable == _elevation.IsElevated`），否则回退
+Windows Sandbox gRPC。`WindowsContainerEngine` 是可编译的**预留空壳**（`IsAvailable == false`，
+成员抛 `SandboxNotSupportedException`），不会被选择器选中。`wsm env` 会显示当前所选引擎与能力。
 
 ---
 
-## 架构（DDD 分层）
+## 架构（ABP 模块化 · 一模块一程序集）
+
+仓库为 **Volo.Abp.Core 模块化单体**：每个程序集恰好一个 `AbpModule` 派生类，公共契约 `public`、
+实现 `internal`；`.slnx` 用**解决方案文件夹**按职责分层（组织用途）。共 **28 个程序集**
+（24 核心 + 4 预留空壳）。命名空间根 **== 程序集名**（`Wsm.*`）；旧的
+`WindowsSandboxManager.*` 命名空间已全部消除。
 
 ```
-┌─────────────────────────────┐        ┌──────────────────────────────┐
-│  WindowsSandboxManager.App  │        │ WindowsSandboxManager.Cli    │
-│  (WinUI3 + MVVM)            │        │ (wsm, 控制台)                │
-└──────────────┬──────────────┘        └──────────────┬───────────────┘
-               │  ISandboxApplicationService          │
-┌──────────────▼──────────────────────────────────────▼───────────────┐
-│  WindowsSandboxManager.Application  (用例 / DTO / 后端选择器)         │
-└──────────────┬───────────────────────────────────────────────────────┘
-               │  ISandboxBackend, ISandboxSessionConnector, ISandboxRepository,
-               │  ISandboxRecipeSerializer, ISandboxEnvironment   (端口)
-┌──────────────▼───────────────────────────────────────────────────────┐
-│  WindowsSandboxManager.Infrastructure                                │
-│   • Hcs/      : HcsService, HcsSandboxBackend, HcsSandboxJson,        │
-│                 HcsHostLayout, HcsStorageManager, HcsCheckpointManager│
-│   • Grpc/     : SandboxCore.proto + 命名管道通道 + ServerBackend       │
-│   • Connectors: WindowsSandboxSessionConnector, RdpBaseNamedPipe...   │
-│   • Serialization: WsbRecipeXmlSerializer (.wsb)                      │
-│   • Repositories / Environment / Elevation / MultiInstancePolicy      │
-└──────────────┬───────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ 表示层 Presentation  /src/50-App/                                       │
+│   Wsm.Cli (CliModule, `wsm`)      Wsm.Ui.WinUI (WinUiModule, .resw/x:Uid)│
+└──────────────┬────────────────────────────────┬────────────────────────┘
+               │ ISandboxManager                │ IAppLocalizer / ResourceLoader
+┌──────────────▼────────────────────────────────▼────────────────────────┐
+│ 应用层 Application  /src/00-Core/                                       │
+│   Wsm.Application (SandboxApplicationModule → ISandboxManager)         │
+│   Wsm.Application.EngineSelection (EngineSelectionModule → 默认 HCS)    │
+└──────────────┬──────────────────────────────────────────────────────────┘
+               │ ISandboxEngine / ISandboxEngineRegistry
+┌──────────────▼──────────────────────────────────────────────────────────┐
+│ 引擎层 Engines  /src/20-Engines/                                        │
+│   Wsm.Engine.Hcs (核心/默认)   Wsm.Engine.WindowsSandbox (核心/gRPC)     │
+│   Wsm.Engine.WindowsContainer (预留, IsAvailable=false)                 │
+└──────────────┬──────────────────────────────────────────────────────────┘
+               │ 能力模块（一模块一程序集）
+┌──────────────▼──────────────────────────────────────────────────────────┐
+│ /src/10-Hcs/         Wsm.Hcs.Interop / Layout / Json.Sandbox /          │
+│                      Json.Container(预留) / Storage / Checkpoint /      │
+│                      Process(预留) / Network(预留)                       │
+│ /src/30-Connections/ Wsm.SandboxServer.Client / Wsm.Recipe.Serialization│
+│                      Wsm.Connection.RdpBase / Session / Legacy          │
+│ /src/40-Host/        Wsm.Persistence / Wsm.Host.Environment / Elevation │
+│                      / Policy / Wsm.Localization                        │
+└──────────────┬──────────────────────────────────────────────────────────┘
                │
-┌──────────────▼───────────────────────────────────────────────────────┐
-│  WindowsSandboxManager.Domain                                        │
-│   SandboxInstance(聚合根) · SandboxRecipe · StorageOptions ·          │
-│   Checkpoint · 值对象 · 领域事件 · 端口                                │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────▼──────────────────────────────────────────────────────────┐
+│ 领域层 Domain  /src/00-Core/Wsm.Domain (SandboxDomainModule)            │
+│   SandboxInstance(聚合根) · SandboxRecipe · StorageOptions ·            │
+│   Checkpoint · 值对象 · 领域事件                                        │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -76,10 +96,10 @@ dotnet build WindowsSandboxManager.slnx
 dotnet test  WindowsSandboxManager.slnx
 
 # CLI
-dotnet run --project src\WindowsSandboxManager.Cli -- env
+dotnet run --project src/50-App/Wsm.Cli -- env
 
 # WinUI3 GUI（HCS 需要管理员，可右键“以管理员身份运行”）
-dotnet run --project src\WindowsSandboxManager.App
+dotnet run --project src/50-App/Wsm.Ui.WinUI
 ```
 
 ---
@@ -87,43 +107,45 @@ dotnet run --project src\WindowsSandboxManager.App
 ## CLI（`wsm`）用法
 
 ```text
-wsm env                        显示主机环境、提权状态与后端能力
+wsm env                        显示所选引擎、能力、提权状态与多实例策略
 wsm list / running             列出实例 / 运行中实例
-wsm hcs                        列出 HCS compute system（需提权）
-wsm layers                     显示层/存储/快照布局并解析基础镜像层
 wsm create [options]           创建实例定义
 wsm show <id>                  查看实例
 wsm start <id> [--remoteapp]   启动
 wsm stop <id>                  停止
 wsm connect <id> [--remoteapp] 连接 RDP 会话
-wsm ip <id>                    获取 guest IP（gRPC 后端）
-wsm exec <id> <command>        在沙箱内执行命令（gRPC 后端）
-wsm share <id> <host> [sbx] [--rw]   运行期热映射目录（gRPC 后端）
+wsm ip <id>                    获取 guest IP（Windows Sandbox gRPC 引擎）
+wsm exec <id> <command>        在沙箱内执行命令（gRPC 引擎）
+wsm share <id> <host> [sbx] [--rw]   运行期热映射目录（gRPC 引擎）
 wsm checkpoint save <id> <name> [--template]  保存 HCS 检查点
 wsm checkpoint list <id>                      列出检查点
 wsm checkpoint restore <id> <checkpointId>    恢复检查点
-wsm multi [--enable|--disable] 查看/切换多实例许可策略（gRPC 后端用）
-wsm elevate                    提权重启（启用 HCS 后端）
+wsm multi [--enable|--disable] 查看/切换多实例许可策略（gRPC 引擎用）
+wsm elevate                    提权重启（启用 HCS 引擎）
+wsm help                       显示帮助
 
 create 选项：
   --name <名称>
   --memory <MB>                默认 4096
-  --cpu <核数>                 HCS 后端
+  --cpu <核数>                 HCS 引擎
   --networking enable|disable|default
   --vgpu enable|disable|default
   --rail                       以 RemoteApp(RAIL) 启动
   --fullscreen / --protected
-  --storage-path <目录>        自定义用户数据位置（HCS 后端）
+  --storage-path <目录>        自定义用户数据位置（HCS 引擎）
   --disk-size <MB>             用户数据盘大小
   --map "C:\host;C:\guest;rw"
   --logon "cmd.exe /c echo hi"
 ```
 
+> 旧 CLI 的 `wsm hcs` / `wsm layers` 诊断命令依赖已在 P8b 删除的旧
+> `Infrastructure/Hcs`，**未迁移**；层/存储布局现由 `Wsm.Hcs.Layout`、`Wsm.Hcs.Storage` 模块承担，
+> 不再作为独立 CLI 命令暴露。
+
 示例（HCS，需管理员）：
 
 ```powershell
 wsm elevate
-wsm layers                                             # 确认基础镜像层
 $id = (wsm create --name Demo --cpu 8 --memory 8192 --storage-path E:\sbx --networking enable)
 wsm start $id
 wsm checkpoint save $id snap1 --template
@@ -141,13 +163,14 @@ wsm stop $id
 | 自定义用户数据位置 | **允许**（位置仅 HCS） | `Scsi.primary.Attachments["0"].Path`；`CmsCreateStorage`/`CmsMapVirtualDiskToContainer` |
 | 检查点 | **允许** | `HcsSaveComputeSystem` + `SaveOptions{ToFile\|AsTemplate}` + `RestoreState`；落盘 `Snapshots\<id>\SnapshotSavedState.vmrs` |
 
-引擎实现：
+引擎实现（`/src/10-Hcs/` 能力模块）：
 
-- 基础镜像层：`HcsHostLayout.ResolveBaseLayerPath()` 从 `HKLM\...\Containers\CmService\Layers` 解析最新可用层
-  （本机实测解析到 `Layers\<id>\Files`）。
-- 用户数据：`SandboxRecipe.Storage`（`SandboxStorageOptions`）→ `HcsStorageManager.Provision()` 在自定义目录
-  准备 `sandbox.vhdx`/`sandbox.vmgs`。
-- 检查点：`HcsCheckpointManager` 保存/枚举/恢复；`SaveType=AsTemplate` 对应 Windows Sandbox 内部用于快速重启的模板。
+- 基础镜像层：`IHcsHostLayout.ResolveBaseLayerPath()`（`Wsm.Hcs.Layout`）从
+  `HKLM\...\Containers\CmService\Layers` 解析最新可用层（本机实测解析到 `Layers\<id>\Files`）。
+- 用户数据：`SandboxRecipe.Storage`（`SandboxStorageOptions`）→ `ISandboxStorageProvisioner.Provision()`
+  （`Wsm.Hcs.Storage`）在自定义目录准备 `sandbox.vhdx`/`sandbox.vmgs`。
+- 检查点：`ICheckpointService`（`Wsm.Hcs.Checkpoint`）保存/枚举/恢复；`SaveType=AsTemplate` 对应
+  Windows Sandbox 内部用于快速重启的模板。
 
 ---
 

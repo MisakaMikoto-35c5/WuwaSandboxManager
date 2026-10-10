@@ -23,23 +23,23 @@ module/project dependency graph):
 | 引擎 Engines | `/src/20-Engines/` | 具体引擎实现 / concrete engine implementations |
 | 连接 Connections | `/src/30-Connections/` | gRPC 客户端、`.wsb` 序列化、RDP 连接器 / gRPC client, `.wsb` serialization, RDP connectors |
 | 主机 Host | `/src/40-Host/` | 持久化、环境、提权、策略、本地化 / persistence, environment, elevation, policy, localization |
-| 表示层 Presentation | `/src/50-App/` | CLI 与 WinUI 宿主（P7）/ CLI and WinUI hosts (P7) |
+| 表示层 Presentation | `/src/50-App/` | CLI 与 WinUI 宿主（已交付）/ CLI and WinUI hosts (delivered) |
 | 测试 Tests | `/tests/90-Tests/` | 测试装配 `Wsm.Tests` / test composition `Wsm.Tests` |
 
-> 旧工程 `/src/WindowsSandboxManager.*` 与 `/tests/WindowsSandboxManager.Tests` 在迁移期保留（冻结），
-> 由最终阶段 P8 删除；期间新栈保持**纯新增**，旧栈保持全绿。
-> The legacy projects `/src/WindowsSandboxManager.*` and `/tests/WindowsSandboxManager.Tests` are kept
-> (frozen) during the migration and removed in the final phase P8; the new stack stays **purely additive**
-> and the old stack stays green in the meantime.
+> 旧工程 `/src/WindowsSandboxManager.*` 与 `/tests/WindowsSandboxManager.Tests` 在迁移期曾保留（冻结），
+> 已在最终阶段 **P8b（`92c2a08`）整体删除**；迁移期间新栈保持**纯新增**，旧栈保持全绿。
+> The legacy projects `/src/WindowsSandboxManager.*` and `/tests/WindowsSandboxManager.Tests` were kept
+> (frozen) during the migration and were **removed entirely in the final phase P8b (`92c2a08`)**; during
+> the migration the new stack stayed **purely additive** and the old stack stayed green.
 
 ## 2. 程序集清单 / Assembly inventory
 
-**中文**：下表是当前（P6 本地化阶段后）新栈的程序集。**核心**=已实现；**预留**=可编译空壳，
-`IsAvailable=false` / 成员抛 `SandboxNotSupportedException`；**计划**=P7 交付。
+**中文**：下表是**最终** 28 个程序集的完整清单（P8b 之后）。**核心**=已实现；**预留**=可编译空壳，
+`IsAvailable=false` / 成员抛 `SandboxNotSupportedException`。
 
-**English**: The table lists the new-stack assemblies as of the current state (after the P6 localization
-work). **Core** = implemented; **Reserved** = compilable shell, `IsAvailable=false` / members throw
-`SandboxNotSupportedException`; **Planned** = delivered in P7.
+**English**: The table lists the complete **final** inventory of 28 assemblies (after P8b). **Core** =
+implemented; **Reserved** = compilable shell, `IsAvailable=false` / members throw
+`SandboxNotSupportedException`.
 
 | 程序集 Assembly | 模块 Module | 公共契约 / 职责 Contract / responsibility | 状态 Status |
 |---|---|---|---|
@@ -68,8 +68,8 @@ work). **Core** = implemented; **Reserved** = compilable shell, `IsAvailable=fal
 | `Wsm.Host.Policy` | `MultiInstancePolicyModule` | `IMultiInstancePolicy` | 核心 Core |
 | `Wsm.Persistence` | `SandboxPersistenceModule` | `ISandboxInstanceRepository`（JSON + `.wsb`）/ repository | 核心 Core |
 | `Wsm.Localization` | `WsmLocalizationModule` | `WindowsSandboxManagerResource`（ABP JSON 本地化）/ ABP JSON localization | 核心 Core |
-| `Wsm.Cli` | `CliModule` | 控制台命令（启动模块）/ console commands | 计划 Planned |
-| `Wsm.Ui.WinUI` | `WinUiModule` | WinUI3 宿主 + MVVM + `.resw`/`x:Uid` / WinUI3 host | 计划 Planned |
+| `Wsm.Cli` | `CliModule` | 控制台命令（启动模块）/ console commands | 已交付 Delivered（P7a） |
+| `Wsm.Ui.WinUI` | `WinUiModule` | WinUI3 宿主 + MVVM + `.resw`/`x:Uid` / WinUI3 host | 已交付 Delivered（P7b） |
 | `Wsm.Tests` | `TestModule` | 测试装配 / test composition | 核心 Core |
 
 ## 3. ABP 约定 / ABP conventions
@@ -128,16 +128,16 @@ is available.
 **中文**：本地化分两路。**非 UI 文案**（领域/应用/CLI 消息）由 ABP 承载：`Wsm.Localization` 程序集
 注册 `WindowsSandboxManagerResource`，JSON 资源以**嵌入式虚拟文件**提供，路径
 `/Localization/WindowsSandboxManager/{culture}.json`，语言为 `en` 与 `zh-Hans`；消费方通过
-`IStringLocalizer<WindowsSandboxManagerResource>` 读取。**UI 文案**（P7）由 WinUI `.resw` + `x:Uid`
+`IStringLocalizer<WindowsSandboxManagerResource>` 读取。**UI 文案**（P7b 已交付）由 WinUI `.resw` + `x:Uid`
 承载（`Resources/en-US/Resources.resw`、`Resources/zh-Hans/Resources.resw`），运行期切换语言后需重建
 窗口/页面（WinUI 无自动重载）。
 
 **English**: Localization is two-tracked. **Non-UI text** (domain/application/CLI messages) is carried by
 ABP: the `Wsm.Localization` assembly registers `WindowsSandboxManagerResource` with **embedded virtual
 JSON** files at `/Localization/WindowsSandboxManager/{culture}.json` for `en` and `zh-Hans`; consumers
-read through `IStringLocalizer<WindowsSandboxManagerResource>`. **UI text** (P7) is carried by WinUI
-`.resw` + `x:Uid` (`Resources/en-US/Resources.resw`, `Resources/zh-Hans/Resources.resw`); after a runtime
-culture switch the window/page must be rebuilt (WinUI has no automatic reload).
+read through `IStringLocalizer<WindowsSandboxManagerResource>`. **UI text** (delivered in P7b) is carried
+by WinUI `.resw` + `x:Uid` (`Resources/en-US/Resources.resw`, `Resources/zh-Hans/Resources.resw`); after a
+runtime culture switch the window/page must be rebuilt (WinUI has no automatic reload).
 
 | 键 Key | 用途 Purpose |
 |---|---|
@@ -155,22 +155,24 @@ culture switch the window/page must be rebuilt (WinUI has no automatic reload).
 ## 6. 命名空间规则 / Namespace rule
 
 **中文**：**命名空间根 == 程序集名**（允许根下子命名空间，如 `*.Internal` / `*.Mapping`）。
-新程序集一律使用 `Wsm.*` 命名空间；`Wsm.Domain` 暂时保留 `WindowsSandboxManager.Domain*`
-（过渡债），最终 P8 重命名并消除全部 `WindowsSandboxManager.*` 命名空间。
+全部 28 个程序集均使用 `Wsm.*` 命名空间。迁移期间 `Wsm.Domain` 曾暂时保留
+`WindowsSandboxManager.Domain*`（过渡债），**已在 P8b（`92c2a08`）重命名并消除**；仓库内
+`WindowsSandboxManager.*` 命名空间**全部消除**（守卫 grep 为空）。
 
 **English**: **Namespace root == assembly name** (sub-namespaces such as `*.Internal` / `*.Mapping` are
-allowed). New assemblies use `Wsm.*` namespaces; `Wsm.Domain` temporarily keeps
-`WindowsSandboxManager.Domain*` (accepted transition debt) until P8 renames it and eliminates every
-`WindowsSandboxManager.*` namespace.
+allowed). All 28 assemblies now use `Wsm.*` namespaces. During the migration `Wsm.Domain` temporarily kept
+`WindowsSandboxManager.Domain*` (accepted transition debt); it was **renamed and eliminated in P8b
+(`92c2a08`)**, and every `WindowsSandboxManager.*` namespace is now **gone** (the guard grep is empty).
 
 ## 7. 阶段与门禁 / Phases and gates
 
 **中文**：迁移按阶段推进，每阶段结束由 **Oracle 门禁**评审层边界/依赖方向/接口纯度，并产出非阻塞
-发现（F-items）供后续回收。旧栈在 P8 前保持不变，新栈保持纯新增。
+发现（F-items）供后续回收。迁移期间旧栈保持不变、新栈纯新增；**P8b 已删除旧栈并完成命名空间归一**。
 
 **English**: The migration proceeds in phases; each phase ends with an **Oracle gate** reviewing layer
 boundaries, dependency direction and interface purity, producing non-blocking findings (F-items) for
-later recovery. The old stack is unchanged until P8; the new stack stays purely additive.
+later recovery. During the migration the old stack was untouched and the new stack purely additive;
+**P8b deleted the old stack and completed the namespace normalisation**.
 
 | 阶段 Phase | 交付 Deliverable | 门禁 Gate |
 |---|---|---|
@@ -183,9 +185,41 @@ later recovery. The old stack is unchanged until P8; the new stack stays purely 
 | P7 CLI + WinUI | `Wsm.Cli`、`Wsm.Ui.WinUI`（`.resw`/`x:Uid`、引擎/语言切换）/ CLI + WinUI | final |
 | P8 收尾 Cleanup | 删除旧栈、命名空间重命名（消除 `WindowsSandboxManager.*`）/ delete old stack, rename namespaces | final |
 
+## 8. P6 / P7 / P8 收尾 / Finalization (localization · presentation · cleanup)
+
+**中文**：迁移的收尾三段及其提交链如下。
+
+**English**: The three finalization segments and their commit chain follow.
+
+| 段 Segment | 范围 Scope | 提交 Commit |
+|---|---|---|
+| 基线 Baseline | P1 foundation + P2 HCS capability + P3a host/persistence | `e174887` |
+| P3 | infra-port 模块程序集 + gate-2 清理 / infra-port modules + gate-2 cleanups | `5c5d9fd` → `fa4e502` |
+| P4 | 引擎 + 选择器 + `SandboxManager` / engines + selector + manager | `09abb76` |
+| P5 | 预留空壳 + 引擎/管理器对齐 / reserved stubs + parity | `267be86` |
+| **P6** | `Wsm.Localization`（ABP JSON `en`/`zh-Hans`）+ 双语模块化文档 / localization + docs | `dc2e2e6` |
+| **P7** | P7a `ISandboxManager` 扩展 + ABP 承载 `Wsm.Cli`；P7b WinUI3 管理界面（`.resw`/`x:Uid`、引擎/语言切换） / CLI + WinUI | `06d4abb` → `b01311d` |
+| **P8** | P8a 旧测试对等移植；**P8b 删除旧栈 + 命名空间根归一** / test parity; delete legacy + rename namespaces | `2bef8ad` → `92c2a08` |
+
+**提交链 / Commit chain**：`e174887` → `5c5d9fd` → `fa4e502` → `09abb76` → `267be86` → `dc2e2e6`
+→ `06d4abb` → `b01311d` → `92c2a08`（HEAD）。
+
+**最终守卫 / Final guards**（P8b，全部通过 / all green）：
+- **命名空间根 == 程序集名**：全部 28 个程序集满足；`WindowsSandboxManager.*` 命名空间守卫 grep 为空。
+- **旧栈删除**：`src/WindowsSandboxManager.*` 与 `tests/WindowsSandboxManager.Tests` 不复存在；
+  旧 `Infrastructure/Hcs`、手写 DI 扩展、`Domain.Abstractions`（`Ports.cs`、
+  `SandboxBackendCapabilities.cs`）全部删除。
+- **无悬空引用**：`ISandboxBackend`、Domain 副本 `ISandboxRecipeSerializer` 等旧端口零引用。
+- **全绿**：`dotnet build WindowsSandboxManager.slnx` 0 错误；`Wsm.Tests` 49 个测试通过。
+
+**English**: Namespace roots equal assembly names for all 28 assemblies and the `WindowsSandboxManager.*`
+namespaces are gone; the legacy projects, `Infrastructure/Hcs`, hand-written DI extensions and
+`Domain.Abstractions` ports were deleted; no dangling references to the old ports remain; the build is
+clean and all 49 tests pass.
+
 ## 证据 / Evidence
 
-- 解决方案：`WindowsSandboxManager.slnx`（`/src/00-Core|10-Hcs|20-Engines|30-Connections|40-Host/`、`/tests/90-Tests/`）。
+- 解决方案：`WindowsSandboxManager.slnx`（**28 个程序集**；`/src/00-Core|10-Hcs|20-Engines|30-Connections|40-Host|50-App/`、`/tests/90-Tests/`）。
 - 引擎契约：`src/00-Core/Wsm.Engines.Abstractions/{ISandboxEngine,ISandboxEngineRegistry,Internal/SandboxEngineRegistry}.cs`。
 - 选择器：`src/00-Core/Wsm.Application.EngineSelection/Internal/EngineSelector.cs`。
 - 引擎实现：`src/20-Engines/Wsm.Engine.Hcs/`、`Wsm.Engine.WindowsSandbox/`、`Wsm.Engine.WindowsContainer/WindowsContainerEngine.cs`。

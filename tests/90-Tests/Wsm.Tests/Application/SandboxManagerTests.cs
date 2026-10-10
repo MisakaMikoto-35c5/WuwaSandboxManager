@@ -163,6 +163,49 @@ public sealed class SandboxManagerTests
     }
 
     [Fact]
+    public async Task Delete_requests_engine_data_cleanup()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var manager = Manager(repository, engine);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.DeleteAsync(created.Id);
+
+        Assert.Contains(new SandboxInstanceId(created.Id), engine.DeletedData);
+        Assert.Empty(await manager.ListAsync());
+    }
+
+    [Fact]
+    public async Task Delete_succeeds_when_the_engine_does_not_support_data_cleanup()
+    {
+        var repository = new InMemoryRepository();
+        // ThrowingStartEngine leaves DeleteDataAsync at the default-throwing
+        // implementation, as the Windows engines do.
+        var manager = Manager(repository, new ThrowingStartEngine());
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        await manager.DeleteAsync(created.Id);
+
+        Assert.Empty(await manager.ListAsync());
+    }
+
+    [Fact]
+    public async Task Delete_succeeds_when_data_cleanup_fails()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine { ThrowOnDeleteData = true };
+        var manager = Manager(repository, engine);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        await manager.DeleteAsync(created.Id);
+
+        Assert.Empty(await manager.ListAsync());
+    }
+
+    [Fact]
     public async Task Get_capabilities_reports_the_selected_engine()
     {
         var engine = new StubEngine();
@@ -253,6 +296,10 @@ public sealed class SandboxManagerTests
 
         public int ListCount { get; private set; }
 
+        public bool ThrowOnDeleteData { get; set; }
+
+        public List<SandboxInstanceId> DeletedData { get; } = new();
+
         public Guid RestoredId { get; } = Guid.NewGuid();
 
         public SandboxCheckpoint? LastRestored { get; private set; }
@@ -309,6 +356,17 @@ public sealed class SandboxManagerTests
         {
             LastRestored = checkpoint;
             return Task.FromResult(RestoredId);
+        }
+
+        public Task DeleteDataAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnDeleteData)
+            {
+                throw new InvalidOperationException("cleanup failed");
+            }
+
+            DeletedData.Add(id);
+            return Task.CompletedTask;
         }
     }
 

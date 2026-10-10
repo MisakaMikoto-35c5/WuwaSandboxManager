@@ -59,6 +59,16 @@ public interface ISandboxEngine
     Task<Guid> RestoreCheckpointAsync(SandboxInstanceId id, SandboxCheckpoint checkpoint, CancellationToken cancellationToken = default)
         => throw NotSupported(nameof(RestoreCheckpointAsync));
 
+    /// <summary>
+    /// Deletes any on-disk data owned by the instance (container storage,
+    /// differencing disks, snapshots, …). Invoked after an instance is stopped
+    /// as a best-effort reclamation step, so an implementation must tolerate a
+    /// partial failure; engines without host-side storage leave this
+    /// unsupported.
+    /// </summary>
+    Task DeleteDataAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+        => throw NotSupported(nameof(DeleteDataAsync));
+
     private static SandboxNotSupportedException NotSupported(string member)
         => new($"The sandbox engine does not support '{member}'.");
 }

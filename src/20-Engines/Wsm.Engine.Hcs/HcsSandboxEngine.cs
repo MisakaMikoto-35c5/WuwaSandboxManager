@@ -269,6 +269,44 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         });
     }
 
+    /// <summary>
+    /// Reclaims the instance's on-disk footprint: the storage directory (the
+    /// ~874 MB base copy, the differencing child, the VMGS and the crash-dump
+    /// placeholder) and its snapshots directory. Both are best-effort: a partial
+    /// failure is logged, never thrown, so the caller's delete still completes.
+    /// The instance is expected to be stopped (the storage is in use otherwise).
+    /// </summary>
+    public Task DeleteDataAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+    {
+        var key = id.ToString();
+        DeleteDirectoryQuietly(_layout.GetStorageDirectory(key), key, "storage");
+        DeleteDirectoryQuietly(Path.Combine(_layout.SnapshotsRoot, key), key, "snapshots");
+        return Task.CompletedTask;
+    }
+
+    private void DeleteDirectoryQuietly(string directory, string id, string kind)
+    {
+        try
+        {
+            if (!Directory.Exists(directory))
+            {
+                return;
+            }
+
+            Directory.Delete(directory, recursive: true);
+            _logger.LogInformation(
+                "Deleted {Kind} directory '{Directory}' for sandbox {SandboxId}.",
+                kind, directory, id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to delete {Kind} directory '{Directory}' for sandbox {SandboxId} (continuing).",
+                kind, directory, id);
+        }
+    }
+
     public Task<SandboxCheckpoint> SaveCheckpointAsync(
         SandboxInstanceId id,
         string name,

@@ -87,22 +87,30 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
 
     public HcsComputeSystemInfo? Get(string id)
     {
-        using var system = Open(id);
-        if (system.IsInvalid)
+        HcsComputeSystem system;
+        try
         {
+            system = Open(id);
+        }
+        catch (SandboxNotFoundException)
+        {
+            // A missing compute system is a normal, expected result here.
             return null;
         }
 
-        using var operation = new HcsOperation();
-        var hr = HcsNative.HcsGetComputeSystemProperties(system.Handle, operation.Handle, "{}");
-        var document = operation.Complete(hr, nameof(HcsNative.HcsGetComputeSystemProperties));
-        if (string.IsNullOrWhiteSpace(document))
+        using (system)
         {
-            return null;
-        }
+            using var operation = new HcsOperation();
+            var hr = HcsNative.HcsGetComputeSystemProperties(system.Handle, operation.Handle, "{}");
+            var document = operation.Complete(hr, nameof(HcsNative.HcsGetComputeSystemProperties));
+            if (string.IsNullOrWhiteSpace(document))
+            {
+                return null;
+            }
 
-        using var json = JsonDocument.Parse(document);
-        return Parse(json.RootElement);
+            using var json = JsonDocument.Parse(document);
+            return Parse(json.RootElement);
+        }
     }
 
     public IDisposable Create(string id, string configuration)
@@ -137,15 +145,23 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
 
     public void Terminate(string id)
     {
-        using var system = Open(id);
-        if (system.IsInvalid)
+        HcsComputeSystem system;
+        try
         {
+            system = Open(id);
+        }
+        catch (SandboxNotFoundException)
+        {
+            // Already gone: terminating a missing compute system is a no-op.
             return;
         }
 
-        using var operation = new HcsOperation();
-        var hr = HcsNative.HcsTerminateComputeSystem(system.Handle, operation.Handle, "{}");
-        operation.Complete(hr, nameof(HcsNative.HcsTerminateComputeSystem));
+        using (system)
+        {
+            using var operation = new HcsOperation();
+            var hr = HcsNative.HcsTerminateComputeSystem(system.Handle, operation.Handle, "{}");
+            operation.Complete(hr, nameof(HcsNative.HcsTerminateComputeSystem));
+        }
     }
 
     /// <summary>
@@ -184,12 +200,42 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         // platform's own stack requests.
         const uint GenericAll = 0x10000000;
         var hr = HcsNative.HcsOpenComputeSystem(id, GenericAll, out var handle);
-        if (hr < 0)
+        return ResolveOpenHandle(id, hr, handle);
+    }
+
+    /// <summary>
+    /// Validates the result of <see cref="HcsNative.HcsOpenComputeSystem"/>.
+    /// A failed open — or, defensively, a "successful" one that still yields a
+    /// null handle — must never produce an <see cref="HcsComputeSystem"/> that
+    /// wraps <see cref="IntPtr.Zero"/>: dereferencing such a handle from
+    /// <c>Start</c>/<c>Shutdown</c>/<c>Save</c>/<c>Terminate</c> is a documented
+    /// access violation (<c>0xC0000005</c>). A "not found" HRESULT surfaces as
+    /// <see cref="SandboxNotFoundException"/>; every other failure as the
+    /// mapped <see cref="SandboxBackendException"/>. Exposed for unit testing
+    /// of the failure mapping without a live HCS service.
+    /// </summary>
+    internal static HcsComputeSystem ResolveOpenHandle(string id, int hresult, IntPtr handle)
+    {
+        if (hresult >= 0 && handle != IntPtr.Zero)
         {
-            return new HcsComputeSystem(IntPtr.Zero);
+            return new HcsComputeSystem(handle);
         }
 
-        return new HcsComputeSystem(handle);
+        // Never leak a handle the caller is about to discard.
+        if (handle != IntPtr.Zero)
+        {
+            HcsNative.HcsCloseComputeSystem(handle);
+        }
+
+        if (hresult < 0)
+        {
+            throw HcsErrors.ToException(hresult, nameof(HcsNative.HcsOpenComputeSystem), id);
+        }
+
+        // A successful call must never yield a null handle; guard anyway so a
+        // later dereference cannot AV (0xC0000005).
+        throw new SandboxBackendException(
+            $"HcsOpenComputeSystem returned a null compute system handle for '{id}'.", 0);
     }
 
     private static void EnsureFile(int hresult, string operationName)

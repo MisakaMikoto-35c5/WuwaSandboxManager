@@ -72,6 +72,19 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             await engine.StopAsync(instance.Id, cancellationToken).ConfigureAwait(false);
         }
 
+        // Best effort: ask the engine to reclaim its on-disk data (HCS container
+        // storage and snapshots). A cleanup failure -- including an engine that
+        // does not support data deletion -- must never fail the delete itself.
+        try
+        {
+            var engine = _selector.Select(RequestFor(instance));
+            await engine.DeleteDataAsync(instance.Id, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Intentionally swallowed: deletion of the record must still proceed.
+        }
+
         await _repository.DeleteAsync(instance.Id, cancellationToken).ConfigureAwait(false);
         await _manifests.DeleteAsync(instance.Id, cancellationToken).ConfigureAwait(false);
     }

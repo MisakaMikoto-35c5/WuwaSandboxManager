@@ -71,6 +71,34 @@ public sealed class HcsSandboxEngineTests
         Assert.Equal(id, runtime.SandboxId);
     }
 
+    [Fact]
+    public async Task DeleteData_removes_storage_and_snapshot_directories()
+    {
+        var engine = CreateEngine(new FakeHcsClient(), out _);
+        var id = SandboxInstanceId.New();
+        var key = id.ToString();
+
+        var storage = Path.Combine(Path.GetTempPath(), "wsm-test-" + key);
+        var snapshots = Path.Combine(Path.GetTempPath(), key);
+        Directory.CreateDirectory(storage);
+        Directory.CreateDirectory(snapshots);
+        await File.WriteAllTextAsync(Path.Combine(storage, "sandbox.vhdx"), "data");
+
+        await engine.DeleteDataAsync(id);
+
+        Assert.False(Directory.Exists(storage));
+        Assert.False(Directory.Exists(snapshots));
+    }
+
+    [Fact]
+    public async Task DeleteData_is_best_effort_when_nothing_exists()
+    {
+        var engine = CreateEngine(new FakeHcsClient(), out _);
+
+        // Must not throw when the instance never wrote anything.
+        await engine.DeleteDataAsync(SandboxInstanceId.New());
+    }
+
     private static HcsSandboxEngine CreateEngine(FakeHcsClient hcs, out FakeCheckpoints checkpoints)
     {
         checkpoints = new FakeCheckpoints();

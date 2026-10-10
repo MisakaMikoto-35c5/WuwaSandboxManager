@@ -1,4 +1,5 @@
 using Volo.Abp.Modularity;
+using WindowsSandboxManager.Domain;
 
 namespace Wsm.Hcs.Interop;
 
@@ -7,6 +8,7 @@ namespace Wsm.Hcs.Interop;
 /// <c>computecore.dll</c> and the operation based runner exposed through
 /// <see cref="IHcsClient"/>.
 /// </summary>
+[DependsOn(typeof(SandboxDomainModule))]
 public sealed class HcsInteropModule : AbpModule
 {
 }

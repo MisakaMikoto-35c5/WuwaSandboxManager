@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.SandboxServer.Client</RootNamespace>
+    <AssemblyName>Wsm.SandboxServer.Client</AssemblyName>
+    <Description>Named-pipe gRPC client for the Windows Sandbox control-plane server.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Host.Environment\Wsm.Host.Environment.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Grpc.Core.Api" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Grpc\sandbox_core.proto" GrpcServices="Client" />
+  </ItemGroup>
+
+</Project>

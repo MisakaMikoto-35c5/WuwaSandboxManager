@@ -1,4 +1,5 @@
 using Volo.Abp.Modularity;
+using WindowsSandboxManager.Domain;
 using Wsm.Hcs.Layout;
 
 namespace Wsm.Hcs.Storage;
@@ -7,7 +8,9 @@ namespace Wsm.Hcs.Storage;
 /// ABP module for the HCS user-data storage capability. Provisions and seeds the
 /// per-sandbox storage directory through <see cref="ISandboxStorageProvisioner"/>.
 /// </summary>
-[DependsOn(typeof(HcsLayoutModule))]
+[DependsOn(
+    typeof(HcsLayoutModule),
+    typeof(SandboxDomainModule))]
 public sealed class HcsStorageModule : AbpModule
 {
 }

@@ -9,7 +9,7 @@ namespace Wsm.Hcs.Json.Sandbox.Internal;
 /// platform's own configuration.
 /// </summary>
 [ExposeServices(typeof(ISandboxVmJsonBuilder))]
-internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ISingletonDependency
+internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDependency
 {
     private static readonly JsonSerializerOptions Options = new()
     {

@@ -19,6 +19,13 @@
     <Project Path="src/10-Hcs/Wsm.Hcs.Storage/Wsm.Hcs.Storage.csproj" />
     <Project Path="src/10-Hcs/Wsm.Hcs.Checkpoint/Wsm.Hcs.Checkpoint.csproj" />
   </Folder>
+  <Folder Name="/src/30-Connections/">
+    <Project Path="src/30-Connections/Wsm.SandboxServer.Client/Wsm.SandboxServer.Client.csproj" />
+    <Project Path="src/30-Connections/Wsm.Recipe.Serialization/Wsm.Recipe.Serialization.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RdpBase/Wsm.Connection.RdpBase.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.Session/Wsm.Connection.Session.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.Legacy/Wsm.Connection.Legacy.csproj" />
+  </Folder>
   <Folder Name="/src/40-Host/">
     <Project Path="src/40-Host/Wsm.Host.Policy/Wsm.Host.Policy.csproj" />
     <Project Path="src/40-Host/Wsm.Host.Elevation/Wsm.Host.Elevation.csproj" />

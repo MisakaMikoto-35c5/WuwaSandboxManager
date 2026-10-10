@@ -23,13 +23,7 @@ public interface IHcsHostLayout
 
     string GetStorageDirectory(string id);
 
-    string GetStorageDiskPath(string id);
-
-    string GetGuestStatePath(string id);
-
     string GetSnapshotDirectory(string id);
-
-    string GetSnapshotStatePath(string id);
 
     /// <summary>Enumerates the registered layers (newest sequence number first).</summary>
     IReadOnlyList<HcsLayerInfo> ListLayers();

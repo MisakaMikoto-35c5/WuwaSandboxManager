@@ -30,13 +30,7 @@ internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
 
     public string GetStorageDirectory(string id) => Path.Combine(StorageRoot, id);
 
-    public string GetStorageDiskPath(string id) => Path.Combine(GetStorageDirectory(id), "sandbox.vhdx");
-
-    public string GetGuestStatePath(string id) => Path.Combine(GetStorageDirectory(id), "sandbox.vmgs");
-
     public string GetSnapshotDirectory(string id) => Path.Combine(SnapshotsRoot, id);
-
-    public string GetSnapshotStatePath(string id) => Path.Combine(GetSnapshotDirectory(id), "SnapshotSavedState.vmrs");
 
     /// <summary>True when the process can call HCS (administrator / Hyper-V admins).</summary>
     public bool IsElevated => IsProcessElevated();

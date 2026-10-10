@@ -1,4 +1,5 @@
 using Volo.Abp.Modularity;
+using WindowsSandboxManager.Domain;
 using Wsm.Hcs.Interop;
 using Wsm.Hcs.Json.Sandbox;
 using Wsm.Hcs.Layout;
@@ -12,7 +13,8 @@ namespace Wsm.Hcs.Checkpoint;
 [DependsOn(
     typeof(HcsInteropModule),
     typeof(HcsLayoutModule),
-    typeof(SandboxVmJsonModule))]
+    typeof(SandboxVmJsonModule),
+    typeof(SandboxDomainModule))]
 public sealed class HcsCheckpointModule : AbpModule
 {
 }

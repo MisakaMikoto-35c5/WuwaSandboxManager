@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Host.Policy</RootNamespace>
+    <AssemblyName>Wsm.Host.Policy</AssemblyName>
+    <Description>Reads and toggles the Windows Sandbox multi-instance policy.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+</Project>

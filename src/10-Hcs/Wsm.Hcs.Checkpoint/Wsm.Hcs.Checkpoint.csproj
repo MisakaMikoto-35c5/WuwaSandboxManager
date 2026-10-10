@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Hcs.Checkpoint</RootNamespace>
+    <AssemblyName>Wsm.Hcs.Checkpoint</AssemblyName>
+    <Description>Saves, enumerates and restores HCS sandbox checkpoints.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+    <ProjectReference Include="..\Wsm.Hcs.Interop\Wsm.Hcs.Interop.csproj" />
+    <ProjectReference Include="..\Wsm.Hcs.Layout\Wsm.Hcs.Layout.csproj" />
+    <ProjectReference Include="..\Wsm.Hcs.Json.Sandbox\Wsm.Hcs.Json.Sandbox.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,115 @@
+// gRPC contract reverse engineered from the "Windows Sandbox" MSIX package
+// (SandboxGrpc.dll, service full name "sandboxserver.SandboxCore").
+//
+// The server (WindowsSandboxServer.exe) hosts this service over a named pipe
+// (\\.\pipe\wsandbox\<MD5(sid)>) using Kestrel's named pipe transport, so any
+// gRPC client that can dial a named pipe can drive Windows Sandbox without
+// loading Microsoft's own assembly.
+syntax = "proto3";
+
+package sandboxserver;
+
+import "google/protobuf/empty.proto";
+
+option csharp_namespace = "WindowsSandboxManager.Infrastructure.Grpc.Generated";
+
+enum RunAs {
+  System = 0;
+  ExistingLogin = 1;
+}
+
+message StartRequest {
+  optional string config = 1;
+  optional string id = 2;
+  optional int32 owner_process_id = 100;
+}
+
+message StartReply {
+  optional int32 hresult = 1;
+  optional string rdp_client_config = 2;
+}
+
+message RdpClientConfigRequest {
+  optional string sandbox_id = 1;
+}
+
+message RdpClientConfigReply {
+  optional int32 hresult = 1;
+  optional string rdp_client_config = 2;
+}
+
+message IpAddressRequest {
+  optional string sandbox_id = 1;
+}
+
+message IpAddressReply {
+  optional int32 hresult = 1;
+  repeated string ip_addresses = 2;
+}
+
+message ShutdownRequest {
+  optional string sandbox_id = 1;
+}
+
+message ShutdownReply {
+  optional int32 hresult = 1;
+}
+
+message CreateProcessRequest {
+  optional string sandbox_id = 1;
+  optional string command_line = 2;
+  optional string working_directory = 3;
+  RunAs run_as = 4;
+}
+
+message CreateProcessReply {
+  optional int32 hresult = 1;
+  optional int32 process_exit_code = 2;
+}
+
+message MapFolderRequest {
+  optional string sandbox_id = 1;
+  optional string host_path = 2;
+  optional string sandbox_path = 3;
+  optional bool allow_write = 4;
+}
+
+message MapFolderReply {
+  optional int32 hresult = 1;
+}
+
+message EnumerateSandboxVMsReply {
+  optional int32 hresult = 1;
+  repeated string sandbox_ids = 2;
+}
+
+message VMTerminateReasonRequest {
+  optional string sandbox_id = 1;
+}
+
+message VMTerminateReasonReply {
+  optional int32 hresult = 1;
+  optional int32 terminated_reason = 2;
+}
+
+message WaitForRebootRequest {
+  optional string sandbox_id = 1;
+  optional string vm_id = 2;
+}
+
+message WaitForRebootReply {
+  optional int32 hresult = 1;
+  optional string new_vm_id = 2;
+}
+
+service SandboxCore {
+  rpc StartSandbox(StartRequest) returns (StartReply);
+  rpc EnumerateSandboxVMs(google.protobuf.Empty) returns (EnumerateSandboxVMsReply);
+  rpc GetRdpClientConfig(RdpClientConfigRequest) returns (RdpClientConfigReply);
+  rpc CreateProcess(CreateProcessRequest) returns (CreateProcessReply);
+  rpc MapFolder(MapFolderRequest) returns (MapFolderReply);
+  rpc ShutdownSandbox(ShutdownRequest) returns (ShutdownReply);
+  rpc GetTerminateReason(VMTerminateReasonRequest) returns (VMTerminateReasonReply);
+  rpc GetIpAddress(IpAddressRequest) returns (IpAddressReply);
+  rpc WaitForReboot(WaitForRebootRequest) returns (WaitForRebootReply);
+}

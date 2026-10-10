@@ -1,0 +1,34 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WindowsSandboxManager.App/WindowsSandboxManager.App.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/WindowsSandboxManager.Application/WindowsSandboxManager.Application.csproj" />
+    <Project Path="src/WindowsSandboxManager.Cli/WindowsSandboxManager.Cli.csproj" />
+    <Project Path="src/WindowsSandboxManager.Infrastructure/WindowsSandboxManager.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/src/00-Core/">
+    <Project Path="src/00-Core/Wsm.Domain/Wsm.Domain.csproj" />
+    <Project Path="src/00-Core/Wsm.Engines.Abstractions/Wsm.Engines.Abstractions.csproj" />
+    <Project Path="src/00-Core/Wsm.Application/Wsm.Application.csproj" />
+  </Folder>
+  <Folder Name="/src/10-Hcs/">
+    <Project Path="src/10-Hcs/Wsm.Hcs.Interop/Wsm.Hcs.Interop.csproj" />
+    <Project Path="src/10-Hcs/Wsm.Hcs.Layout/Wsm.Hcs.Layout.csproj" />
+    <Project Path="src/10-Hcs/Wsm.Hcs.Json.Sandbox/Wsm.Hcs.Json.Sandbox.csproj" />
+    <Project Path="src/10-Hcs/Wsm.Hcs.Storage/Wsm.Hcs.Storage.csproj" />
+    <Project Path="src/10-Hcs/Wsm.Hcs.Checkpoint/Wsm.Hcs.Checkpoint.csproj" />
+  </Folder>
+  <Folder Name="/src/40-Host/">
+    <Project Path="src/40-Host/Wsm.Host.Policy/Wsm.Host.Policy.csproj" />
+    <Project Path="src/40-Host/Wsm.Host.Elevation/Wsm.Host.Elevation.csproj" />
+    <Project Path="src/40-Host/Wsm.Host.Environment/Wsm.Host.Environment.csproj" />
+    <Project Path="src/40-Host/Wsm.Persistence/Wsm.Persistence.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WindowsSandboxManager.Tests/WindowsSandboxManager.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/90-Tests/">
+    <Project Path="tests/90-Tests/Wsm.Tests/Wsm.Tests.csproj" />
+  </Folder>
+</Solution>

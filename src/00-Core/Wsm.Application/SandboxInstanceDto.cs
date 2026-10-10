@@ -1,0 +1,15 @@
+using WindowsSandboxManager.Domain;
+using WindowsSandboxManager.Domain.ValueObjects;
+
+namespace Wsm.Application;
+
+/// <summary>
+/// A projection of a sandbox instance for the presentation layers, combining
+/// its persisted definition with live runtime information when available.
+/// </summary>
+public sealed record SandboxInstanceDto(
+    Guid Id,
+    string Name,
+    SandboxState State,
+    SandboxRecipe Recipe,
+    SandboxRuntimeInfo? Runtime);

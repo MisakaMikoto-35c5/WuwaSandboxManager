@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>WindowsSandboxManager.Domain</RootNamespace>
+    <AssemblyName>Wsm.Domain</AssemblyName>
+    <Description>Domain model for Windows Sandbox management (DDD aggregate, value objects, ports).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+</Project>

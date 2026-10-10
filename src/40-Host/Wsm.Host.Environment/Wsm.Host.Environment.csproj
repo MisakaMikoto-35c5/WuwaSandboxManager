@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Host.Environment</RootNamespace>
+    <AssemblyName>Wsm.Host.Environment</AssemblyName>
+    <Description>Describes the host Windows Sandbox installation (feature detection, pipe name, executables).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Wsm.Host.Policy\Wsm.Host.Policy.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+</Project>

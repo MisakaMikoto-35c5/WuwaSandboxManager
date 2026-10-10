@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Wsm.Engines.Abstractions</RootNamespace>
+    <AssemblyName>Wsm.Engines.Abstractions</AssemblyName>
+    <Description>Unified sandbox engine contract (ISandboxEngine, registry, capabilities, engine kinds).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Wsm.Domain\Wsm.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
+  </ItemGroup>
+
+</Project>

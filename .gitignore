@@ -1,0 +1,22 @@
+# Build outputs
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local data
+*.wsb.local
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Deepwork progress (git-local)
+.slim/deepwork/

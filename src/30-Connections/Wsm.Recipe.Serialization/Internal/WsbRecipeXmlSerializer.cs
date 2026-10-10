@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Xml.Linq;
 using Volo.Abp.DependencyInjection;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Recipe.Serialization.Internal;
 

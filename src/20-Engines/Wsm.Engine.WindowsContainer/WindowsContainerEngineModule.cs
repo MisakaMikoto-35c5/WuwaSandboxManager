@@ -13,7 +13,7 @@ namespace Wsm.Engine.WindowsContainer;
 /// <para>
 /// <b>Reserved / not implemented yet.</b> The engine registers and advertises
 /// its planned capability matrix, but reports <c>IsAvailable == false</c> and
-/// throws <see cref="WindowsSandboxManager.Domain.Exceptions.SandboxNotSupportedException"/>
+/// throws <see cref="Wsm.Domain.Exceptions.SandboxNotSupportedException"/>
 /// from every runtime member until a later phase implements it.
 /// </para>
 /// </summary>

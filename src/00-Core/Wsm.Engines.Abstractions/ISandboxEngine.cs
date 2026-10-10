@@ -1,5 +1,5 @@
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Engines.Abstractions;
 

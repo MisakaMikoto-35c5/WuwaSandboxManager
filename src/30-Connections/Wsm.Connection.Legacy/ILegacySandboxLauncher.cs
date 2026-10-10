@@ -1,4 +1,4 @@
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Connection.Legacy;
 

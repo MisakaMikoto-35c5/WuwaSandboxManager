@@ -1,5 +1,5 @@
 using System.Text.Json;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 using Wsm.Hcs.Checkpoint;
 using Wsm.Hcs.Checkpoint.Internal;
 using Wsm.Hcs.Interop;

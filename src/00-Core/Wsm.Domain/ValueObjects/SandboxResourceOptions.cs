@@ -1,6 +1,6 @@
-using WindowsSandboxManager.Domain.Exceptions;
+using Wsm.Domain.Exceptions;
 
-namespace WindowsSandboxManager.Domain.ValueObjects;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>
 /// Networking policy for a sandbox instance.

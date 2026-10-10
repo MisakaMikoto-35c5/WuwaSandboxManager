@@ -3,8 +3,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
-using WindowsSandboxManager.Domain;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain;
+using Wsm.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Ui.WinUI.Localization;
 

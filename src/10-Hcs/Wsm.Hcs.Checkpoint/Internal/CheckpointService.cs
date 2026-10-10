@@ -1,6 +1,6 @@
 using System.Text.Json;
 using Volo.Abp.DependencyInjection;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 using Wsm.Hcs.Interop;
 using Wsm.Hcs.Json.Sandbox;
 using Wsm.Hcs.Layout;

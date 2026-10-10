@@ -1,7 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Volo.Abp;
-using WindowsSandboxManager.Domain;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain;
+using Wsm.Domain.ValueObjects;
 using Wsm.Connection.Legacy;
 using Wsm.Connection.RdpBase;
 using Wsm.Connection.Session;

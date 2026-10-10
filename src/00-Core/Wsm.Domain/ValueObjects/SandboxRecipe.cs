@@ -1,4 +1,4 @@
-namespace WindowsSandboxManager.Domain.ValueObjects;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>
 /// The complete, immutable configuration of a sandbox instance. This is the

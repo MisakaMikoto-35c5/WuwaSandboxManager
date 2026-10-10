@@ -7,7 +7,7 @@ namespace Wsm.Tests.Bootstrap;
 /// the bootstrap tests exercise the same assembly wiring the app will use.
 /// </summary>
 [DependsOn(
-    typeof(WindowsSandboxManager.Domain.SandboxDomainModule),
+    typeof(Wsm.Domain.SandboxDomainModule),
     typeof(Wsm.Engines.Abstractions.SandboxEngineAbstractionsModule),
     typeof(Wsm.Application.SandboxApplicationModule),
     typeof(Wsm.Localization.WsmLocalizationModule))]

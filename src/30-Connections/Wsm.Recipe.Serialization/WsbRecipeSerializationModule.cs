@@ -1,5 +1,5 @@
 using Volo.Abp.Modularity;
-using WindowsSandboxManager.Domain;
+using Wsm.Domain;
 
 namespace Wsm.Recipe.Serialization;
 

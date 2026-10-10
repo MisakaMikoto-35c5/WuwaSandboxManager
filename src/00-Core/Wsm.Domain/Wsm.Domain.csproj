@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>WindowsSandboxManager.Domain</RootNamespace>
+    <RootNamespace>Wsm.Domain</RootNamespace>
     <AssemblyName>Wsm.Domain</AssemblyName>
     <Description>Domain model for Windows Sandbox management (DDD aggregate, value objects, ports).</Description>
   </PropertyGroup>

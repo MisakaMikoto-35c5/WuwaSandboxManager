@@ -1,6 +1,6 @@
-using WindowsSandboxManager.Domain.Exceptions;
+using Wsm.Domain.Exceptions;
 
-namespace WindowsSandboxManager.Domain.ValueObjects;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>
 /// A host folder shared into the sandbox. Maps to a <c>&lt;MappedFolder&gt;</c>

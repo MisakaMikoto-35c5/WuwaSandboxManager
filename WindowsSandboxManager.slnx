@@ -1,12 +1,4 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/WindowsSandboxManager.App/WindowsSandboxManager.App.csproj">
-      <Platform Project="x64" />
-    </Project>
-    <Project Path="src/WindowsSandboxManager.Application/WindowsSandboxManager.Application.csproj" />
-    <Project Path="src/WindowsSandboxManager.Cli/WindowsSandboxManager.Cli.csproj" />
-    <Project Path="src/WindowsSandboxManager.Infrastructure/WindowsSandboxManager.Infrastructure.csproj" />
-  </Folder>
   <Folder Name="/src/00-Core/">
     <Project Path="src/00-Core/Wsm.Domain/Wsm.Domain.csproj" />
     <Project Path="src/00-Core/Wsm.Engines.Abstractions/Wsm.Engines.Abstractions.csproj" />
@@ -47,9 +39,6 @@
     <Project Path="src/50-App/Wsm.Ui.WinUI/Wsm.Ui.WinUI.csproj">
       <Platform Project="x64" />
     </Project>
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/WindowsSandboxManager.Tests/WindowsSandboxManager.Tests.csproj" />
   </Folder>
   <Folder Name="/tests/90-Tests/">
     <Project Path="tests/90-Tests/Wsm.Tests/Wsm.Tests.csproj" />

@@ -1,4 +1,4 @@
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 using Wsm.Ui.WinUI.Localization;
 
 namespace Wsm.Ui.WinUI.ViewModels;

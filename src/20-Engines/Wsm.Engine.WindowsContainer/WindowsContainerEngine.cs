@@ -1,6 +1,6 @@
 using Volo.Abp.DependencyInjection;
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 using Wsm.Engines.Abstractions;
 
 namespace Wsm.Engine.WindowsContainer;

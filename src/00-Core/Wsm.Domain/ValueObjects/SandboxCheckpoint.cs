@@ -1,4 +1,4 @@
-namespace WindowsSandboxManager.Domain.ValueObjects;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>Kind of HCS save used for a checkpoint.</summary>
 public enum SandboxCheckpointType

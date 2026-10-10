@@ -1,5 +1,5 @@
 using Volo.Abp.DependencyInjection;
-using WindowsSandboxManager.Domain.Exceptions;
+using Wsm.Domain.Exceptions;
 
 namespace Wsm.Hcs.Process.Internal;
 

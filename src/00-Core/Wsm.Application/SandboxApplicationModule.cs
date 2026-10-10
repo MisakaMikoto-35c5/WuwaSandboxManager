@@ -11,7 +11,7 @@ namespace Wsm.Application;
 /// abstractions, the domain model, engine selection and persistence.
 /// </summary>
 [DependsOn(
-    typeof(WindowsSandboxManager.Domain.SandboxDomainModule),
+    typeof(Wsm.Domain.SandboxDomainModule),
     typeof(SandboxEngineAbstractionsModule),
     typeof(EngineSelectionModule),
     typeof(SandboxPersistenceModule),

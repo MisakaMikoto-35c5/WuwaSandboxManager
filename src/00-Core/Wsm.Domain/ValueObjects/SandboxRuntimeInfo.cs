@@ -1,4 +1,4 @@
-namespace WindowsSandboxManager.Domain.ValueObjects;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>
 /// Live, backend produced runtime information for a running sandbox.

@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Xml.Linq;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.SandboxServer.Client.Internal;
 

@@ -1,8 +1,8 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Localization;
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Elevation;

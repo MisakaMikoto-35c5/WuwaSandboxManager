@@ -1,4 +1,4 @@
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 using Wsm.Hcs.Json.Sandbox;
 
 namespace Wsm.Hcs.Checkpoint;

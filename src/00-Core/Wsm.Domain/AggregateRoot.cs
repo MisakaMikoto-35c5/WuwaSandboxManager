@@ -1,4 +1,4 @@
-namespace WindowsSandboxManager.Domain;
+namespace Wsm.Domain;
 
 /// <summary>Marker for a domain event.</summary>
 public interface IDomainEvent

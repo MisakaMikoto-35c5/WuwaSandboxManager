@@ -1,6 +1,6 @@
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 
-namespace WindowsSandboxManager.Domain.Events;
+namespace Wsm.Domain.Events;
 
 public sealed record SandboxInstanceCreatedEvent(SandboxInstanceId Id, SandboxName Name) : DomainEvent;
 

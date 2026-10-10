@@ -1,6 +1,6 @@
 using Volo.Abp.Modularity;
 
-namespace WindowsSandboxManager.Domain;
+namespace Wsm.Domain;
 
 /// <summary>
 /// ABP module for the domain layer. Exposes the domain model and invariants;

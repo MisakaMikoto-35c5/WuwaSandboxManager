@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Volo.Abp;
-using WindowsSandboxManager.Domain;
+using Wsm.Domain;
 using Wsm.Engines.Abstractions;
 using Xunit;
 

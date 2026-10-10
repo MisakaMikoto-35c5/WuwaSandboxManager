@@ -1,5 +1,5 @@
-using WindowsSandboxManager.Domain;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Application;
 

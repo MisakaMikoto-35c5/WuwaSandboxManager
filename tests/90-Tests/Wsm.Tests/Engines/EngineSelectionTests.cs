@@ -1,7 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Volo.Abp;
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Application.EngineSelection;
 using Wsm.Application.EngineSelection.Internal;

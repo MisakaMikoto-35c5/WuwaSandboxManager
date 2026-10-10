@@ -2,7 +2,7 @@ using System.IO.Pipes;
 using System.Security.Principal;
 using Grpc.Net.Client;
 using Volo.Abp.DependencyInjection;
-using WindowsSandboxManager.Domain.Exceptions;
+using Wsm.Domain.Exceptions;
 using Wsm.Host.Environment;
 
 namespace Wsm.SandboxServer.Client.Internal;

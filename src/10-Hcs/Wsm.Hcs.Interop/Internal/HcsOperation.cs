@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-using WindowsSandboxManager.Domain.Exceptions;
+using Wsm.Domain.Exceptions;
 
 namespace Wsm.Hcs.Interop.Internal;
 

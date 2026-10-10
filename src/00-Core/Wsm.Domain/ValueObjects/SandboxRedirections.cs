@@ -1,4 +1,4 @@
-namespace WindowsSandboxManager.Domain.ValueObjects;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>
 /// The device/redirection surface exposed to the guest over the RDP session.

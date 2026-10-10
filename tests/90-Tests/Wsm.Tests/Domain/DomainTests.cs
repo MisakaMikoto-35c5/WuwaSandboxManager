@@ -1,7 +1,7 @@
-using WindowsSandboxManager.Domain;
-using WindowsSandboxManager.Domain.Events;
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain;
+using Wsm.Domain.Events;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 using Xunit;
 
 namespace Wsm.Tests.Domain;

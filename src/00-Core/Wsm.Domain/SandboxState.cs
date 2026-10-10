@@ -1,4 +1,4 @@
-namespace WindowsSandboxManager.Domain;
+namespace Wsm.Domain;
 
 /// <summary>Lifecycle state of a sandbox instance aggregate.</summary>
 public enum SandboxState

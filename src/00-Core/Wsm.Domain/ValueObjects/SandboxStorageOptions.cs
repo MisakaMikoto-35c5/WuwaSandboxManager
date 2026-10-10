@@ -1,6 +1,6 @@
-using WindowsSandboxManager.Domain.Exceptions;
+using Wsm.Domain.Exceptions;
 
-namespace WindowsSandboxManager.Domain.ValueObjects;
+namespace Wsm.Domain.ValueObjects;
 
 /// <summary>
 /// Storage configuration for a sandbox's user-data disk.

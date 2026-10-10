@@ -1,5 +1,5 @@
 using Volo.Abp.DependencyInjection;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Environment;
 using Wsm.Recipe.Serialization;

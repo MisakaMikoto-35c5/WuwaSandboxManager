@@ -1,5 +1,5 @@
 using Volo.Abp.Modularity;
-using WindowsSandboxManager.Domain;
+using Wsm.Domain;
 
 namespace Wsm.Hcs.Process;
 
@@ -8,7 +8,7 @@ namespace Wsm.Hcs.Process;
 /// <para>
 /// <b>Reserved / not implemented yet.</b> Registered so the module graph is
 /// complete; the executor throws
-/// <see cref="WindowsSandboxManager.Domain.Exceptions.SandboxNotSupportedException"/>
+/// <see cref="Wsm.Domain.Exceptions.SandboxNotSupportedException"/>
 /// until a later phase implements it.
 /// </para>
 /// </summary>

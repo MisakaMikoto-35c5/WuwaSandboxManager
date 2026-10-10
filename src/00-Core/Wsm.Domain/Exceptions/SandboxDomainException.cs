@@ -1,4 +1,4 @@
-namespace WindowsSandboxManager.Domain.Exceptions;
+namespace Wsm.Domain.Exceptions;
 
 /// <summary>Base type for all domain level failures.</summary>
 public class SandboxDomainException : Exception

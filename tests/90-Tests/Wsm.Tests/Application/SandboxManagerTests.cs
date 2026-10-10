@@ -1,6 +1,6 @@
-using WindowsSandboxManager.Domain;
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Application.EngineSelection.Internal;
 using Wsm.Application.Internal;

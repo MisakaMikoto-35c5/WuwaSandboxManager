@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Volo.Abp.DependencyInjection;
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 using Wsm.Engines.Abstractions;
 using Wsm.Hcs.Checkpoint;
 using Wsm.Hcs.Interop;

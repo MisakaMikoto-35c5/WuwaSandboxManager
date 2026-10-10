@@ -1,8 +1,8 @@
-using WindowsSandboxManager.Domain.Events;
-using WindowsSandboxManager.Domain.Exceptions;
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.Events;
+using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 
-namespace WindowsSandboxManager.Domain;
+namespace Wsm.Domain;
 
 /// <summary>
 /// Aggregate root representing a single, addressable Windows Sandbox instance.

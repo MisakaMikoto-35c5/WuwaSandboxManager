@@ -4,7 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:Wsm.Ui.WinUI.ViewModels"
-    xmlns:vo="using:WindowsSandboxManager.Domain.ValueObjects">
+    xmlns:vo="using:Wsm.Domain.ValueObjects">
 
     <Grid x:Name="Root">
         <Grid.RowDefinitions>

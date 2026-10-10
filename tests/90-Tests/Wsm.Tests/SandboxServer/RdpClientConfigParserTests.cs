@@ -1,4 +1,4 @@
-using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Domain.ValueObjects;
 using Wsm.SandboxServer.Client.Internal;
 using Xunit;
 

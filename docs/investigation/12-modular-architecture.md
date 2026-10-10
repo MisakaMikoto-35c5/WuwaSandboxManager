@@ -229,3 +229,31 @@ clean and all 49 tests pass.
 - 测试：`tests/90-Tests/Wsm.Tests/`（`Bootstrap/`、`Engines/`、`Hcs/`、`Localization/`、`Composition/`、`Application/`）。
 - 计划与过程：`C:\Users\User\.opencode\plan\hcs-abp-modularization-plan.md`、`.slim/deepwork/abp-modularization.md`。
 - 相关模块：[11 项目映射](11-project-mapping.md)、[04 HCS](04-hcs.md)、[07 存储与检查点](07-storage-and-checkpoints.md)。
+
+---
+
+## 9. 最终验收 / Final sign-off（门禁 7）
+
+**判决 / Verdict**：`VERDICT = APPROVE_WITH_NONBLOCKING_FINDINGS` —— **ABP 模块化改造（P1–P8）正式签署通过**。
+计划 §14 全部 11 项均已满足（见门禁 7 复核表）。
+
+**两点解释性裁定 / Two interpretation rulings**：
+1. **`Wsm.Cli` 的 `AssemblyName = wsm` 予以保留**。§14「命名空间根 == 程序集名」针对的是命名空间卫生
+   （命名空间 `Wsm.Cli` 与项目名一致、无遗留根），而非二进制文件命名；`wsm.exe` 是有意的 CLI UX 决策，
+   与 README/帮助文本一致，无技术风险（无 `InternalsVisibleTo`、无类型转发、无附属资源耦合）。
+2. **`Wsm.Tests` 含 6 个测试模块予以接受**。「一模块一程序集」约束的是**生产**模块图；
+   测试程序集使用多个组合根（`TestModule`/`InfraPortsTestModule`/`EnginesTestModule`/`HcsTestModule`/
+   `RecipeTestModule`/`LocalizationTestModule`）以隔离地启动不同依赖图，是标准 ABP 测试实践。
+
+**遗留 backlog（非阻塞，按优先级）**：
+1. 引擎偏好端到端打通：`ISandboxManager.StartAsync` 增加可选 `SandboxEngineKind?`，并接通 WinUI 选择。
+2. 引入就地 `UpdateAsync`，消除 UI「保存」= 删除+重建 导致的实例 ID 变更与检查点孤儿。
+3. 恢复的检查点归入所属实例（或在文档 07/11 中写明孤儿 VM 语义）。
+4. 可选：`wsm layers` 由 `IHcsHostLayout` 重新提供；`WindowsContainerEngine.Capabilities` 改为诚实全 false 或加预留标记；
+   `WindowsSandboxEngine.IsAvailable => _environment.IsSupported`。
+5. 文档微调：P8c 入提交链、§2 记 6 个测试模块、§6 补 `AssemblyName=wsm` 括注；`AppLocalizer` 改 internal（**已处理**）。
+
+**English**: The ABP modularization refactor (P1–P8) is signed off; all plan §14 items are met.
+Both interpretation notes are ruled acceptable (`Wsm.Cli` keeps `AssemblyName=wsm`; `Wsm.Tests` holds 6
+test composition roots). Deferred items are listed as a non-blocking backlog; the `AppLocalizer`
+visibility fix is already applied.

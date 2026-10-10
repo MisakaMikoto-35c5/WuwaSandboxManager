@@ -11,7 +11,7 @@ namespace Wsm.Ui.WinUI.Localization;
 /// WinUI 3 apps. The same PRI backs XAML <c>x:Uid</c> resolution.
 /// </summary>
 [ExposeServices(typeof(IAppLocalizer))]
-public sealed class AppLocalizer : IAppLocalizer, ISingletonDependency
+internal sealed class AppLocalizer : IAppLocalizer, ISingletonDependency
 {
     private const string ResourceSubtreeName = "Resources";
 

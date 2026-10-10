@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Volo.Abp.Core" />
   </ItemGroup>
 

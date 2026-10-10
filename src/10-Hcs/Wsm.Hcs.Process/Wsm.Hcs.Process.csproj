@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Hcs.Process</RootNamespace>
+    <AssemblyName>Wsm.Hcs.Process</AssemblyName>
+    <Description>Reserved: executes processes inside an HCS compute system.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+</Project>

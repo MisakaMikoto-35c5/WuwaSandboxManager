@@ -1,4 +1,5 @@
 using WindowsSandboxManager.Domain;
+using WindowsSandboxManager.Domain.Exceptions;
 using WindowsSandboxManager.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Application.EngineSelection.Internal;
@@ -84,6 +85,42 @@ public sealed class SandboxManagerTests
 
         Assert.Equal(engine.RestoredId, restored);
         Assert.Equal(saved, engine.LastRestored);
+    }
+
+    [Fact]
+    public async Task Start_faults_the_instance_and_propagates_when_engine_throws()
+    {
+        var repository = new InMemoryRepository();
+        var manager = Manager(repository, new ThrowingStartEngine());
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop));
+
+        var persisted = await repository.GetAsync(new SandboxInstanceId(created.Id));
+        Assert.NotNull(persisted);
+        Assert.Equal(SandboxState.Faulted, persisted!.State);
+        Assert.Equal("boom", persisted.FaultReason);
+    }
+
+    [Fact]
+    public async Task Start_rejects_a_second_instance_when_engine_is_single_instance()
+    {
+        var repository = new InMemoryRepository();
+        var other = SandboxInstanceId.New();
+        var manager = Manager(repository, new SingleInstanceEngine(other));
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        var ex = await Assert.ThrowsAsync<MultipleInstancesNotAllowedException>(
+            () => manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop));
+
+        Assert.Contains(other.Value.ToString(), ex.Message);
+
+        var persisted = await repository.GetAsync(new SandboxInstanceId(created.Id));
+        Assert.NotNull(persisted);
+        Assert.Equal(SandboxState.Faulted, persisted!.State);
     }
 
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
@@ -180,5 +217,57 @@ public sealed class SandboxManagerTests
             LastRestored = checkpoint;
             return Task.FromResult(RestoredId);
         }
+    }
+
+    /// <summary>Engine whose <c>StartAsync</c> always fails, to prove fault handling.</summary>
+    private sealed class ThrowingStartEngine : ISandboxEngine
+    {
+        public string Name => "throwing";
+
+        public SandboxEngineKind Kind => SandboxEngineKind.HcsSandbox;
+
+        public SandboxEngineCapabilities Capabilities => new() { SupportsMultipleInstances = true, SupportsCheckpoints = true };
+
+        public bool IsAvailable => true;
+
+        public Task<IReadOnlyList<SandboxInstanceId>> EnumerateAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<SandboxInstanceId>>(Array.Empty<SandboxInstanceId>());
+
+        public Task<SandboxRuntimeInfo> StartAsync(SandboxStartRequest request, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("boom");
+
+        public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task<SandboxRuntimeInfo?> GetRuntimeAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+            => Task.FromResult<SandboxRuntimeInfo?>(null);
+    }
+
+    /// <summary>Single-instance engine that reports another running instance.</summary>
+    private sealed class SingleInstanceEngine : ISandboxEngine
+    {
+        private readonly SandboxInstanceId _running;
+
+        public SingleInstanceEngine(SandboxInstanceId running) => _running = running;
+
+        public string Name => "single";
+
+        public SandboxEngineKind Kind => SandboxEngineKind.HcsSandbox;
+
+        public SandboxEngineCapabilities Capabilities => new() { SupportsMultipleInstances = false, SupportsCheckpoints = true };
+
+        public bool IsAvailable => true;
+
+        public Task<IReadOnlyList<SandboxInstanceId>> EnumerateAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<SandboxInstanceId>>(new[] { _running });
+
+        public Task<SandboxRuntimeInfo> StartAsync(SandboxStartRequest request, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("StartAsync must not be reached for a single-instance engine.");
+
+        public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task<SandboxRuntimeInfo?> GetRuntimeAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+            => Task.FromResult<SandboxRuntimeInfo?>(null);
     }
 }

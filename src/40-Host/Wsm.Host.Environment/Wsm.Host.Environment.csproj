@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Wsm.Host.Policy\Wsm.Host.Policy.csproj" />
+    <ProjectReference Include="..\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
   </ItemGroup>
 
   <ItemGroup>

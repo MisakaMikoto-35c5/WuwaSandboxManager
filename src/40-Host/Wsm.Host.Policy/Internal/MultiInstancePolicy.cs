@@ -1,6 +1,6 @@
-using System.Security.Principal;
 using Microsoft.Win32;
 using Volo.Abp.DependencyInjection;
+using Wsm.Host.Elevation;
 
 namespace Wsm.Host.Policy.Internal;
 
@@ -17,6 +17,13 @@ internal sealed class MultiInstancePolicy : IMultiInstancePolicy, ISingletonDepe
     private const string BuildBranchValue = "BuildBranch";
     private const string InternalBranch = "rs_prerelease";
     private const string WvdEnabledValueName = "TerminalServices-RemoteConnectionManager-WVD-Enabled";
+
+    private readonly IElevationService _elevation;
+
+    public MultiInstancePolicy(IElevationService elevation)
+    {
+        _elevation = elevation;
+    }
 
     public string? CurrentBuildBranch
     {
@@ -35,7 +42,7 @@ internal sealed class MultiInstancePolicy : IMultiInstancePolicy, ISingletonDepe
     /// </summary>
     public bool TryEnable(out string message)
     {
-        if (!IsElevated)
+        if (!_elevation.IsElevated)
         {
             message = "Administrator privileges are required to change the multi-instance policy.";
             return false;
@@ -60,7 +67,7 @@ internal sealed class MultiInstancePolicy : IMultiInstancePolicy, ISingletonDepe
     /// <summary>Restores the original <c>BuildBranch</c> value.</summary>
     public bool TryRestore(string? originalValue, out string message)
     {
-        if (!IsElevated)
+        if (!_elevation.IsElevated)
         {
             message = "Administrator privileges are required to change the multi-instance policy.";
             return false;
@@ -87,15 +94,6 @@ internal sealed class MultiInstancePolicy : IMultiInstancePolicy, ISingletonDepe
         {
             message = $"Failed to restore the multi-instance policy: {ex.Message}";
             return false;
-        }
-    }
-
-    private static bool IsElevated
-    {
-        get
-        {
-            using var identity = WindowsIdentity.GetCurrent();
-            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
         }
     }
 

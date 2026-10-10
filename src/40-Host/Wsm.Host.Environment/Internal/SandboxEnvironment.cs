@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using Volo.Abp.DependencyInjection;
+using Wsm.Host.Elevation;
 using Wsm.Host.Policy;
 
 namespace Wsm.Host.Environment.Internal;
@@ -22,26 +23,21 @@ internal sealed class SandboxEnvironment : ISandboxEnvironment, ISingletonDepend
     private const string ServerAlias = "WindowsSandboxServer.exe";
 
     private readonly IMultiInstancePolicy _policy;
+    private readonly IElevationService _elevation;
     private readonly Lazy<string?> _packagePath;
     private readonly Lazy<bool> _isSupported;
 
-    public SandboxEnvironment(IMultiInstancePolicy policy)
+    public SandboxEnvironment(IMultiInstancePolicy policy, IElevationService elevation)
     {
         _policy = policy;
+        _elevation = elevation;
         _packagePath = new Lazy<string?>(ResolvePackagePath);
         _isSupported = new Lazy<bool>(ResolveIsSupported);
     }
 
     public bool IsSupported => _isSupported.Value;
 
-    public bool IsElevated
-    {
-        get
-        {
-            using var identity = WindowsIdentity.GetCurrent();
-            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
-        }
-    }
+    public bool IsElevated => _elevation.IsElevated;
 
     public bool IsMultipleInstancesAllowed => _policy.AllowsMultipleInstances;
 

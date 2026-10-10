@@ -8,9 +8,14 @@ using Wsm.Hcs.Layout;
 namespace Wsm.Hcs.Checkpoint.Internal;
 
 /// <summary>
-/// Default <see cref="ICheckpointService"/>. State files are stored under
-/// <c>...\Containers\Snapshots\&lt;id&gt;\SnapshotSavedState.vmrs</c>, matching
-/// the platform's own layout.
+/// Default <see cref="ICheckpointService"/>.
+/// <para>
+/// On-disk layout (scoped by system id):
+/// <c>...\Containers\Snapshots\&lt;systemId&gt;\&lt;checkpointId&gt;\SnapshotSavedState.vmrs</c>.
+/// The previous global layout (<c>...\Snapshots\&lt;checkpointId&gt;</c>) has been
+/// replaced by this per-system layout. Snapshots are ephemeral, so there is no
+/// migration for existing directories.
+/// </para>
 /// </summary>
 [ExposeServices(typeof(ICheckpointService))]
 internal sealed class CheckpointService : ICheckpointService, ISingletonDependency
@@ -29,7 +34,9 @@ internal sealed class CheckpointService : ICheckpointService, ISingletonDependen
     public SandboxCheckpoint Save(string systemId, string name, SandboxCheckpointType type)
     {
         var id = Guid.NewGuid();
-        var directory = _layout.GetSnapshotDirectory(id.ToString());
+        // Scope the checkpoint directory by the owning compute system id:
+        //   <SnapshotsRoot>\<systemId>\<checkpointId>\SnapshotSavedState.vmrs
+        var directory = Path.Combine(_layout.SnapshotsRoot, systemId, id.ToString());
         Directory.CreateDirectory(directory);
         var statePath = Path.Combine(directory, "SnapshotSavedState.vmrs");
 
@@ -48,12 +55,14 @@ internal sealed class CheckpointService : ICheckpointService, ISingletonDependen
         var results = new List<SandboxCheckpoint>();
         try
         {
-            if (!Directory.Exists(_layout.SnapshotsRoot))
+            // Only enumerate this system's own snapshot folder.
+            var systemRoot = Path.Combine(_layout.SnapshotsRoot, systemId);
+            if (!Directory.Exists(systemRoot))
             {
                 return results;
             }
 
-            foreach (var directory in Directory.EnumerateDirectories(_layout.SnapshotsRoot))
+            foreach (var directory in Directory.EnumerateDirectories(systemRoot))
             {
                 var statePath = Path.Combine(directory, "SnapshotSavedState.vmrs");
                 if (!File.Exists(statePath))
@@ -64,7 +73,8 @@ internal sealed class CheckpointService : ICheckpointService, ISingletonDependen
                 var name = Path.GetFileName(directory);
                 if (!Guid.TryParse(name, out var id))
                 {
-                    id = Guid.NewGuid();
+                    // Skip non-GUID directories gracefully.
+                    continue;
                 }
 
                 results.Add(new SandboxCheckpoint(

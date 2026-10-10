@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Volo.Abp;
 using WindowsSandboxManager.Domain.Exceptions;
 using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Application;
 using Wsm.Application.EngineSelection;
 using Wsm.Application.EngineSelection.Internal;
 using Wsm.Engines.Abstractions;
@@ -19,7 +20,7 @@ namespace Wsm.Tests.Engines;
 public sealed class EngineSelectionTests
 {
     [Fact]
-    public async Task Both_engines_register_and_are_enumerable()
+    public async Task All_three_engines_register_and_are_enumerable()
     {
         using var app = await AbpApplicationFactory.CreateAsync<EnginesTestModule>();
         await app.InitializeAsync();
@@ -28,14 +29,19 @@ public sealed class EngineSelectionTests
         {
             var engines = app.ServiceProvider.GetServices<ISandboxEngine>().ToArray();
 
-            Assert.Equal(2, engines.Length);
+            Assert.Equal(3, engines.Length);
             Assert.Contains(engines, engine => engine.Kind == SandboxEngineKind.HcsSandbox);
             Assert.Contains(engines, engine => engine.Kind == SandboxEngineKind.WindowsSandbox);
 
+            // The reserved Windows Container engine registers but is never available.
+            var container = Assert.Single(engines, engine => engine.Kind == SandboxEngineKind.WindowsContainer);
+            Assert.False(container.IsAvailable);
+
             // The registry fast-fails on duplicate kinds, so resolving it proves
-            // the two engines are distinct.
+            // the engines are distinct.
             Assert.NotNull(app.ServiceProvider.GetRequiredService<ISandboxEngineRegistry>());
             Assert.NotNull(app.ServiceProvider.GetRequiredService<ISandboxEngineSelector>());
+            Assert.NotNull(app.ServiceProvider.GetRequiredService<ISandboxManager>());
         }
         finally
         {

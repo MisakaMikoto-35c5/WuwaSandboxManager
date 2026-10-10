@@ -56,9 +56,38 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         };
 
         var engine = _selector.Select(request);
-        var runtime = await engine.StartAsync(request, cancellationToken).ConfigureAwait(false);
 
-        instance.MarkRunning(runtime);
+        // Deterministic single-instance pre-check. Retail Windows Sandbox hosts
+        // report an *empty success* from the engine when a sandbox is already
+        // running (the single-instance policy), so we ask the engine directly
+        // before starting and fail deterministically.
+        if (!engine.Capabilities.SupportsMultipleInstances)
+        {
+            var running = await engine.EnumerateAsync(cancellationToken).ConfigureAwait(false);
+            var others = running.Where(other => other != instance.Id).ToArray();
+            if (others.Length > 0)
+            {
+                var message =
+                    "This engine does not allow multiple concurrent instances. " +
+                    $"Running instance(s): {string.Join(", ", others.Select(other => other.Value))}.";
+                instance.MarkFaulted(message);
+                await _repository.SaveAsync(instance, cancellationToken).ConfigureAwait(false);
+                throw new MultipleInstancesNotAllowedException(message);
+            }
+        }
+
+        try
+        {
+            var runtime = await engine.StartAsync(request, cancellationToken).ConfigureAwait(false);
+            instance.MarkRunning(runtime);
+        }
+        catch (Exception ex)
+        {
+            instance.MarkFaulted(ex.Message);
+            await _repository.SaveAsync(instance, cancellationToken).ConfigureAwait(false);
+            throw;
+        }
+
         await _repository.SaveAsync(instance, cancellationToken).ConfigureAwait(false);
         return ToDto(instance);
     }
@@ -96,6 +125,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
         var engine = _selector.Select(RequestFor(instance));
+        EnsureCheckpointsSupported(engine);
         return await engine.SaveCheckpointAsync(instance.Id, name, type, cancellationToken).ConfigureAwait(false);
     }
 
@@ -103,6 +133,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
         var engine = _selector.Select(RequestFor(instance));
+        EnsureCheckpointsSupported(engine);
         return await engine.ListCheckpointsAsync(instance.Id, cancellationToken).ConfigureAwait(false);
     }
 
@@ -110,6 +141,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
         var engine = _selector.Select(RequestFor(instance));
+        EnsureCheckpointsSupported(engine);
 
         var checkpoints = await engine.ListCheckpointsAsync(instance.Id, cancellationToken).ConfigureAwait(false);
         var checkpoint = checkpoints.FirstOrDefault(candidate => candidate.Id == checkpointId)
@@ -129,6 +161,15 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         Id = instance.Id,
         Recipe = instance.Recipe,
     };
+
+    private static void EnsureCheckpointsSupported(ISandboxEngine engine)
+    {
+        if (!engine.Capabilities.SupportsCheckpoints)
+        {
+            throw new SandboxNotSupportedException(
+                $"The engine '{engine.Name}' does not support checkpoints.");
+        }
+    }
 
     private static SandboxInstanceDto ToDto(SandboxInstance instance)
         => new(instance.Id.Value, instance.Name.Value, instance.State, instance.Recipe, instance.Runtime);

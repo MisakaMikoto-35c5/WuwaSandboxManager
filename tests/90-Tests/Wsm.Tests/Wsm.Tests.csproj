@@ -15,11 +15,15 @@
     <ProjectReference Include="..\..\..\src\00-Core\Wsm.Application.EngineSelection\Wsm.Application.EngineSelection.csproj" />
     <ProjectReference Include="..\..\..\src\20-Engines\Wsm.Engine.Hcs\Wsm.Engine.Hcs.csproj" />
     <ProjectReference Include="..\..\..\src\20-Engines\Wsm.Engine.WindowsSandbox\Wsm.Engine.WindowsSandbox.csproj" />
+    <ProjectReference Include="..\..\..\src\20-Engines\Wsm.Engine.WindowsContainer\Wsm.Engine.WindowsContainer.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Interop\Wsm.Hcs.Interop.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Layout\Wsm.Hcs.Layout.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Json.Sandbox\Wsm.Hcs.Json.Sandbox.csproj" />
+    <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Json.Container\Wsm.Hcs.Json.Container.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Storage\Wsm.Hcs.Storage.csproj" />
     <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Checkpoint\Wsm.Hcs.Checkpoint.csproj" />
+    <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Process\Wsm.Hcs.Process.csproj" />
+    <ProjectReference Include="..\..\..\src\10-Hcs\Wsm.Hcs.Network\Wsm.Hcs.Network.csproj" />
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.Recipe.Serialization\Wsm.Recipe.Serialization.csproj" />
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.Connection.RdpBase\Wsm.Connection.RdpBase.csproj" />
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.Connection.Legacy\Wsm.Connection.Legacy.csproj" />

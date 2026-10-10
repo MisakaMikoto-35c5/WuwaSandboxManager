@@ -16,13 +16,17 @@
   <Folder Name="/src/20-Engines/">
     <Project Path="src/20-Engines/Wsm.Engine.Hcs/Wsm.Engine.Hcs.csproj" />
     <Project Path="src/20-Engines/Wsm.Engine.WindowsSandbox/Wsm.Engine.WindowsSandbox.csproj" />
+    <Project Path="src/20-Engines/Wsm.Engine.WindowsContainer/Wsm.Engine.WindowsContainer.csproj" />
   </Folder>
   <Folder Name="/src/10-Hcs/">
     <Project Path="src/10-Hcs/Wsm.Hcs.Interop/Wsm.Hcs.Interop.csproj" />
     <Project Path="src/10-Hcs/Wsm.Hcs.Layout/Wsm.Hcs.Layout.csproj" />
     <Project Path="src/10-Hcs/Wsm.Hcs.Json.Sandbox/Wsm.Hcs.Json.Sandbox.csproj" />
+    <Project Path="src/10-Hcs/Wsm.Hcs.Json.Container/Wsm.Hcs.Json.Container.csproj" />
     <Project Path="src/10-Hcs/Wsm.Hcs.Storage/Wsm.Hcs.Storage.csproj" />
     <Project Path="src/10-Hcs/Wsm.Hcs.Checkpoint/Wsm.Hcs.Checkpoint.csproj" />
+    <Project Path="src/10-Hcs/Wsm.Hcs.Process/Wsm.Hcs.Process.csproj" />
+    <Project Path="src/10-Hcs/Wsm.Hcs.Network/Wsm.Hcs.Network.csproj" />
   </Folder>
   <Folder Name="/src/30-Connections/">
     <Project Path="src/30-Connections/Wsm.SandboxServer.Client/Wsm.SandboxServer.Client.csproj" />

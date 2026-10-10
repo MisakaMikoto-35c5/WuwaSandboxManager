@@ -1,4 +1,5 @@
 using Volo.Abp.Modularity;
+using Wsm.Host.Elevation;
 
 namespace Wsm.Host.Policy;
 
@@ -7,6 +8,7 @@ namespace Wsm.Host.Policy;
 /// concurrent-instance policy (WDAG/AVD or internal branch) and, only on explicit
 /// administrator request, can toggle the <c>BuildBranch</c> registry value.
 /// </summary>
+[DependsOn(typeof(ElevationModule))]
 public sealed class MultiInstancePolicyModule : AbpModule
 {
 }

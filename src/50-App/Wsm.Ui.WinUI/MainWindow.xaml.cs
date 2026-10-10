@@ -28,19 +28,19 @@ public sealed partial class MainWindow : Window
 {
     private readonly IAppLocalizer _localizer;
     private readonly IElevationService _elevation;
-    private readonly Guid? _selectId;
+    private readonly string? _openManifestPath;
     private bool _initialized;
     private bool _languageReady;
     private string _appliedCulture;
 
-    public MainWindow(IServiceProvider services, Guid? selectId)
+    public MainWindow(IServiceProvider services, string? openManifestPath)
     {
         InitializeComponent();
         Title = "Windows Sandbox Manager";
 
         _localizer = services.GetRequiredService<IAppLocalizer>();
         _elevation = services.GetRequiredService<IElevationService>();
-        _selectId = selectId;
+        _openManifestPath = openManifestPath;
         _appliedCulture = LanguageOption.Resolve(_localizer.CurrentCulture.Name).CultureName;
 
         ViewModel = new MainViewModel(
@@ -93,7 +93,13 @@ public sealed partial class MainWindow : Window
 
         _initialized = true;
         _languageReady = true;
-        await ViewModel.InitializeAsync(_selectId);
+        await ViewModel.InitializeAsync();
+
+        // Opening a .wsm (association / cli argument) starts it with zero config.
+        if (!string.IsNullOrWhiteSpace(_openManifestPath))
+        {
+            await ViewModel.OpenManifestAsync(_openManifestPath);
+        }
     }
 
     private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
@@ -115,15 +121,21 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Persists the chosen language and restarts the process. A non-packaged
-    /// WinUI app caches its XAML resource context, so rebuilding the window in the
-    /// same process does not reliably re-resolve <c>x:Uid</c>; a full restart does.
+    /// Persists the chosen language and/or config &amp; data folder and restarts the
+    /// process. A non-packaged WinUI app caches its XAML resource context, so
+    /// rebuilding the window in the same process does not reliably re-resolve
+    /// <c>x:Uid</c>; a full restart does. The other persisted setting is preserved.
     /// </summary>
-    private void PersistAndRelaunch(string cultureName)
+    private void PersistAndRelaunch(string? cultureName = null, string? configDataFolder = null)
     {
         try
         {
-            UiSettingsStore.Save(new UiSettings { CultureName = cultureName });
+            var current = UiSettingsStore.Load();
+            UiSettingsStore.Save(current with
+            {
+                CultureName = cultureName ?? current.CultureName,
+                ConfigDataFolder = configDataFolder ?? current.ConfigDataFolder,
+            });
         }
         catch (Exception ex)
         {
@@ -151,6 +163,25 @@ public sealed partial class MainWindow : Window
 
     // ----------------------------- Creation -----------------------------
 
+    private async void OnOpenFileClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
+            picker.FileTypeFilter.Add(Wsm.Application.WsmFileAssociation.Extension);
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+            var file = await picker.PickSingleFileAsync();
+            if (file is not null)
+            {
+                await ViewModel.OpenManifestAsync(file.Path);
+            }
+        }
+        catch (Exception ex)
+        {
+            ViewModel.Status = ex.Message;
+        }
+    }
+
     private async void OnNewSandboxClick(object sender, RoutedEventArgs e)
     {
         ViewModel.ResetNewInstance();
@@ -174,13 +205,23 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnBrowseCreateStorage(object sender, RoutedEventArgs e)
+    private async void OnBrowseConfigDataFolder(object sender, RoutedEventArgs e)
     {
         var path = await PickFolderAsync();
-        if (path is not null)
+        if (string.IsNullOrWhiteSpace(path))
         {
-            ViewModel.NewStoragePath = path;
+            return;
         }
+
+        if (string.Equals(path, ViewModel.ConfigDataFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        // Mirror the language flow: persist the new folder and restart so the
+        // persistence and HCS layout pick it up on the next start.
+        ViewModel.ConfigDataFolder = path;
+        PersistAndRelaunch(configDataFolder: path);
     }
 
     // ----------------------------- Settings -----------------------------
@@ -217,15 +258,6 @@ public sealed partial class MainWindow : Window
         finally
         {
             deferral.Complete();
-        }
-    }
-
-    private async void OnBrowseInstanceStorage(object sender, RoutedEventArgs e)
-    {
-        var path = await PickFolderAsync();
-        if (path is not null && ViewModel.Selected is { } vm)
-        {
-            vm.StoragePath = path;
         }
     }
 

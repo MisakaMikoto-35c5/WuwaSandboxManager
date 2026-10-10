@@ -107,7 +107,7 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
         var guestState = Path.Combine(storageDirectory, SandboxStorageTemplateLocator.GuestStateFileName);
 
         var locator = new SandboxStorageTemplateLocator(
-            _layout.StorageRoot,
+            _layout.PlatformContainerStoragesFolder,
             Environment.GetEnvironmentVariable(TemplateRootEnvironmentVariable));
 
         // The source that actually produced the disk during this call. The
@@ -142,7 +142,7 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
 
         EnsureGuestState(guestState, diskSource);
 
-        return new StorageLayout(storageDirectory, disk, guestState);
+        return new StorageLayout(storageDirectory, disk, guestState, baseDisk);
     }
 
     /// <summary>

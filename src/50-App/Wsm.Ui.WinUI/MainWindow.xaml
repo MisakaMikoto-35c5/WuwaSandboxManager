@@ -53,6 +53,7 @@
                             Content="New sandbox"
                             Style="{StaticResource AccentButtonStyle}"
                             Click="OnNewSandboxClick" />
+                    <Button x:Uid="OpenButton" Content="Open" Click="OnOpenFileClick" />
                     <Button x:Uid="RefreshButton" Content="Refresh" Command="{Binding RefreshCommand}" />
                     <Button x:Name="AppSettingsButton" Click="OnAppSettingsClick">
                         <FontIcon Glyph="&#xE713;" FontSize="16" />
@@ -226,7 +227,7 @@
                                 </Grid>
                                 <StackPanel Spacing="2">
                                     <TextBlock x:Uid="SummaryLocation" Text="Data location" Style="{StaticResource MetaText}" />
-                                    <TextBlock Text="{Binding Selected.StorageLocationDisplay}"
+                                    <TextBlock Text="{Binding Selected.SandboxFolder}"
                                                FontFamily="{StaticResource WsmMonoFont}"
                                                FontSize="12"
                                                TextTrimming="CharacterEllipsis"
@@ -293,6 +294,30 @@
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
+                    </StackPanel>
+
+                    <!-- Config & data folder -->
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Uid="ConfigDataFolderLabel"
+                                   Text="Config &amp; data folder"
+                                   Style="{StaticResource FieldLabel}" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding ConfigDataFolder, Mode=OneWay}"
+                                     IsReadOnly="True" />
+                            <Button Grid.Column="1"
+                                    x:Uid="BrowseButton"
+                                    Content="Browse"
+                                    Click="OnBrowseConfigDataFolder" />
+                        </Grid>
+                        <TextBlock x:Uid="ConfigDataFolderHint"
+                                   Text="One subfolder per sandbox; each holds its manifest, recipe and data. Changing it restarts the app."
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                     </StackPanel>
 
                     <!-- Routing engine -->
@@ -402,25 +427,6 @@
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                </StackPanel>
-
-                <StackPanel Spacing="6">
-                    <TextBlock x:Uid="CreateStorageHeader" Text="Data location" Style="{StaticResource FieldLabel}" />
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBox PlaceholderText="{Binding DefaultStoragePath}"
-                                 Text="{Binding NewStoragePath, Mode=TwoWay}" />
-                        <Button Grid.Column="1"
-                                x:Uid="BrowseButton"
-                                Content="Browse"
-                                Click="OnBrowseCreateStorage" />
-                    </Grid>
-                    <TextBlock x:Uid="CreateStorageHint"
-                               Text="Leave empty to use the platform default."
-                               Style="{StaticResource MetaText}" />
                 </StackPanel>
 
                 <Expander x:Uid="CreateResourcesExpander" Header="Resources">
@@ -534,22 +540,14 @@
                     <Border Style="{StaticResource SectionCard}">
                         <StackPanel Spacing="10">
                             <TextBlock x:Uid="StorageSection" Text="Storage" Style="{StaticResource SectionTitle}" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Uid="StoragePathBox"
-                                         Header="User-data location"
-                                         PlaceholderText="{Binding Selected.DefaultStoragePath}"
-                                         Text="{Binding Selected.StoragePath, Mode=TwoWay}" />
-                                <Button Grid.Column="1"
-                                        x:Uid="BrowseButton"
-                                        Content="Browse"
-                                        VerticalAlignment="Bottom"
-                                        Margin="0,0,0,6"
-                                        Click="OnBrowseInstanceStorage" />
-                            </Grid>
+                            <StackPanel Spacing="4">
+                                <TextBlock x:Uid="SandboxFolderLabel" Text="Folder" Style="{StaticResource FieldLabel}" />
+                                <TextBlock Text="{Binding Selected.SandboxFolder}"
+                                           FontFamily="{StaticResource WsmMonoFont}"
+                                           FontSize="12"
+                                           TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
                             <NumberBox x:Uid="DiskSizeBox"
                                        Header="Disk size (MB, 0 = default)"
                                        Value="{Binding Selected.DiskSizeMb, Mode=TwoWay}"

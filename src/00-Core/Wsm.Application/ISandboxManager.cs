@@ -16,6 +16,13 @@ public interface ISandboxManager
     /// <summary>Lists all known sandbox instances.</summary>
     Task<IReadOnlyList<SandboxInstanceDto>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Imports a portable <c>.wsm</c> from an arbitrary path (association / open
+    /// dialog / cli argument), resolving its relative paths against the file, so
+    /// it can be started with zero configuration.
+    /// </summary>
+    Task<SandboxInstanceDto> ImportAsync(string manifestPath, CancellationToken cancellationToken = default);
+
     /// <summary>Gets a single sandbox instance, throwing when it does not exist.</summary>
     Task<SandboxInstanceDto> GetAsync(Guid id, CancellationToken cancellationToken = default);
 

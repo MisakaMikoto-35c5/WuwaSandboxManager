@@ -15,20 +15,21 @@ public sealed class SandboxStorageTemplateLocator
     /// <summary>File name of the persistent guest-state file.</summary>
     public const string GuestStateFileName = "sandbox.vmgs";
 
-    private readonly string _storageRoot;
+    private readonly string _containerStoragesFolder;
     private readonly string? _templateRoot;
 
-    /// <param name="storageRoot">
-    /// The container storage root (<c>...\Containers\ContainerStorages</c>).
+    /// <param name="containerStoragesFolder">
+    /// The platform container-storage folder
+    /// (<c>...\Containers\ContainerStorages</c>).
     /// </param>
     /// <param name="templateRoot">
     /// Optional directory holding a platform-shipped <c>sandbox.vhdx</c>
     /// template (or a single template sub-directory). No such template ships on
     /// current builds; this is a forward-compatible hook.
     /// </param>
-    public SandboxStorageTemplateLocator(string storageRoot, string? templateRoot = null)
+    public SandboxStorageTemplateLocator(string containerStoragesFolder, string? templateRoot = null)
     {
-        _storageRoot = storageRoot;
+        _containerStoragesFolder = containerStoragesFolder;
         _templateRoot = templateRoot;
     }
 
@@ -39,10 +40,10 @@ public sealed class SandboxStorageTemplateLocator
     /// an empty scratch is a few MB, whereas a layer's storage can be hundreds
     /// of MB, and a fresh sandbox should not inherit another sandbox's data.
     /// </summary>
-    public string? FindDonorStorage() => FindWithDisk(_storageRoot, recurse: false);
+    public string? FindDonorStorage() => FindWithDisk(_containerStoragesFolder, recurse: false);
 
     /// <summary>
-    /// Every container storage directory under the root that holds a
+    /// Every container storage directory under the folder that holds a
     /// <c>sandbox.vhdx</c>, ordered by ascending disk size (the same preference
     /// <see cref="FindDonorStorage"/> uses). Used to walk differencing chains
     /// back to the base OS disk, where a single "smallest donor" is not enough:
@@ -50,7 +51,7 @@ public sealed class SandboxStorageTemplateLocator
     /// </summary>
     public IReadOnlyList<string> EnumerateDonorStorages()
     {
-        if (string.IsNullOrWhiteSpace(_storageRoot) || !Directory.Exists(_storageRoot))
+        if (string.IsNullOrWhiteSpace(_containerStoragesFolder) || !Directory.Exists(_containerStoragesFolder))
         {
             return Array.Empty<string>();
         }
@@ -58,7 +59,7 @@ public sealed class SandboxStorageTemplateLocator
         try
         {
             var candidates = new List<string>();
-            foreach (var directory in Directory.EnumerateDirectories(_storageRoot, "*", SearchOption.TopDirectoryOnly))
+            foreach (var directory in Directory.EnumerateDirectories(_containerStoragesFolder, "*", SearchOption.TopDirectoryOnly))
             {
                 if (File.Exists(Path.Combine(directory, DiskFileName)))
                 {
@@ -84,9 +85,9 @@ public sealed class SandboxStorageTemplateLocator
     /// <summary>Convenience: donor first, then template.</summary>
     public string? FindSourceStorage() => FindDonorStorage() ?? FindTemplateStorage();
 
-    private static string? FindWithDisk(string? root, bool recurse)
+    private static string? FindWithDisk(string? folder, bool recurse)
     {
-        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
         {
             return null;
         }
@@ -94,13 +95,13 @@ public sealed class SandboxStorageTemplateLocator
         try
         {
             var candidates = new List<string>();
-            if (File.Exists(Path.Combine(root, DiskFileName)))
+            if (File.Exists(Path.Combine(folder, DiskFileName)))
             {
-                candidates.Add(root);
+                candidates.Add(folder);
             }
 
             var option = recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-            foreach (var directory in Directory.EnumerateDirectories(root, "*", option))
+            foreach (var directory in Directory.EnumerateDirectories(folder, "*", option))
             {
                 if (File.Exists(Path.Combine(directory, DiskFileName)))
                 {

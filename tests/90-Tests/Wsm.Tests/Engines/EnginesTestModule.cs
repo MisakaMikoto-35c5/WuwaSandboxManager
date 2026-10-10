@@ -32,8 +32,8 @@ public sealed class EnginesTestModule : AbpModule
 {
     public override void ConfigureServices(ServiceConfigurationContext context)
     {
-        // Keep the file repository from writing under %LocalAppData% during tests.
+        // Keep the file repository from writing under the real config & data folder during tests.
         Configure<SandboxPersistenceOptions>(options =>
-            options.RootDirectory = Path.Combine(Path.GetTempPath(), "wsm-tests-" + Guid.NewGuid()));
+            options.ConfigDataFolder = Path.Combine(Path.GetTempPath(), "wsm-tests-" + Guid.NewGuid()));
     }
 }

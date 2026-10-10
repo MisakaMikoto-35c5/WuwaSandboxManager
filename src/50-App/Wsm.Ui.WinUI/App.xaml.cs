@@ -24,9 +24,9 @@ namespace Wsm.Ui.WinUI;
 /// re-resolve XAML <c>x:Uid</c> strings.
 /// </para>
 /// <para>
-/// <b>Open with</b>: when launched with a <c>.wsbx</c> manifest path argument the
-/// manifest is parsed and its sandbox id is passed to the main window so the UI
-/// opens on that instance.
+/// <b>Open with</b>: when launched with a <c>.wsm</c> sandbox path argument the
+/// file is opened and its sandbox is started with zero configuration (the main
+/// window imports it and starts it).
 /// </para>
 /// </remarks>
 public partial class App : Microsoft.UI.Xaml.Application
@@ -56,12 +56,12 @@ public partial class App : Microsoft.UI.Xaml.Application
 
         TryRegisterFileAssociation();
 
-        ShowMainWindow(ResolveSelectId());
+        ShowMainWindow(ResolveOpenManifestPath());
     }
 
-    private void ShowMainWindow(Guid? selectId)
+    private void ShowMainWindow(string? openManifestPath)
     {
-        var window = new MainWindow(Services, selectId);
+        var window = new MainWindow(Services, openManifestPath);
         window.Closed += OnWindowClosed;
         _window = window;
         window.Activate();
@@ -105,12 +105,11 @@ public partial class App : Microsoft.UI.Xaml.Application
         _window?.Close();
     }
 
-    private Guid? ResolveSelectId()
+    private static string? ResolveOpenManifestPath()
     {
         try
         {
-            var manifestPath = WsmLaunchArguments.GetManifestPath(Environment.GetCommandLineArgs());
-            return manifestPath is null ? null : SandboxManifest.TryReadFile(manifestPath)?.Id;
+            return WsmLaunchArguments.GetManifestPath(Environment.GetCommandLineArgs());
         }
         catch
         {

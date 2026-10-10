@@ -2,16 +2,16 @@ namespace Wsm.Application;
 
 /// <summary>
 /// Pure helpers for interpreting the process command line. The WinUI host uses
-/// this to implement "open with" for <c>.wsbx</c> sandbox manifests.
+/// this to implement "open with" for portable <c>.wsm</c> sandbox files.
 /// </summary>
 public static class WsmLaunchArguments
 {
-    /// <summary>The manifest file extension understood by the app.</summary>
-    public const string ManifestExtension = ".wsbx";
+    /// <summary>The portable sandbox file extension understood by the app.</summary>
+    public const string ManifestExtension = ".wsm";
 
     /// <summary>
-    /// Returns the first argument that is a <c>.wsbx</c> manifest path, or
-    /// <c>null</c> when none is present. Never throws on unknown arguments.
+    /// Returns the first argument that is a <c>.wsm</c> path, or <c>null</c> when
+    /// none is present. Never throws on unknown arguments.
     /// </summary>
     public static string? GetManifestPath(IEnumerable<string>? args)
     {
@@ -31,7 +31,7 @@ public static class WsmLaunchArguments
         return null;
     }
 
-    /// <summary>True when the argument looks like a <c>.wsbx</c> manifest path (not a switch).</summary>
+    /// <summary>True when the argument looks like a <c>.wsm</c> path (not a switch).</summary>
     public static bool IsManifestPath(string? arg)
     {
         if (string.IsNullOrWhiteSpace(arg))

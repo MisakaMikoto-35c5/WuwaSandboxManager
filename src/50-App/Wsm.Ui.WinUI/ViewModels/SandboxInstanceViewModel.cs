@@ -64,8 +64,6 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
     public IReadOnlyList<EnumOption<VirtualGpuMode>> VgpuOptions { get; }
 
-    public string DefaultStoragePath => _owner.DefaultStoragePath;
-
     [ObservableProperty] private Guid _id;
 
     [ObservableProperty] private string _name = string.Empty;
@@ -85,8 +83,6 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     [ObservableProperty] private bool _protectedClient;
 
     [ObservableProperty] private bool _rebootSupport;
-
-    [ObservableProperty] private string _storagePath = string.Empty;
 
     [ObservableProperty] private double _diskSizeMb;
 
@@ -145,9 +141,13 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     public SandboxConnectionMode ConnectionMode
         => RailMode ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop;
 
-    public string StorageLocationDisplay => string.IsNullOrWhiteSpace(StoragePath)
-        ? _l["Summary.LocationDefault.Text"]
-        : StoragePath;
+    /// <summary>
+    /// The sandbox's own folder (manifest, recipe, instance record and user-data
+    /// disks). Derived from the manifest path; read-only.
+    /// </summary>
+    public string SandboxFolder => string.IsNullOrWhiteSpace(ManifestPath)
+        ? string.Empty
+        : Path.GetDirectoryName(ManifestPath) ?? ManifestPath;
 
     public bool HasManifest => !string.IsNullOrWhiteSpace(ManifestPath);
 
@@ -176,7 +176,6 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         FullScreen = dto.Recipe.FullScreen;
         ProtectedClient = dto.Recipe.ProtectedClient;
         RebootSupport = dto.Recipe.RebootSupport;
-        StoragePath = dto.Recipe.Storage.StoragePath ?? string.Empty;
         DiskSizeMb = dto.Recipe.Storage.DiskSizeMb;
         State = dto.State;
         StateLabel = LocalizeState(dto.State);
@@ -228,12 +227,11 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         OnPropertyChanged(nameof(ConnectionMode));
     }
 
-    partial void OnStoragePathChanged(string value) => OnPropertyChanged(nameof(StorageLocationDisplay));
-
     partial void OnManifestPathChanged(string? value)
     {
         OnPropertyChanged(nameof(HasManifest));
         OnPropertyChanged(nameof(ManifestDisplay));
+        OnPropertyChanged(nameof(SandboxFolder));
     }
 
     public SandboxRecipe BuildRecipe() => new()
@@ -254,12 +252,10 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
     private SandboxStorageOptions BuildStorage()
     {
+        // The user-data location is derived from the app-level config & data
+        // folder and the instance id (see IHcsHostLayout.GetStorageDirectory);
+        // only the disk size remains per-sandbox.
         var storage = SandboxStorageOptions.Default;
-        if (!string.IsNullOrWhiteSpace(StoragePath))
-        {
-            storage = storage.WithPath(StoragePath);
-        }
-
         if (DiskSizeMb > 0)
         {
             storage = storage with { DiskSizeMb = (uint)DiskSizeMb };

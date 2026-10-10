@@ -19,10 +19,10 @@ public sealed class CheckpointScopingTests
     [Fact]
     public void Checkpoints_are_scoped_to_their_owning_system_and_skip_non_guid_directories()
     {
-        var snapshotsRoot = Path.Combine(Path.GetTempPath(), "wsm-cp-" + Guid.NewGuid());
+        var snapshotsFolder = Path.Combine(Path.GetTempPath(), "wsm-cp-" + Guid.NewGuid());
         var service = new CheckpointService(
             new StubHcsClient(),
-            new StubLayout(snapshotsRoot),
+            new StubLayout(snapshotsFolder),
             new StubJsonBuilder());
 
         try
@@ -36,7 +36,7 @@ public sealed class CheckpointScopingTests
             Assert.Empty(service.List(systemB));
 
             // A non-GUID directory under the owning system is skipped.
-            var bogusDirectory = Path.Combine(snapshotsRoot, systemA, "not-a-guid");
+            var bogusDirectory = Path.Combine(snapshotsFolder, systemA, "not-a-guid");
             Directory.CreateDirectory(bogusDirectory);
             File.WriteAllText(Path.Combine(bogusDirectory, "SnapshotSavedState.vmrs"), string.Empty);
 
@@ -46,32 +46,34 @@ public sealed class CheckpointScopingTests
         }
         finally
         {
-            if (Directory.Exists(snapshotsRoot))
+            if (Directory.Exists(snapshotsFolder))
             {
-                Directory.Delete(snapshotsRoot, recursive: true);
+                Directory.Delete(snapshotsFolder, recursive: true);
             }
         }
     }
 
     private sealed class StubLayout : IHcsHostLayout
     {
-        public StubLayout(string snapshotsRoot)
+        public StubLayout(string snapshotsFolder)
         {
-            DataRoot = Path.GetDirectoryName(snapshotsRoot) ?? snapshotsRoot;
-            SnapshotsRoot = snapshotsRoot;
+            PlatformContainersFolder = Path.GetDirectoryName(snapshotsFolder) ?? snapshotsFolder;
+            SnapshotsFolder = snapshotsFolder;
         }
 
-        public string DataRoot { get; }
+        public string PlatformContainersFolder { get; }
 
-        public string LayersRoot => Path.Combine(DataRoot, "Layers");
+        public string LayersFolder => Path.Combine(PlatformContainersFolder, "Layers");
 
-        public string BaseImagesRoot => Path.Combine(DataRoot, "BaseImages");
+        public string BaseImagesFolder => Path.Combine(PlatformContainersFolder, "BaseImages");
 
-        public string StorageRoot => Path.Combine(DataRoot, "ContainerStorages");
+        public string PlatformContainerStoragesFolder => Path.Combine(PlatformContainersFolder, "ContainerStorages");
 
-        public string SnapshotsRoot { get; }
+        public string SnapshotsFolder { get; }
 
-        public string GetStorageDirectory(string id) => Path.Combine(StorageRoot, id);
+        public string SandboxDataFolder => Path.Combine(PlatformContainersFolder, "WsmContainers");
+
+        public string GetStorageDirectory(string id) => Path.Combine(SandboxDataFolder, id);
 
         public IReadOnlyList<HcsLayerInfo> ListLayers() => Array.Empty<HcsLayerInfo>();
 

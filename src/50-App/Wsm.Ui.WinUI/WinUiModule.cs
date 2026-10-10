@@ -6,7 +6,9 @@ using Wsm.Application.EngineSelection;
 using Wsm.Engine.Hcs;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engine.WindowsSandbox;
+using Wsm.Hcs.Layout;
 using Wsm.Localization;
+using Wsm.Persistence;
 
 namespace Wsm.Ui.WinUI;
 
@@ -31,5 +33,12 @@ public sealed class WinUiModule : AbpModule
         context.Services.AddLogging(builder => builder
             .AddConsole()
             .SetMinimumLevel(LogLevel.Warning));
+
+        // Resolve the config & data folder once, at startup, from the persisted
+        // user settings, then point both persistence and the HCS layout at it. A
+        // change persisted from the settings dialog takes effect after a relaunch.
+        var configDataFolder = UiSettingsStore.Load().ResolveConfigDataFolder();
+        Configure<SandboxPersistenceOptions>(options => options.ConfigDataFolder = configDataFolder);
+        Configure<HcsHostLayoutOptions>(options => options.SandboxDataFolder = configDataFolder);
     }
 }

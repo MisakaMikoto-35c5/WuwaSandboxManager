@@ -35,7 +35,7 @@ public sealed class StorageProvisioningTests : IDisposable
         }
     }
 
-    private string StorageRoot => Path.Combine(_root, "ContainerStorages");
+    private string ContainerStoragesFolder => Path.Combine(_root, "ContainerStorages");
 
     private string NewDirectory(string name)
     {
@@ -58,7 +58,7 @@ public sealed class StorageProvisioningTests : IDisposable
         var donor = NewDirectory(Path.Combine("ContainerStorages", "donor"));
         Touch(donor, SandboxStorageTemplateLocator.DiskFileName);
 
-        var locator = new SandboxStorageTemplateLocator(StorageRoot);
+        var locator = new SandboxStorageTemplateLocator(ContainerStoragesFolder);
 
         Assert.Equal(donor, locator.FindDonorStorage());
     }
@@ -71,7 +71,7 @@ public sealed class StorageProvisioningTests : IDisposable
         var small = NewDirectory(Path.Combine("ContainerStorages", "small"));
         Touch(small, SandboxStorageTemplateLocator.DiskFileName, "x");
 
-        var locator = new SandboxStorageTemplateLocator(StorageRoot);
+        var locator = new SandboxStorageTemplateLocator(ContainerStoragesFolder);
 
         Assert.Equal(small, locator.FindDonorStorage());
     }
@@ -79,8 +79,8 @@ public sealed class StorageProvisioningTests : IDisposable
     [Fact]
     public void Locator_returns_null_when_no_source_exists()
     {
-        Directory.CreateDirectory(StorageRoot);
-        var locator = new SandboxStorageTemplateLocator(StorageRoot);
+        Directory.CreateDirectory(ContainerStoragesFolder);
+        var locator = new SandboxStorageTemplateLocator(ContainerStoragesFolder);
 
         Assert.Null(locator.FindDonorStorage());
         Assert.Null(locator.FindTemplateStorage());
@@ -93,7 +93,7 @@ public sealed class StorageProvisioningTests : IDisposable
         var template = NewDirectory("templates");
         Touch(template, SandboxStorageTemplateLocator.DiskFileName);
 
-        var locator = new SandboxStorageTemplateLocator(StorageRoot, template);
+        var locator = new SandboxStorageTemplateLocator(ContainerStoragesFolder, template);
 
         Assert.Null(locator.FindDonorStorage());
         Assert.Equal(template, locator.FindTemplateStorage());
@@ -105,10 +105,10 @@ public sealed class StorageProvisioningTests : IDisposable
     [Fact]
     public void Provision_creates_blank_disk_and_guest_state_when_no_donor_exists()
     {
-        Directory.CreateDirectory(StorageRoot);
+        Directory.CreateDirectory(ContainerStoragesFolder);
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
         var target = NewDirectory("target");
 
         var layout = provisioner.Provision(target);
@@ -126,9 +126,9 @@ public sealed class StorageProvisioningTests : IDisposable
     [Fact]
     public void Provision_honours_the_requested_disk_size()
     {
-        Directory.CreateDirectory(StorageRoot);
+        Directory.CreateDirectory(ContainerStoragesFolder);
         var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         provisioner.Provision(NewDirectory("target"), diskSizeMb: 4096);
 
@@ -144,7 +144,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
         var target = NewDirectory("target");
 
         var layout = provisioner.Provision(target);
@@ -164,7 +164,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
 
         var layout = provisioner.Provision(target);
 
@@ -182,7 +182,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
 
         var layout = provisioner.Provision(NewDirectory("target"));
 
@@ -202,7 +202,7 @@ public sealed class StorageProvisioningTests : IDisposable
         Touch(template, "sandbox.vhdx", "template-disk");
 
         var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         var layout = provisioner.Provision(NewDirectory("target"));
 
@@ -221,7 +221,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
         var target = NewDirectory("target");
 
         using (File.Open(Path.Combine(donor, "sandbox.vhdx"), FileMode.Open, FileAccess.Read, FileShare.None))
@@ -248,7 +248,7 @@ public sealed class StorageProvisioningTests : IDisposable
         Touch(template, "sandbox.vhdx", "template-disk");
 
         var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         using var templateScope = new TemplateRootScope(template);
         using var donorLock = File.Open(
@@ -271,7 +271,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
 
         var layout = provisioner.Provision(NewDirectory("target"));
 
@@ -293,7 +293,7 @@ public sealed class StorageProvisioningTests : IDisposable
         Touch(template, "sandbox.vhdx", "template-disk");
 
         var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         using var templateScope = new TemplateRootScope(template);
         var layout = provisioner.Provision(NewDirectory("target"));
@@ -316,7 +316,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
 
         var layout = provisioner.Provision(target);
 
@@ -336,7 +336,7 @@ public sealed class StorageProvisioningTests : IDisposable
         var small = NewDirectory(Path.Combine("ContainerStorages", "small"));
         Touch(small, SandboxStorageTemplateLocator.DiskFileName, "x");
 
-        var locator = new SandboxStorageTemplateLocator(StorageRoot);
+        var locator = new SandboxStorageTemplateLocator(ContainerStoragesFolder);
 
         Assert.Equal(new[] { small, big }, locator.EnumerateDonorStorages());
     }
@@ -356,7 +356,7 @@ public sealed class StorageProvisioningTests : IDisposable
             Path.Combine(baseDir, "sandbox.vhdx");
 
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
         var target = NewDirectory("target");
 
         var layout = provisioner.Provision(target);
@@ -364,6 +364,7 @@ public sealed class StorageProvisioningTests : IDisposable
         var baseCopy = Path.Combine(target, SandboxStorageProvisioner.BaseDiskFileName);
         Assert.Equal(1, factory.DifferencingCalls);
         Assert.Equal(baseCopy, factory.LastParentPath);
+        Assert.Equal(baseCopy, layout.BaseDiskPath);
         Assert.Equal("base-disk", File.ReadAllText(baseCopy));
         Assert.Equal("diff-vhdx", File.ReadAllText(layout.DiskPath));
         Assert.Equal("child-vmgs", File.ReadAllText(layout.GuestStatePath));
@@ -383,7 +384,7 @@ public sealed class StorageProvisioningTests : IDisposable
         var factory = new FakeVirtualDiskFactory();
         factory.Parents[Path.Combine(target, "sandbox.vhdx")] = baseCopy;
 
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         var layout = provisioner.Provision(target);
 
@@ -406,7 +407,7 @@ public sealed class StorageProvisioningTests : IDisposable
         factory.Parents[Path.Combine(target, "sandbox.vhdx")] =
             @"C:\ProgramData\Microsoft\Windows\Containers\ContainerStorages\shared\sandbox.vhdx";
 
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         var layout = provisioner.Provision(target);
 
@@ -424,10 +425,10 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         factory.Parents[Path.Combine(childDir, "sandbox.vhdx")] =
-            Path.Combine(StorageRoot, "gone", "sandbox.vhdx");
+            Path.Combine(ContainerStoragesFolder, "gone", "sandbox.vhdx");
 
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(StorageRoot), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
 
         var layout = provisioner.Provision(NewDirectory("target"));
 
@@ -578,19 +579,21 @@ public sealed class StorageProvisioningTests : IDisposable
 
     private sealed class FakeLayout : IHcsHostLayout
     {
-        public FakeLayout(string storageRoot) => StorageRoot = storageRoot;
+        public FakeLayout(string containerStoragesFolder) => PlatformContainerStoragesFolder = containerStoragesFolder;
 
-        public string DataRoot => Path.GetDirectoryName(StorageRoot) ?? StorageRoot;
+        public string PlatformContainersFolder => Path.GetDirectoryName(PlatformContainerStoragesFolder) ?? PlatformContainerStoragesFolder;
 
-        public string LayersRoot => Path.Combine(DataRoot, "Layers");
+        public string LayersFolder => Path.Combine(PlatformContainersFolder, "Layers");
 
-        public string BaseImagesRoot => Path.Combine(DataRoot, "BaseImages");
+        public string BaseImagesFolder => Path.Combine(PlatformContainersFolder, "BaseImages");
 
-        public string StorageRoot { get; }
+        public string PlatformContainerStoragesFolder { get; }
 
-        public string SnapshotsRoot => Path.Combine(DataRoot, "Snapshots");
+        public string SnapshotsFolder => Path.Combine(PlatformContainersFolder, "Snapshots");
 
-        public string GetStorageDirectory(string id) => Path.Combine(StorageRoot, id);
+        public string SandboxDataFolder => PlatformContainerStoragesFolder;
+
+        public string GetStorageDirectory(string id) => Path.Combine(SandboxDataFolder, id);
 
         public IReadOnlyList<HcsLayerInfo> ListLayers() => Array.Empty<HcsLayerInfo>();
 

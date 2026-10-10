@@ -7,6 +7,7 @@ using Wsm.Application;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Elevation;
 using Wsm.Host.Policy;
+using Wsm.Persistence;
 using Wsm.Ui.WinUI.Localization;
 
 namespace Wsm.Ui.WinUI.ViewModels;
@@ -39,7 +40,7 @@ public sealed partial class MainViewModel : ObservableObject
         BuildBranch = _policy.CurrentBuildBranch ?? "—";
         MultiInstanceAllowed = _policy.AllowsMultipleInstances;
         Status = _l["Status.Ready.Text"];
-        DefaultStoragePath = _l["StoragePathBox.PlaceholderText"];
+        ConfigDataFolder = UiSettingsStore.Load().ResolveConfigDataFolder();
 
         Instances.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasInstances));
         BuildEngines();
@@ -59,8 +60,11 @@ public sealed partial class MainViewModel : ObservableObject
 
     public IReadOnlyList<LanguageOption> Languages { get; }
 
-    /// <summary>Placeholder shown for the platform-default user-data location.</summary>
-    public string DefaultStoragePath { get; }
+    /// <summary>
+    /// The user-selectable config &amp; data folder. Resolved once at startup from
+    /// the persisted settings; changing it relaunches the app.
+    /// </summary>
+    [ObservableProperty] private string _configDataFolder;
 
     [ObservableProperty] private SandboxInstanceViewModel? _selected;
 
@@ -87,8 +91,6 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>0 = RemoteApp (RAIL), 1 = full desktop.</summary>
     [ObservableProperty] private int _newTypeIndex = 1;
 
-    [ObservableProperty] private string _newStoragePath = string.Empty;
-
     [ObservableProperty] private double _newMemoryMb = SandboxMemoryConfiguration.DefaultMemoryMb;
 
     [ObservableProperty] private double _newCpuCores = 4;
@@ -107,12 +109,39 @@ public sealed partial class MainViewModel : ObservableObject
 
     public Task InitializeAsync(Guid? selectId = null) => ReloadAsync(selectId);
 
+    /// <summary>
+    /// Opens a portable <c>.wsm</c> from an arbitrary path (association / open
+    /// dialog / cli argument) and starts it with zero configuration.
+    /// </summary>
+    public async Task OpenManifestAsync(string manifestPath)
+    {
+        try
+        {
+            IsBusy = true;
+            var dto = await _manager.ImportAsync(manifestPath);
+            await ReloadAsync(dto.Id);
+            Status = _l["Status.Opened.Text"];
+
+            if (Selected is { } vm)
+            {
+                await vm.PrimaryActionCommand.ExecuteAsync(null);
+            }
+        }
+        catch (Exception ex)
+        {
+            Status = ex.Message;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     /// <summary>Resets the creation dialog fields to their defaults.</summary>
     public void ResetNewInstance()
     {
         NewName = string.Empty;
         NewTypeIndex = 1;
-        NewStoragePath = string.Empty;
         NewMemoryMb = SandboxMemoryConfiguration.DefaultMemoryMb;
         NewCpuCores = Math.Max(1, Math.Min(Environment.ProcessorCount / 2, 64));
         NewEngineOption = NewEngineOptions.FirstOrDefault();
@@ -136,9 +165,7 @@ public sealed partial class MainViewModel : ObservableObject
                 Cpu = new SandboxCpuConfiguration(
                     double.IsFinite(NewCpuCores) ? (int)Math.Round(NewCpuCores) : 4),
                 RailMode = NewTypeIndex == 0,
-                Storage = string.IsNullOrWhiteSpace(NewStoragePath)
-                    ? SandboxStorageOptions.Default
-                    : SandboxStorageOptions.Default.WithPath(NewStoragePath),
+                Storage = SandboxStorageOptions.Default,
             };
 
             var name = string.IsNullOrWhiteSpace(NewName) ? null : NewName.Trim();

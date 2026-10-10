@@ -2,14 +2,29 @@ using System.Text.Json;
 
 namespace Wsm.Persistence;
 
-/// <summary>Small, user-scoped UI preferences (currently the chosen UI language).</summary>
+/// <summary>Small, user-scoped UI preferences (the chosen UI language and the config &amp; data folder).</summary>
 public sealed record UiSettings
 {
     /// <summary>The chosen UI culture name (for example <c>zh-Hans</c>), or null for the system default.</summary>
     public string? CultureName { get; init; }
 
+    /// <summary>
+    /// The user-selectable config &amp; data folder, or null for the default
+    /// (<see cref="SandboxPersistenceOptions.DefaultConfigDataFolder"/>).
+    /// </summary>
+    public string? ConfigDataFolder { get; init; }
+
     /// <summary>An empty settings instance (system defaults).</summary>
     public static UiSettings Default { get; } = new();
+
+    /// <summary>
+    /// Returns <see cref="ConfigDataFolder"/>, or the default
+    /// (<c>%USERPROFILE%\Documents\WsmContainers</c>) when unset.
+    /// </summary>
+    public string ResolveConfigDataFolder() =>
+        string.IsNullOrWhiteSpace(ConfigDataFolder)
+            ? SandboxPersistenceOptions.DefaultConfigDataFolder
+            : ConfigDataFolder;
 }
 
 /// <summary>

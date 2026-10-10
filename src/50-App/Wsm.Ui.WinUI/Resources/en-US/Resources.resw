@@ -17,6 +17,7 @@
   <data name="AppTitle.Text" xml:space="preserve"><value>Windows Sandbox Manager</value></data>
   <data name="AppSubtitle.Text" xml:space="preserve"><value>Multi-engine sandbox control</value></data>
   <data name="NewButton.Content" xml:space="preserve"><value>New sandbox</value></data>
+  <data name="OpenButton.Content" xml:space="preserve"><value>Open</value></data>
   <data name="RefreshButton.Content" xml:space="preserve"><value>Refresh</value></data>
   <data name="SettingsButton.Content" xml:space="preserve"><value>Settings</value></data>
   <data name="ElevateButton.Content" xml:space="preserve"><value>Restart elevated</value></data>
@@ -25,6 +26,8 @@
   <data name="AppSettingsDialog.Title" xml:space="preserve"><value>Settings</value></data>
   <data name="AppSettingsDialog.CloseButtonText" xml:space="preserve"><value>Close</value></data>
   <data name="LanguageLabel.Text" xml:space="preserve"><value>Language</value></data>
+  <data name="ConfigDataFolderLabel.Text" xml:space="preserve"><value>Config &amp; data folder</value></data>
+  <data name="ConfigDataFolderHint.Text" xml:space="preserve"><value>One subfolder per sandbox; each holds its manifest, recipe and data. Changing it restarts the app.</value></data>
   <data name="EnginesSection.Text" xml:space="preserve"><value>Engine</value></data>
   <data name="EnginesCaption.Text" xml:space="preserve"><value>HCS when elevated, otherwise Windows Sandbox.</value></data>
   <data name="EnvironmentSection.Text" xml:space="preserve"><value>Environment</value></data>
@@ -59,9 +62,7 @@
   <data name="CreateTypeRemoteApp.Content" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="CreateTypeDesktop.Content" xml:space="preserve"><value>Full desktop</value></data>
   <data name="CreateEngineHeader.Text" xml:space="preserve"><value>Engine</value></data>
-  <data name="CreateStorageHeader.Text" xml:space="preserve"><value>Data location</value></data>
   <data name="BrowseButton.Content" xml:space="preserve"><value>Browse</value></data>
-  <data name="CreateStorageHint.Text" xml:space="preserve"><value>Leave empty to use the platform default.</value></data>
   <data name="CreateResourcesExpander.Header" xml:space="preserve"><value>Resources</value></data>
   <data name="CreateMemoryBox.Header" xml:space="preserve"><value>Memory (MB)</value></data>
   <data name="CreateCpuBox.Header" xml:space="preserve"><value>CPU cores</value></data>
@@ -74,7 +75,6 @@
   <data name="SummaryCpu.Text" xml:space="preserve"><value>CPU cores</value></data>
   <data name="SummaryLocation.Text" xml:space="preserve"><value>Data location</value></data>
   <data name="SummaryEngine.Text" xml:space="preserve"><value>Engine</value></data>
-  <data name="Summary.LocationDefault.Text" xml:space="preserve"><value>Platform default</value></data>
   <data name="Type.RemoteApp.Text" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="Type.Desktop.Text" xml:space="preserve"><value>Full desktop</value></data>
   <data name="PrimaryStartButton.Content" xml:space="preserve"><value>Start</value></data>
@@ -102,8 +102,7 @@
   <data name="ProtectedSwitch.Header" xml:space="preserve"><value>Protected client</value></data>
   <data name="RebootSwitch.Header" xml:space="preserve"><value>Allow guest reboot</value></data>
   <data name="StorageSection.Text" xml:space="preserve"><value>Storage</value></data>
-  <data name="StoragePathBox.Header" xml:space="preserve"><value>User-data location</value></data>
-  <data name="StoragePathBox.PlaceholderText" xml:space="preserve"><value>(default) C:\ProgramData\Microsoft\Windows\Containers\ContainerStorages\&lt;id&gt;</value></data>
+  <data name="SandboxFolderLabel.Text" xml:space="preserve"><value>Folder</value></data>
   <data name="DiskSizeBox.Header" xml:space="preserve"><value>Disk size (MB, 0 = default)</value></data>
   <data name="FoldersSection.Text" xml:space="preserve"><value>Mapped folders</value></data>
   <data name="NewFolderBox.PlaceholderText" xml:space="preserve"><value>C:\path\to\host\folder</value></data>
@@ -159,6 +158,7 @@
 
   <!-- Status messages -->
   <data name="Status.Ready.Text" xml:space="preserve"><value>Ready.</value></data>
+  <data name="Status.Opened.Text" xml:space="preserve"><value>Sandbox opened.</value></data>
   <data name="Status.Created.Text" xml:space="preserve"><value>Sandbox created.</value></data>
   <data name="Status.Saved.Text" xml:space="preserve"><value>Definition updated.</value></data>
   <data name="Status.Stopped.Text" xml:space="preserve"><value>Stopped.</value></data>

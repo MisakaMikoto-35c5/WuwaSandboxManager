@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Microsoft.Win32;
 using Volo.Abp.DependencyInjection;
 
@@ -5,29 +6,52 @@ namespace Wsm.Hcs.Layout.Internal;
 
 /// <summary>
 /// Default <see cref="IHcsHostLayout"/>: resolves the container stack's on-disk
-/// layout and the registered layers.
+/// layout and the registered layers. The platform containers tree stays at
+/// <c>C:\ProgramData\Microsoft\Windows\Containers</c>; each sandbox's own data
+/// lives under the user-selectable config &amp; data folder.
 /// </summary>
 [ExposeServices(typeof(IHcsHostLayout))]
 internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
 {
-    public const string DefaultDataRoot = @"C:\ProgramData\Microsoft\Windows\Containers";
+    public const string DefaultPlatformContainersFolder = @"C:\ProgramData\Microsoft\Windows\Containers";
+
+    /// <summary>
+    /// Default config &amp; data folder: <c>%USERPROFILE%\Documents\WsmContainers</c>.
+    /// </summary>
+    public static string DefaultSandboxDataFolder { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        "Documents",
+        "WsmContainers");
+
     private const string LayersRegistryKey =
         @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Containers\CmService\Layers";
 
-    public HcsHostLayout(string? dataRoot = null)
-        => DataRoot = dataRoot ?? DefaultDataRoot;
+    public HcsHostLayout(IOptions<HcsHostLayoutOptions> options)
+    {
+        var value = options.Value;
 
-    public string DataRoot { get; }
+        PlatformContainersFolder = string.IsNullOrWhiteSpace(value.PlatformContainersFolder)
+            ? DefaultPlatformContainersFolder
+            : value.PlatformContainersFolder;
 
-    public string LayersRoot => Path.Combine(DataRoot, "Layers");
+        SandboxDataFolder = string.IsNullOrWhiteSpace(value.SandboxDataFolder)
+            ? DefaultSandboxDataFolder
+            : value.SandboxDataFolder;
+    }
 
-    public string BaseImagesRoot => Path.Combine(DataRoot, "BaseImages");
+    public string PlatformContainersFolder { get; }
 
-    public string StorageRoot => Path.Combine(DataRoot, "ContainerStorages");
+    public string LayersFolder => Path.Combine(PlatformContainersFolder, "Layers");
 
-    public string SnapshotsRoot => Path.Combine(DataRoot, "Snapshots");
+    public string BaseImagesFolder => Path.Combine(PlatformContainersFolder, "BaseImages");
 
-    public string GetStorageDirectory(string id) => Path.Combine(StorageRoot, id);
+    public string PlatformContainerStoragesFolder => Path.Combine(PlatformContainersFolder, "ContainerStorages");
+
+    public string SnapshotsFolder => Path.Combine(PlatformContainersFolder, "Snapshots");
+
+    public string SandboxDataFolder { get; }
+
+    public string GetStorageDirectory(string id) => Path.Combine(SandboxDataFolder, id);
 
     /// <summary>Enumerates the registered layers (newest sequence number first).</summary>
     public IReadOnlyList<HcsLayerInfo> ListLayers()
@@ -92,9 +116,9 @@ internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
         // Fall back to a BaseImages\<id>\BaseLayer\Files layout if present.
         try
         {
-            if (Directory.Exists(BaseImagesRoot))
+            if (Directory.Exists(BaseImagesFolder))
             {
-                foreach (var dir in Directory.EnumerateDirectories(BaseImagesRoot))
+                foreach (var dir in Directory.EnumerateDirectories(BaseImagesFolder))
                 {
                     var candidate = Path.Combine(dir, "BaseLayer", "Files");
                     if (Directory.Exists(Path.Combine(candidate, "Windows")))

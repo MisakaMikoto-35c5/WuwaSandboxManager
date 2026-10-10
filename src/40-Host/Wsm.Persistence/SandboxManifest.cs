@@ -6,38 +6,35 @@ using Wsm.Domain.ValueObjects;
 namespace Wsm.Persistence;
 
 /// <summary>
-/// The on-disk format of a per-sandbox manifest (<c>&lt;id&gt;.wsbx</c>).
+/// The on-disk format of a sandbox: a single, self-contained
+/// <c>&lt;name&gt;.wsm</c> JSON document.
 /// <para>
-/// A manifest is a small, self-contained JSON document: it identifies the sandbox
-/// (<see cref="Id"/>, <see cref="Name"/>, <see cref="RailMode"/>) and embeds the
-/// full <see cref="Recipe"/> as a nested JSON object. The recipe is serialized as
-/// the same DTO shape the instance repository persists (System.Text.Json), not as
-/// the <c>.wsb</c> XML, so a manifest can be re-imported without loss.
+/// A <c>.wsm</c> embeds the complete <see cref="Recipe"/> (engine preference,
+/// type, resources, mapped folders, logon commands) and stores the user-data
+/// folder as a path <b>relative to the file</b>, so the whole folder can be
+/// moved to a USB stick or another PC. Nothing container-related is stored
+/// outside this file.
 /// </para>
 /// </summary>
 public sealed record SandboxManifest
 {
     /// <summary>Format identifier/version so future readers can migrate.</summary>
-    public const string CurrentSchema = "wsm.sandbox/1";
+    public const string CurrentSchema = "wsm.sandbox/2";
+
+    /// <summary>The file extension of a portable sandbox file.</summary>
+    public const string FileExtension = ".wsm";
 
     /// <summary>Format identifier; always <see cref="CurrentSchema"/> for files we write.</summary>
     public string Schema { get; init; } = CurrentSchema;
 
-    /// <summary>The sandbox instance id (matches the aggregate and the repository record).</summary>
+    /// <summary>The sandbox instance id (also the identity used by the engines).</summary>
     public Guid Id { get; init; }
 
     /// <summary>The display name of the sandbox.</summary>
     public string Name { get; init; } = string.Empty;
 
-    /// <summary>True for RemoteApp/RAIL windows, false for a full desktop session.</summary>
-    public bool RailMode { get; init; }
-
     /// <summary>The preferred sandbox engine, or <c>null</c> for automatic selection.</summary>
     public SandboxEngineKind? Engine { get; init; }
-
-    /// <summary>Human-readable type derived from <see cref="RailMode"/> (not persisted).</summary>
-    [JsonIgnore]
-    public string Type => RailMode ? "RemoteApp" : "FullDesktop";
 
     public DateTimeOffset CreatedUtc { get; init; }
 
@@ -46,12 +43,21 @@ public sealed record SandboxManifest
     /// <summary>The complete recipe, embedded as a nested JSON object.</summary>
     public SandboxRecipe Recipe { get; init; } = SandboxRecipe.Default;
 
+    /// <summary>
+    /// The user-data folder, stored <b>relative to this file</b> so the sandbox
+    /// stays portable. Null/empty means "next to the <c>.wsm</c>".
+    /// </summary>
+    public string? DataPath { get; init; }
+
+    /// <summary>Human-readable type derived from the recipe (not persisted).</summary>
+    [JsonIgnore]
+    public string Type => Recipe.RailMode ? "RemoteApp" : "FullDesktop";
+
     /// <summary>Projects a live aggregate onto its manifest.</summary>
     public static SandboxManifest FromInstance(SandboxInstance instance) => new()
     {
         Id = instance.Id.Value,
         Name = instance.Name.Value,
-        RailMode = instance.Recipe.RailMode,
         Engine = instance.Engine,
         CreatedUtc = instance.CreatedUtc,
         UpdatedUtc = instance.UpdatedUtc,

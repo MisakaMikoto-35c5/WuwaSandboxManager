@@ -52,6 +52,34 @@ public sealed class HcsModuleGraphTests
     }
 
     [Fact]
+    public async Task Host_layout_defaults_the_sandbox_data_folder_off_programdata()
+    {
+        using var app = await AbpApplicationFactory.CreateAsync<HcsTestModule>();
+        await app.InitializeAsync();
+
+        try
+        {
+            var layout = app.ServiceProvider.GetRequiredService<IHcsHostLayout>();
+
+            Assert.Equal(@"C:\ProgramData\Microsoft\Windows\Containers", layout.PlatformContainersFolder);
+            Assert.EndsWith(
+                Path.Combine("Documents", "WsmContainers"),
+                layout.SandboxDataFolder,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("ProgramData", layout.SandboxDataFolder, StringComparison.OrdinalIgnoreCase);
+
+            var id = Guid.NewGuid().ToString("D");
+            Assert.Equal(
+                Path.Combine(layout.SandboxDataFolder, id),
+                layout.GetStorageDirectory(id));
+        }
+        finally
+        {
+            await app.ShutdownAsync();
+        }
+    }
+
+    [Fact]
     public async Task Sandbox_vm_json_builder_emits_expected_document()
     {
         using var app = await AbpApplicationFactory.CreateAsync<HcsTestModule>();

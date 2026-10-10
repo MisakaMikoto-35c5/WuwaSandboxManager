@@ -266,29 +266,7 @@ public sealed class SandboxManagerTests
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
-        return new SandboxManager(repository, selector, new StubSessionLauncher(), new StubManifestStore());
-    }
-
-    /// <summary>Records manifest writes/deletes without touching the file system.</summary>
-    private sealed class StubManifestStore : ISandboxManifestStore
-    {
-        public List<SandboxInstanceId> Saved { get; } = new();
-
-        public List<SandboxInstanceId> Deleted { get; } = new();
-
-        public string GetManifestPath(SandboxInstanceId id) => $"manifests/{id.Value:D}.wsbx";
-
-        public Task SaveAsync(SandboxInstance instance, CancellationToken cancellationToken = default)
-        {
-            Saved.Add(instance.Id);
-            return Task.CompletedTask;
-        }
-
-        public Task DeleteAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
-        {
-            Deleted.Add(id);
-            return Task.CompletedTask;
-        }
+        return new SandboxManager(repository, selector, new StubSessionLauncher());
     }
 
     private sealed class StubSessionLauncher : ISessionLauncher
@@ -330,6 +308,11 @@ public sealed class SandboxManagerTests
             _store.Remove(id);
             return Task.CompletedTask;
         }
+
+        public string GetManifestPath(SandboxInstanceId id) => $"sandboxes/{id.Value:D}.wsm";
+
+        public Task<SandboxInstance> ImportAsync(string manifestPath, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     private sealed class StubEngine : ISandboxEngine

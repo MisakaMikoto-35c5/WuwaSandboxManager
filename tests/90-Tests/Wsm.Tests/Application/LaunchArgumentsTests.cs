@@ -7,23 +7,23 @@ namespace Wsm.Tests.Application;
 public sealed class LaunchArgumentsTests
 {
     [Fact]
-    public void Finds_the_manifest_path_among_other_arguments()
+    public void Finds_the_sandbox_file_path_among_other_arguments()
     {
-        var args = new[] { @"C:\app\Wsm.Ui.WinUI.exe", "--verbose", @"C:\manifests\abc.wsbx" };
+        var args = new[] { @"C:\app\Wsm.Ui.WinUI.exe", "--verbose", @"D:\Special\Path\Something.wsm" };
 
         var path = WsmLaunchArguments.GetManifestPath(args);
 
-        Assert.Equal(@"C:\manifests\abc.wsbx", path);
+        Assert.Equal(@"D:\Special\Path\Something.wsm", path);
     }
 
     [Fact]
     public void Is_case_insensitive_on_the_extension()
     {
-        Assert.True(WsmLaunchArguments.IsManifestPath(@"C:\manifests\abc.WSBX"));
+        Assert.True(WsmLaunchArguments.IsManifestPath(@"C:\manifests\abc.WSM"));
     }
 
     [Fact]
-    public void Returns_null_when_no_manifest_is_present()
+    public void Returns_null_when_no_sandbox_file_is_present()
     {
         var args = new[] { @"C:\app\Wsm.Ui.WinUI.exe", "--help" };
 
@@ -33,7 +33,7 @@ public sealed class LaunchArgumentsTests
     [Fact]
     public void Ignores_switches_and_empty_values()
     {
-        Assert.False(WsmLaunchArguments.IsManifestPath("--wsbx"));
+        Assert.False(WsmLaunchArguments.IsManifestPath("--wsm"));
         Assert.False(WsmLaunchArguments.IsManifestPath(""));
         Assert.False(WsmLaunchArguments.IsManifestPath(null));
         Assert.Null(WsmLaunchArguments.GetManifestPath(null));

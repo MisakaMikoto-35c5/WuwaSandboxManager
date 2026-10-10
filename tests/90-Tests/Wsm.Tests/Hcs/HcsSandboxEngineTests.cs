@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Wsm.Domain.Exceptions;
 using Wsm.Domain.ValueObjects;
 using Wsm.Engine.Hcs;
 using Wsm.Engines.Abstractions;
@@ -72,6 +73,49 @@ public sealed class HcsSandboxEngineTests
     }
 
     [Fact]
+    public async Task Start_grants_vm_access_to_every_storage_file_including_the_base_disk()
+    {
+        var hcs = new FakeHcsClient();
+        var engine = CreateEngine(hcs, out _);
+
+        var id = SandboxInstanceId.New();
+        await engine.StartAsync(Request(id));
+
+        var storage = Path.Combine(Path.GetTempPath(), "wsm-test-" + id);
+
+        // The parent base copy was the file that was previously never granted;
+        // under the per-user Documents location its absence made Start fail
+        // with 0xC03A0016.
+        Assert.Contains(Path.Combine(storage, "sandbox.base.vhdx"), hcs.Granted);
+        Assert.Contains(Path.Combine(storage, "sandbox.vhdx"), hcs.Granted);
+        Assert.Contains(Path.Combine(storage, "sandbox.vmgs"), hcs.Granted);
+
+        // The crash-dump placeholder is covered by directory enumeration.
+        Assert.Contains(Path.Combine(storage, id + ".dmp"), hcs.Granted);
+
+        // The directory itself is granted best-effort.
+        Assert.Contains(storage, hcs.Granted);
+    }
+
+    [Fact]
+    public async Task Start_surfaces_a_failed_storage_grant_and_releases_the_handle()
+    {
+        var hcs = new FakeHcsClient();
+        var engine = CreateEngine(hcs, out _);
+
+        var id = SandboxInstanceId.New();
+        var baseDisk = Path.Combine(Path.GetTempPath(), "wsm-test-" + id, "sandbox.base.vhdx");
+        hcs.FailGrantFor = path => string.Equals(path, baseDisk, StringComparison.OrdinalIgnoreCase);
+
+        var ex = await Assert.ThrowsAsync<SandboxBackendException>(() => engine.StartAsync(Request(id)));
+
+        Assert.Contains("sandbox.base.vhdx", ex.Message);
+        Assert.NotNull(hcs.LastHandle);
+        Assert.True(hcs.LastHandle!.Disposed);
+        Assert.DoesNotContain(id.ToString(), hcs.Started);
+    }
+
+    [Fact]
     public async Task DeleteData_removes_storage_and_snapshot_directories()
     {
         var engine = CreateEngine(new FakeHcsClient(), out _);
@@ -132,6 +176,11 @@ public sealed class HcsSandboxEngineTests
 
         public List<string> Terminated { get; } = new();
 
+        public List<string> Granted { get; } = new();
+
+        /// <summary>When set, a grant whose path matches throws.</summary>
+        public Func<string, bool>? FailGrantFor { get; set; }
+
         public TrackingHandle? LastHandle { get; private set; }
 
         public IReadOnlyList<HcsComputeSystemInfo> List(string? query = null)
@@ -165,20 +214,28 @@ public sealed class HcsSandboxEngineTests
 
         public void GrantVmAccess(string id, string path)
         {
+            if (FailGrantFor?.Invoke(path) == true)
+            {
+                throw new InvalidOperationException($"Access denied for '{path}'.");
+            }
+
+            Granted.Add(path);
         }
     }
 
     private sealed class FakeLayout : IHcsHostLayout
     {
-        public string DataRoot => Path.GetTempPath();
+        public string PlatformContainersFolder => Path.GetTempPath();
 
-        public string LayersRoot => Path.GetTempPath();
+        public string LayersFolder => Path.GetTempPath();
 
-        public string BaseImagesRoot => Path.GetTempPath();
+        public string BaseImagesFolder => Path.GetTempPath();
 
-        public string StorageRoot => Path.GetTempPath();
+        public string PlatformContainerStoragesFolder => Path.GetTempPath();
 
-        public string SnapshotsRoot => Path.GetTempPath();
+        public string SnapshotsFolder => Path.GetTempPath();
+
+        public string SandboxDataFolder => Path.GetTempPath();
 
         public string GetStorageDirectory(string id) => Path.Combine(Path.GetTempPath(), "wsm-test-" + id);
 
@@ -192,10 +249,13 @@ public sealed class HcsSandboxEngineTests
         public StorageLayout Provision(string storageDirectory, uint diskSizeMb = 0)
         {
             Directory.CreateDirectory(storageDirectory);
-            return new StorageLayout(
-                storageDirectory,
-                Path.Combine(storageDirectory, "sandbox.vhdx"),
-                Path.Combine(storageDirectory, "sandbox.vmgs"));
+            var disk = Path.Combine(storageDirectory, "sandbox.vhdx");
+            var guestState = Path.Combine(storageDirectory, "sandbox.vmgs");
+            var baseDisk = Path.Combine(storageDirectory, "sandbox.base.vhdx");
+            File.WriteAllText(disk, "disk");
+            File.WriteAllText(guestState, "vmgs");
+            File.WriteAllText(baseDisk, "base");
+            return new StorageLayout(storageDirectory, disk, guestState, baseDisk);
         }
     }
 

@@ -22,18 +22,15 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     private readonly ISandboxInstanceRepository _repository;
     private readonly ISandboxEngineSelector _selector;
     private readonly ISessionLauncher _sessionLauncher;
-    private readonly ISandboxManifestStore _manifests;
 
     public SandboxManager(
         ISandboxInstanceRepository repository,
         ISandboxEngineSelector selector,
-        ISessionLauncher sessionLauncher,
-        ISandboxManifestStore manifests)
+        ISessionLauncher sessionLauncher)
     {
         _repository = repository;
         _selector = selector;
         _sessionLauncher = sessionLauncher;
-        _manifests = manifests;
     }
 
     public async Task<SandboxInstanceDto> CreateAsync(string? name, SandboxRecipe recipe, SandboxEngineKind? engine = null, CancellationToken cancellationToken = default)
@@ -51,6 +48,12 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     {
         var instances = await _repository.ListAsync(cancellationToken).ConfigureAwait(false);
         return instances.Select(ToDto).ToArray();
+    }
+
+    public async Task<SandboxInstanceDto> ImportAsync(string manifestPath, CancellationToken cancellationToken = default)
+    {
+        var instance = await _repository.ImportAsync(manifestPath, cancellationToken).ConfigureAwait(false);
+        return ToDto(instance);
     }
 
     public async Task<SandboxInstanceDto> GetAsync(Guid id, CancellationToken cancellationToken = default)
@@ -87,7 +90,6 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         }
 
         await _repository.DeleteAsync(instance.Id, cancellationToken).ConfigureAwait(false);
-        await _manifests.DeleteAsync(instance.Id, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<SandboxInstanceDto> StartAsync(Guid id, SandboxConnectionMode mode, CancellationToken cancellationToken = default)
@@ -261,11 +263,10 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         return instance ?? throw new SandboxNotFoundException($"Sandbox '{id}' was not found.");
     }
 
-    /// <summary>Persists the aggregate and keeps its <c>.wsbx</c> manifest in sync.</summary>
+    /// <summary>Persists the aggregate as its single portable <c>.wsm</c> file.</summary>
     private async Task PersistAsync(SandboxInstance instance, CancellationToken cancellationToken)
     {
         await _repository.SaveAsync(instance, cancellationToken).ConfigureAwait(false);
-        await _manifests.SaveAsync(instance, cancellationToken).ConfigureAwait(false);
     }
 
     private static SandboxStartRequest RequestFor(SandboxInstance instance) => new()
@@ -295,5 +296,5 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             instance.CreatedUtc,
             instance.UpdatedUtc,
             instance.Engine,
-            _manifests.GetManifestPath(instance.Id));
+            _repository.GetManifestPath(instance.Id));
 }

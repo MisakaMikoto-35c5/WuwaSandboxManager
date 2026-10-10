@@ -17,6 +17,7 @@
   <data name="AppTitle.Text" xml:space="preserve"><value>Windows Sandbox 管理器</value></data>
   <data name="AppSubtitle.Text" xml:space="preserve"><value>跨引擎控制 Windows Sandbox</value></data>
   <data name="NewButton.Content" xml:space="preserve"><value>新建沙箱</value></data>
+  <data name="OpenButton.Content" xml:space="preserve"><value>打开</value></data>
   <data name="RefreshButton.Content" xml:space="preserve"><value>刷新</value></data>
   <data name="SettingsButton.Content" xml:space="preserve"><value>设置</value></data>
   <data name="ElevateButton.Content" xml:space="preserve"><value>以管理员重启</value></data>
@@ -25,6 +26,8 @@
   <data name="AppSettingsDialog.Title" xml:space="preserve"><value>设置</value></data>
   <data name="AppSettingsDialog.CloseButtonText" xml:space="preserve"><value>关闭</value></data>
   <data name="LanguageLabel.Text" xml:space="preserve"><value>语言</value></data>
+  <data name="ConfigDataFolderLabel.Text" xml:space="preserve"><value>配置+数据文件夹</value></data>
+  <data name="ConfigDataFolderHint.Text" xml:space="preserve"><value>每个沙箱一个子文件夹，包含其清单、recipe 与数据。更改后应用会重启。</value></data>
   <data name="EnginesSection.Text" xml:space="preserve"><value>引擎</value></data>
   <data name="EnginesCaption.Text" xml:space="preserve"><value>提权时使用 HCS，否则使用 Windows Sandbox。</value></data>
   <data name="EnvironmentSection.Text" xml:space="preserve"><value>环境</value></data>
@@ -59,9 +62,7 @@
   <data name="CreateTypeRemoteApp.Content" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="CreateTypeDesktop.Content" xml:space="preserve"><value>完整桌面</value></data>
   <data name="CreateEngineHeader.Text" xml:space="preserve"><value>引擎</value></data>
-  <data name="CreateStorageHeader.Text" xml:space="preserve"><value>数据位置</value></data>
   <data name="BrowseButton.Content" xml:space="preserve"><value>浏览</value></data>
-  <data name="CreateStorageHint.Text" xml:space="preserve"><value>留空则使用平台默认位置。</value></data>
   <data name="CreateResourcesExpander.Header" xml:space="preserve"><value>资源</value></data>
   <data name="CreateMemoryBox.Header" xml:space="preserve"><value>内存 (MB)</value></data>
   <data name="CreateCpuBox.Header" xml:space="preserve"><value>CPU 核数</value></data>
@@ -74,7 +75,6 @@
   <data name="SummaryCpu.Text" xml:space="preserve"><value>CPU 核数</value></data>
   <data name="SummaryLocation.Text" xml:space="preserve"><value>数据位置</value></data>
   <data name="SummaryEngine.Text" xml:space="preserve"><value>引擎</value></data>
-  <data name="Summary.LocationDefault.Text" xml:space="preserve"><value>平台默认</value></data>
   <data name="Type.RemoteApp.Text" xml:space="preserve"><value>RemoteApp (RAIL)</value></data>
   <data name="Type.Desktop.Text" xml:space="preserve"><value>完整桌面</value></data>
   <data name="PrimaryStartButton.Content" xml:space="preserve"><value>启动</value></data>
@@ -102,8 +102,7 @@
   <data name="ProtectedSwitch.Header" xml:space="preserve"><value>受保护客户端</value></data>
   <data name="RebootSwitch.Header" xml:space="preserve"><value>允许来宾重启</value></data>
   <data name="StorageSection.Text" xml:space="preserve"><value>存储</value></data>
-  <data name="StoragePathBox.Header" xml:space="preserve"><value>用户数据位置</value></data>
-  <data name="StoragePathBox.PlaceholderText" xml:space="preserve"><value>（默认）C:\ProgramData\Microsoft\Windows\Containers\ContainerStorages\&lt;id&gt;</value></data>
+  <data name="SandboxFolderLabel.Text" xml:space="preserve"><value>文件夹</value></data>
   <data name="DiskSizeBox.Header" xml:space="preserve"><value>磁盘大小 (MB，0 为默认)</value></data>
   <data name="FoldersSection.Text" xml:space="preserve"><value>映射文件夹</value></data>
   <data name="NewFolderBox.PlaceholderText" xml:space="preserve"><value>C:\主机\文件夹路径</value></data>
@@ -159,6 +158,7 @@
 
   <!-- Status messages -->
   <data name="Status.Ready.Text" xml:space="preserve"><value>就绪。</value></data>
+  <data name="Status.Opened.Text" xml:space="preserve"><value>沙箱已打开。</value></data>
   <data name="Status.Created.Text" xml:space="preserve"><value>沙箱已创建。</value></data>
   <data name="Status.Saved.Text" xml:space="preserve"><value>定义已更新。</value></data>
   <data name="Status.Stopped.Text" xml:space="preserve"><value>已停止。</value></data>

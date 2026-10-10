@@ -4,7 +4,7 @@ using Wsm.Application;
 namespace Wsm.Ui.WinUI;
 
 /// <summary>
-/// Registers the <c>.wsbx</c> sandbox-manifest file type under HKCU (no admin
+/// Registers the <c>.wsm</c> portable sandbox file type under HKCU (no admin
 /// required). Idempotent: re-running simply overwrites the same values, and all
 /// failures are ignored by the caller.
 /// </summary>
@@ -12,7 +12,7 @@ internal static class FileAssociationRegistrar
 {
     private const string ClassesRoot = @"Software\Classes";
 
-    /// <summary>Writes the extension, ProgID and open command for <c>.wsbx</c>.</summary>
+    /// <summary>Writes the extension, ProgID and open command for <c>.wsm</c>.</summary>
     public static void Register(string executablePath)
     {
         using (var extension = Registry.CurrentUser.CreateSubKey($@"{ClassesRoot}\{WsmFileAssociation.Extension}"))

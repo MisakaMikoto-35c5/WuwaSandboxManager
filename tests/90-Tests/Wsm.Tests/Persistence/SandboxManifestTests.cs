@@ -5,7 +5,7 @@ using Xunit;
 
 namespace Wsm.Tests.Persistence;
 
-/// <summary>Covers the <c>.wsbx</c> sandbox manifest JSON format round-trip.</summary>
+/// <summary>Covers the portable <c>.wsm</c> sandbox JSON format round-trip.</summary>
 public sealed class SandboxManifestTests
 {
     [Fact]
@@ -27,11 +27,11 @@ public sealed class SandboxManifestTests
         {
             Id = id,
             Name = "Ribbon",
-            RailMode = true,
             Engine = SandboxEngineKind.HcsSandbox,
             CreatedUtc = DateTimeOffset.UtcNow,
             UpdatedUtc = DateTimeOffset.UtcNow,
             Recipe = recipe,
+            DataPath = "data",
         };
 
         var parsed = SandboxManifest.FromJson(manifest.ToJson());
@@ -40,9 +40,10 @@ public sealed class SandboxManifestTests
         Assert.Equal(SandboxManifest.CurrentSchema, parsed!.Schema);
         Assert.Equal(id, parsed.Id);
         Assert.Equal("Ribbon", parsed.Name);
-        Assert.True(parsed.RailMode);
+        Assert.True(parsed.Recipe.RailMode);
         Assert.Equal(SandboxEngineKind.HcsSandbox, parsed.Engine);
         Assert.Equal("RemoteApp", parsed.Type);
+        Assert.Equal("data", parsed.DataPath);
         Assert.Equal(8192, parsed.Recipe.Memory.MemoryMb);
         Assert.Equal(6, parsed.Recipe.Cpu.CoreCount);
         Assert.True(parsed.Recipe.FullScreen);
@@ -58,7 +59,7 @@ public sealed class SandboxManifestTests
     {
         var directory = Path.Combine(Path.GetTempPath(), "wsm-tests-" + Guid.NewGuid());
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"{Guid.NewGuid():D}.wsbx");
+        var path = Path.Combine(directory, $"Something{SandboxManifest.FileExtension}");
 
         try
         {
@@ -70,7 +71,7 @@ public sealed class SandboxManifestTests
             Assert.NotNull(read);
             Assert.Equal(manifest.Id, read!.Id);
             Assert.Equal("File", read.Name);
-            Assert.False(read.RailMode);
+            Assert.False(read.Recipe.RailMode);
             Assert.Equal("FullDesktop", read.Type);
         }
         finally
@@ -95,6 +96,6 @@ public sealed class SandboxManifestTests
     [Fact]
     public void TryReadFile_returns_null_for_a_missing_file()
     {
-        Assert.Null(SandboxManifest.TryReadFile(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("D") + ".wsbx")));
+        Assert.Null(SandboxManifest.TryReadFile(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("D") + ".wsm")));
     }
 }

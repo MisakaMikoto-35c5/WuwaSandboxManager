@@ -46,8 +46,8 @@ internal sealed class CheckpointService : ICheckpointService, ISingletonDependen
     {
         var id = Guid.NewGuid();
         // Scope the checkpoint directory by the owning compute system id:
-        //   <SnapshotsRoot>\<systemId>\<checkpointId>\SnapshotSavedState.vmrs
-        var directory = Path.Combine(_layout.SnapshotsRoot, systemId, id.ToString());
+        //   <SnapshotsFolder>\<systemId>\<checkpointId>\SnapshotSavedState.vmrs
+        var directory = Path.Combine(_layout.SnapshotsFolder, systemId, id.ToString());
         Directory.CreateDirectory(directory);
         var statePath = Path.Combine(directory, "SnapshotSavedState.vmrs");
 
@@ -67,7 +67,7 @@ internal sealed class CheckpointService : ICheckpointService, ISingletonDependen
         try
         {
             // Only enumerate this system's own snapshot folder.
-            var systemRoot = Path.Combine(_layout.SnapshotsRoot, systemId);
+            var systemRoot = Path.Combine(_layout.SnapshotsFolder, systemId);
             if (!Directory.Exists(systemRoot))
             {
                 return results;

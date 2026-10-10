@@ -118,7 +118,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         var baseLayer = _layout.ResolveBaseLayerPath()
             ?? throw new SandboxNotSupportedException(
                 "No usable base OS image layer was found under " +
-                $"{_layout.LayersRoot}. Start Windows Sandbox once so the base layer is provisioned.");
+                $"{_layout.LayersFolder}. Start Windows Sandbox once so the base layer is provisioned.");
 
         var storageDirectory = recipe.Storage.HasCustomLocation
             ? recipe.Storage.StoragePath!
@@ -166,16 +166,21 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         try
         {
             // The compute system runs as a different identity than this process,
-            // so grant it explicit access to the freshly-provisioned storage.
-            // Best effort: storage created under ProgramData normally inherits
-            // SYSTEM's full control already, and a genuine access problem will
-            // surface clearly from Start.
-            GrantVmAccessQuietly(id.ToString(), storage.DiskPath);
-            GrantVmAccessQuietly(id.ToString(), storage.GuestStatePath);
-            if (!string.IsNullOrWhiteSpace(definition.DumpFilePath))
-            {
-                GrantVmAccessQuietly(id.ToString(), definition.DumpFilePath);
-            }
+            // so it needs explicit access to every file backing the sandbox.
+            // Storage under ProgramData inherits a broad ACL, but the default
+            // per-user Documents location does not: before this the parent base
+            // copy (sandbox.base.vhdx) was never granted, so Start failed with
+            // 0xC03A0016 ("the process lacks permission"). The disk/guest-state
+            // files are mandatory, so a failed grant is surfaced (actionable)
+            // rather than swallowed; every other file in the directory — the
+            // crash-dump placeholder, and anything a future provisioner adds —
+            // is granted best-effort, as is the directory itself.
+            GrantDiskFileAccess(id.ToString(), storage.DiskPath);
+            GrantDiskFileAccess(id.ToString(), storage.BaseDiskPath);
+            GrantDiskFileAccess(id.ToString(), storage.GuestStatePath);
+
+            GrantRemainingStorageFilesQuietly(id.ToString(), storage);
+            GrantVmAccessQuietly(id.ToString(), storage.Directory);
 
             _hcs.Start(id.ToString());
         }
@@ -280,7 +285,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     {
         var key = id.ToString();
         DeleteDirectoryQuietly(_layout.GetStorageDirectory(key), key, "storage");
-        DeleteDirectoryQuietly(Path.Combine(_layout.SnapshotsRoot, key), key, "snapshots");
+        DeleteDirectoryQuietly(Path.Combine(_layout.SnapshotsFolder, key), key, "snapshots");
         return Task.CompletedTask;
     }
 
@@ -408,6 +413,74 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Granting VM access to '{Path}' for {SandboxId} failed (continuing).", path, id);
+        }
+    }
+
+    /// <summary>
+    /// Grants the compute system access to a storage file that the sandbox
+    /// <b>must</b> be able to read. A failure is surfaced as a
+    /// <see cref="SandboxBackendException"/> naming the path: HCS runs the
+    /// sandbox under a different identity, so without the grant <c>Start</c>
+    /// fails opaquely with <c>0xC03A0016</c>; a genuine ACL problem should be
+    /// actionable. A path that does not exist (e.g. the base copy when a
+    /// standalone/blank disk was used) is skipped — there is nothing to grant.
+    /// </summary>
+    private void GrantDiskFileAccess(string id, string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            _hcs.GrantVmAccess(id, path);
+        }
+        catch (Exception ex)
+        {
+            throw new SandboxBackendException(
+                $"Failed to grant the sandbox compute system access to storage file '{path}'. " +
+                "HCS runs the sandbox under a different identity and needs explicit access " +
+                "to every backing file; without it Start fails with 0xC03A0016 " +
+                $"(\"the process lacks permission\"). {ex.Message}",
+                ex.HResult,
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort grant of every <i>other</i> file in the storage directory
+    /// (the crash-dump placeholder, and any file a future provisioner adds).
+    /// Enumerating the directory — rather than hard-coding file names — keeps
+    /// the sandbox startable when the storage layout grows; a failure is logged,
+    /// never thrown, because these files are optional to the disk access path.
+    /// </summary>
+    private void GrantRemainingStorageFilesQuietly(string id, StorageLayout storage)
+    {
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(storage.Directory, "*", SearchOption.TopDirectoryOnly);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex,
+                "Enumerating storage directory '{Directory}' for {SandboxId} failed (continuing).",
+                storage.Directory, id);
+            return;
+        }
+
+        foreach (var file in files)
+        {
+            if (string.Equals(file, storage.DiskPath, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(file, storage.BaseDiskPath, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(file, storage.GuestStatePath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            GrantVmAccessQuietly(id, file);
         }
     }
 }

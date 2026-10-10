@@ -4,7 +4,6 @@ using Volo.Abp.DependencyInjection;
 using WindowsSandboxManager.Domain.Exceptions;
 using WindowsSandboxManager.Domain.ValueObjects;
 using Wsm.Host.Environment;
-using Wsm.Recipe.Serialization;
 
 namespace Wsm.Connection.Session.Internal;
 
@@ -18,22 +17,18 @@ namespace Wsm.Connection.Session.Internal;
 internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
 {
     private readonly ISandboxEnvironment _environment;
-    private readonly ISandboxRecipeSerializer _serializer;
     private readonly ILogger<SessionLauncher> _logger;
 
     public SessionLauncher(
         ISandboxEnvironment environment,
-        ISandboxRecipeSerializer serializer,
         ILogger<SessionLauncher> logger)
     {
         _environment = environment;
-        _serializer = serializer;
         _logger = logger;
     }
 
     public Task LaunchAsync(
         SandboxInstanceId id,
-        SandboxRecipe recipe,
         SandboxRuntimeInfo runtime,
         SandboxConnectionMode mode,
         CancellationToken cancellationToken = default)

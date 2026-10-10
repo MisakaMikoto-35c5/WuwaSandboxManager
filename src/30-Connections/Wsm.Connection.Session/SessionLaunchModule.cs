@@ -1,6 +1,5 @@
 using Volo.Abp.Modularity;
 using Wsm.Host.Environment;
-using Wsm.Recipe.Serialization;
 
 namespace Wsm.Connection.Session;
 
@@ -9,9 +8,7 @@ namespace Wsm.Connection.Session;
 /// session through <see cref="ISessionLauncher"/> by launching the packaged
 /// <c>WindowsSandboxRemoteSession.exe</c> client.
 /// </summary>
-[DependsOn(
-    typeof(HostEnvironmentModule),
-    typeof(WsbRecipeSerializationModule))]
+[DependsOn(typeof(HostEnvironmentModule))]
 public sealed class SessionLaunchModule : AbpModule
 {
 }

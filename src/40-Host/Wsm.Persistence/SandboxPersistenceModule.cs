@@ -1,5 +1,6 @@
 using Volo.Abp.Modularity;
 using WindowsSandboxManager.Domain;
+using Wsm.Recipe.Serialization;
 
 namespace Wsm.Persistence;
 
@@ -7,7 +8,7 @@ namespace Wsm.Persistence;
 /// ABP module for sandbox instance persistence. Stores each instance as a JSON
 /// aggregate record plus a human-editable <c>.wsb</c> recipe sidecar.
 /// </summary>
-[DependsOn(typeof(SandboxDomainModule))]
+[DependsOn(typeof(SandboxDomainModule), typeof(WsbRecipeSerializationModule))]
 public sealed class SandboxPersistenceModule : AbpModule
 {
 }

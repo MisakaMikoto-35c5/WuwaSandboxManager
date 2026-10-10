@@ -2,8 +2,8 @@ using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Volo.Abp.DependencyInjection;
 using WindowsSandboxManager.Domain;
-using WindowsSandboxManager.Domain.Abstractions;
 using WindowsSandboxManager.Domain.ValueObjects;
+using Wsm.Recipe.Serialization;
 
 namespace Wsm.Persistence.Internal;
 

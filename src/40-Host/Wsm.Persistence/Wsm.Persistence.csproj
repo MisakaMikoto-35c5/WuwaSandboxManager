@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+    <ProjectReference Include="..\..\30-Connections\Wsm.Recipe.Serialization\Wsm.Recipe.Serialization.csproj" />
   </ItemGroup>
 
   <ItemGroup>

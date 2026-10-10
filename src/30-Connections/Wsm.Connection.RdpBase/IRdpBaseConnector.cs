@@ -1,8 +1,8 @@
-// Deviation note (gate-approved): RDPBASE inherently needs two separate
-// operations — create the connector and connect it to a pipe — so this module
-// exposes two public interfaces instead of the usual one. The factory is the
-// ABP-registered singleton; the connector itself stays internal and is produced
-// by the factory, so the public surface remains intentional and minimal.
+// RDPBASE is a factory/product pair: one operation creates the named-pipe
+// connector, and a separate operation connects it to a pipe. Two interfaces are
+// therefore needed. The factory is the ABP-registered singleton; the connector
+// itself stays internal and is produced by the factory, so the public surface
+// remains minimal.
 
 namespace Wsm.Connection.RdpBase;
 

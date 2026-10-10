@@ -15,7 +15,6 @@ public interface ISessionLauncher
 {
     Task LaunchAsync(
         SandboxInstanceId id,
-        SandboxRecipe recipe,
         SandboxRuntimeInfo runtime,
         SandboxConnectionMode mode,
         CancellationToken cancellationToken = default);

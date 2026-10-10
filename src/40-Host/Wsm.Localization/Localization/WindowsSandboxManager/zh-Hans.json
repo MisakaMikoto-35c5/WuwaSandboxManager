@@ -1,0 +1,10 @@
+{
+  "culture": "zh-Hans",
+  "texts": {
+    "EngineUnavailable": "此主机上没有可用的沙箱引擎。HCS 引擎需要提权进程：请以管理员身份运行（或加入 Hyper-V Administrators 组），或启用 Windows Sandbox 可选功能。",
+    "MultipleInstances": "此引擎不支持多个并发实例。请停止正在运行的实例，或启用多实例支持（参见 'wsm multi'）。",
+    "CheckpointNotSupported": "所选引擎不支持检查点。",
+    "SandboxNotFound": "未找到请求的沙箱。",
+    "ElevationRequired": "此操作需要管理员权限。请以提权方式重新启动应用程序以继续。"
+  }
+}

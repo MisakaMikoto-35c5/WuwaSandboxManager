@@ -24,6 +24,7 @@
     <PackageVersion Include="Volo.Abp.Core" Version="10.2.0" />
     <PackageVersion Include="Volo.Abp.Autofac" Version="10.2.0" />
     <PackageVersion Include="Volo.Abp.Localization" Version="10.2.0" />
+    <PackageVersion Include="Volo.Abp.VirtualFileSystem" Version="10.2.0" />
 
     <!-- MVVM for the WinUI3 presentation layer -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.0" />

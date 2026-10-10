@@ -69,7 +69,8 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             {
                 var message =
                     "This engine does not allow multiple concurrent instances. " +
-                    $"Running instance(s): {string.Join(", ", others.Select(other => other.Value))}.";
+                    $"Running instance(s): {string.Join(", ", others.Select(other => other.Value))}. " +
+                    "Stop the running instance, or enable multi-instance support (see 'wsm multi').";
                 instance.MarkFaulted(message);
                 await _repository.SaveAsync(instance, cancellationToken).ConfigureAwait(false);
                 throw new MultipleInstancesNotAllowedException(message);

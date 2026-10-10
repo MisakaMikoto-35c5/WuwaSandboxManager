@@ -40,6 +40,7 @@
     <Project Path="src/40-Host/Wsm.Host.Elevation/Wsm.Host.Elevation.csproj" />
     <Project Path="src/40-Host/Wsm.Host.Environment/Wsm.Host.Environment.csproj" />
     <Project Path="src/40-Host/Wsm.Persistence/Wsm.Persistence.csproj" />
+    <Project Path="src/40-Host/Wsm.Localization/Wsm.Localization.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WindowsSandboxManager.Tests/WindowsSandboxManager.Tests.csproj" />

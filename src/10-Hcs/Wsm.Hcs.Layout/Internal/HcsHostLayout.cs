@@ -29,8 +29,6 @@ internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
 
     public string GetStorageDirectory(string id) => Path.Combine(StorageRoot, id);
 
-    public string GetSnapshotDirectory(string id) => Path.Combine(SnapshotsRoot, id);
-
     /// <summary>Enumerates the registered layers (newest sequence number first).</summary>
     public IReadOnlyList<HcsLayerInfo> ListLayers()
     {

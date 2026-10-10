@@ -37,6 +37,7 @@
 | 09 | [09-networking-and-vsmb.md](09-networking-and-vsmb.md) | 网络（HNS）与 vSMB/HvSocket / Networking (HNS) and vSMB/HvSocket |
 | 10 | [10-hcs-schema-and-native-api.md](10-hcs-schema-and-native-api.md) | HCS JSON Schema 与原生 API 参考 / HCS JSON schema and native API reference |
 | 11 | [11-project-mapping.md](11-project-mapping.md) | 本项目（WindowsSandboxManager）映射与能力矩阵 / How this project maps to the above |
+| 12 | [12-modular-architecture.md](12-modular-architecture.md) | ABP 模块化架构：程序集分层、约定规约、多引擎抽象、本地化 / ABP modular architecture |
 
 > 早前的单文件汇总版仍保留在 [`../investigation.md`](../investigation.md)。
 >

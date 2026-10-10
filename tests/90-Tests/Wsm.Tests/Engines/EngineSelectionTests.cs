@@ -7,6 +7,9 @@ using Wsm.Application.EngineSelection;
 using Wsm.Application.EngineSelection.Internal;
 using Wsm.Engines.Abstractions;
 using Wsm.Engines.Abstractions.Internal;
+using Wsm.Hcs.Json.Container;
+using Wsm.Hcs.Network;
+using Wsm.Hcs.Process;
 using Xunit;
 
 namespace Wsm.Tests.Engines;
@@ -42,6 +45,11 @@ public sealed class EngineSelectionTests
             Assert.NotNull(app.ServiceProvider.GetRequiredService<ISandboxEngineRegistry>());
             Assert.NotNull(app.ServiceProvider.GetRequiredService<ISandboxEngineSelector>());
             Assert.NotNull(app.ServiceProvider.GetRequiredService<ISandboxManager>());
+
+            // The reserved capability modules register by convention and resolve.
+            Assert.NotNull(app.ServiceProvider.GetRequiredService<IContainerJsonBuilder>());
+            Assert.NotNull(app.ServiceProvider.GetRequiredService<IComputeProcessExecutor>());
+            Assert.NotNull(app.ServiceProvider.GetRequiredService<IHnsNetworkService>());
         }
         finally
         {
@@ -113,6 +121,23 @@ public sealed class EngineSelectionTests
     }
 
     [Fact]
+    public void Select_never_returns_an_unavailable_engine_even_when_all_capable()
+    {
+        // An unavailable engine that advertises every capability must still be
+        // filtered out by IsAvailable — both as the preferred engine and as the
+        // default fallback.
+        var unavailableAllCapable = new StubEngine(
+            SandboxEngineKind.HcsSandbox,
+            available: false,
+            capabilities: AllCapabilities());
+        var available = new StubEngine(SandboxEngineKind.WindowsSandbox, available: true);
+        var selector = Selector(unavailableAllCapable, available);
+
+        Assert.Same(available, selector.Select(Request(preferred: SandboxEngineKind.HcsSandbox)));
+        Assert.Same(available, selector.Select(Request()));
+    }
+
+    [Fact]
     public async Task Optional_members_throw_not_supported_by_default()
     {
         // Default interface members are only reachable through the interface.
@@ -142,6 +167,19 @@ public sealed class EngineSelectionTests
         var current = SandboxCpuConfiguration.Default().CoreCount;
         return new SandboxCpuConfiguration(current == 1 ? 2 : 1);
     }
+
+    private static SandboxEngineCapabilities AllCapabilities() => new()
+    {
+        SupportsMultipleInstances = true,
+        SupportsCpuConfiguration = true,
+        SupportsCustomStorageLocation = true,
+        SupportsCustomBaseImage = true,
+        SupportsCheckpoints = true,
+        SupportsRuntimeFolderMapping = true,
+        SupportsProcessExecution = true,
+        SupportsEnumeration = true,
+        RequiresElevation = true,
+    };
 
     /// <summary>Minimal engine stub; only Kind/Availability/Capabilities are meaningful.</summary>
     private sealed class StubEngine : ISandboxEngine

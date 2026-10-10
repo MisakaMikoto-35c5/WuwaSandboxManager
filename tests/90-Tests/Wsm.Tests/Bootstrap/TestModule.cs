@@ -9,7 +9,8 @@ namespace Wsm.Tests.Bootstrap;
 [DependsOn(
     typeof(WindowsSandboxManager.Domain.SandboxDomainModule),
     typeof(Wsm.Engines.Abstractions.SandboxEngineAbstractionsModule),
-    typeof(Wsm.Application.SandboxApplicationModule))]
+    typeof(Wsm.Application.SandboxApplicationModule),
+    typeof(Wsm.Localization.WsmLocalizationModule))]
 public sealed class TestModule : AbpModule
 {
 }

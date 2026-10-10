@@ -33,6 +33,7 @@
     <ProjectReference Include="..\..\..\src\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
     <ProjectReference Include="..\..\..\src\40-Host\Wsm.Host.Environment\Wsm.Host.Environment.csproj" />
     <ProjectReference Include="..\..\..\src\40-Host\Wsm.Persistence\Wsm.Persistence.csproj" />
+    <ProjectReference Include="..\..\..\src\40-Host\Wsm.Localization\Wsm.Localization.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -40,6 +41,7 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Volo.Abp.Core" />
+    <PackageReference Include="Volo.Abp.Autofac" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,10 @@
+{
+  "culture": "en",
+  "texts": {
+    "EngineUnavailable": "No sandbox engine is available on this host. The HCS engine requires an elevated process: run as Administrator (or as a member of the Hyper-V Administrators group), or enable the Windows Sandbox optional feature.",
+    "MultipleInstances": "This engine does not allow multiple concurrent instances. Stop the running instance, or enable multi-instance support (see 'wsm multi').",
+    "CheckpointNotSupported": "The selected engine does not support checkpoints.",
+    "SandboxNotFound": "The requested sandbox was not found.",
+    "ElevationRequired": "This operation requires administrator privileges. Restart the application elevated to continue."
+  }
+}

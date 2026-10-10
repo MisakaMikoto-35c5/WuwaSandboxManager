@@ -25,4 +25,8 @@
     <Protobuf Include="Grpc\sandbox_core.proto" GrpcServices="Client" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
+  </ItemGroup>
+
 </Project>

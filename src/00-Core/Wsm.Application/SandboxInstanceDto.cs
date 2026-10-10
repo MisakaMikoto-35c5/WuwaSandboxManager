@@ -12,4 +12,7 @@ public sealed record SandboxInstanceDto(
     string Name,
     SandboxState State,
     SandboxRecipe Recipe,
-    SandboxRuntimeInfo? Runtime);
+    SandboxRuntimeInfo? Runtime,
+    string? FaultReason,
+    DateTimeOffset CreatedUtc,
+    DateTimeOffset UpdatedUtc);

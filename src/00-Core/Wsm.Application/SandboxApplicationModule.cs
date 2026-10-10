@@ -1,5 +1,6 @@
 using Volo.Abp.Modularity;
 using Wsm.Application.EngineSelection;
+using Wsm.Connection.Session;
 using Wsm.Engines.Abstractions;
 using Wsm.Persistence;
 
@@ -13,7 +14,8 @@ namespace Wsm.Application;
     typeof(WindowsSandboxManager.Domain.SandboxDomainModule),
     typeof(SandboxEngineAbstractionsModule),
     typeof(EngineSelectionModule),
-    typeof(SandboxPersistenceModule))]
+    typeof(SandboxPersistenceModule),
+    typeof(SessionLaunchModule))]
 public sealed class SandboxApplicationModule : AbpModule
 {
 }

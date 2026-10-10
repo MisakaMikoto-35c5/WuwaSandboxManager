@@ -4,6 +4,7 @@ using WindowsSandboxManager.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Application.EngineSelection.Internal;
 using Wsm.Application.Internal;
+using Wsm.Connection.Session;
 using Wsm.Engines.Abstractions;
 using Wsm.Engines.Abstractions.Internal;
 using Wsm.Persistence;
@@ -123,10 +124,79 @@ public sealed class SandboxManagerTests
         Assert.Equal(SandboxState.Faulted, persisted!.State);
     }
 
+    [Fact]
+    public async Task Get_round_trips_a_created_instance()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var manager = Manager(repository, engine);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        var fetched = await manager.GetAsync(created.Id);
+
+        Assert.Equal(created.Id, fetched.Id);
+        Assert.Equal("Box", fetched.Name);
+        Assert.Equal(SandboxState.Created, fetched.State);
+        Assert.NotEqual(default, fetched.CreatedUtc);
+    }
+
+    [Fact]
+    public async Task Get_throws_when_the_instance_is_missing()
+    {
+        var manager = Manager(new InMemoryRepository(), new StubEngine());
+
+        await Assert.ThrowsAsync<SandboxNotFoundException>(() => manager.GetAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task Delete_removes_the_instance()
+    {
+        var repository = new InMemoryRepository();
+        var manager = Manager(repository, new StubEngine());
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.DeleteAsync(created.Id);
+
+        Assert.Empty(await manager.ListAsync());
+    }
+
+    [Fact]
+    public async Task Get_capabilities_reports_the_selected_engine()
+    {
+        var engine = new StubEngine();
+        var manager = Manager(new InMemoryRepository(), engine);
+
+        var capabilities = await manager.GetCapabilitiesAsync();
+
+        Assert.Equal(engine.Name, capabilities.BackendName);
+        Assert.Equal(engine.Kind, capabilities.Kind);
+        Assert.True(capabilities.IsAvailable);
+        Assert.True(capabilities.Capabilities.SupportsCheckpoints);
+    }
+
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
-        return new SandboxManager(repository, selector);
+        return new SandboxManager(repository, selector, new StubSessionLauncher());
+    }
+
+    private sealed class StubSessionLauncher : ISessionLauncher
+    {
+        public SandboxInstanceId? LastId { get; private set; }
+
+        public SandboxConnectionMode? LastMode { get; private set; }
+
+        public Task LaunchAsync(
+            SandboxInstanceId id,
+            SandboxRuntimeInfo runtime,
+            SandboxConnectionMode mode,
+            CancellationToken cancellationToken = default)
+        {
+            LastId = id;
+            LastMode = mode;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class InMemoryRepository : ISandboxInstanceRepository

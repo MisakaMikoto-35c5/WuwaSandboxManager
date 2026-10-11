@@ -177,8 +177,18 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             // crash-dump placeholder, and anything a future provisioner adds —
             // is granted best-effort, as is the directory itself.
             GrantDiskFileAccess(id.ToString(), storage.DiskPath);
-            GrantDiskFileAccess(id.ToString(), storage.BaseDiskPath);
             GrantDiskFileAccess(id.ToString(), storage.GuestStatePath);
+
+            // The parent base disk is, by default, the platform's own OS image
+            // that lives outside the sandbox folder (it is referenced, never
+            // copied), so it already carries a broad ACL and needs no grant. Only
+            // a base disk that lives inside the folder (an explicitly configured
+            // image) is granted, and then mandatorily.
+            if (!string.IsNullOrWhiteSpace(storage.BaseDiskPath)
+                && IsWithinDirectory(storage.BaseDiskPath, storage.Directory))
+            {
+                GrantDiskFileAccess(id.ToString(), storage.BaseDiskPath);
+            }
 
             GrantRemainingStorageFilesQuietly(id.ToString(), storage);
             GrantVmAccessQuietly(id.ToString(), storage.Directory);
@@ -404,6 +414,24 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         sids.Add("S-1-5-18");       // LOCAL SYSTEM
         sids.Add("S-1-5-32-544");   // BUILTIN\Administrators
         return sids;
+    }
+
+    /// <summary>True when <paramref name="path"/> is inside <paramref name="directory"/>.</summary>
+    private static bool IsWithinDirectory(string path, string directory)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var fullDirectory = Path.GetFullPath(directory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            return fullPath.StartsWith(fullDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(fullPath, fullDirectory, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)

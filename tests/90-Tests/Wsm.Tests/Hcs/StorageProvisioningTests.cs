@@ -342,7 +342,7 @@ public sealed class StorageProvisioningTests : IDisposable
     }
 
     [Fact]
-    public void Provision_builds_an_uncompressed_differencing_chain_from_the_base_image()
+    public void Provision_references_the_platform_base_disk_in_place_without_copying_it()
     {
         var baseDir = NewDirectory(Path.Combine("ContainerStorages", "base"));
         Touch(baseDir, "sandbox.vhdx", "base-disk");
@@ -361,11 +361,15 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var layout = provisioner.Provision(target);
 
-        var baseCopy = Path.Combine(target, SandboxStorageProvisioner.BaseDiskFileName);
+        var platformBase = Path.Combine(baseDir, "sandbox.vhdx");
+
+        // The child points straight at the platform's base OS disk; the base is
+        // never copied into the sandbox folder (it is the platform's shared image
+        // that Windows Update maintains).
         Assert.Equal(1, factory.DifferencingCalls);
-        Assert.Equal(baseCopy, factory.LastParentPath);
-        Assert.Equal(baseCopy, layout.BaseDiskPath);
-        Assert.Equal("base-disk", File.ReadAllText(baseCopy));
+        Assert.Equal(platformBase, factory.LastParentPath);
+        Assert.Equal(platformBase, layout.BaseDiskPath);
+        Assert.False(File.Exists(Path.Combine(target, SandboxStorageProvisioner.BaseDiskFileName)));
         Assert.Equal("diff-vhdx", File.ReadAllText(layout.DiskPath));
         Assert.Equal("child-vmgs", File.ReadAllText(layout.GuestStatePath));
         Assert.Equal(0, factory.Calls);
@@ -395,25 +399,30 @@ public sealed class StorageProvisioningTests : IDisposable
     }
 
     [Fact]
-    public void Provision_rebuilds_when_the_existing_chain_parent_is_external()
+    public void Provision_reuses_an_existing_child_over_the_external_platform_base()
     {
+        var baseDir = NewDirectory(Path.Combine("ContainerStorages", "base"));
+        Touch(baseDir, "sandbox.vhdx", "base-disk");
+
         var target = NewDirectory("target");
-        Touch(target, "sandbox.vhdx", "stale-child");
-        Touch(target, "sandbox.vmgs", "stale-vmgs");
+        Touch(target, "sandbox.vhdx", "existing-child");
+        Touch(target, "sandbox.vmgs", "existing-vmgs");
 
         var factory = new FakeVirtualDiskFactory();
-        // A parent outside the storage directory belongs to the platform and
-        // must never be mutated, so the disk is not reusable.
+        // The normal case: the child's parent is the platform's shared base OS
+        // disk, which lives outside the sandbox folder and is referenced, not
+        // copied. The chain is intact, so the disk is reused as-is.
         factory.Parents[Path.Combine(target, "sandbox.vhdx")] =
-            @"C:\ProgramData\Microsoft\Windows\Containers\ContainerStorages\shared\sandbox.vhdx";
+            Path.Combine(baseDir, "sandbox.vhdx");
 
         var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         var layout = provisioner.Provision(target);
 
-        Assert.Equal("blank-vhdx", File.ReadAllText(layout.DiskPath));
-        Assert.Equal(1, factory.Calls);
+        Assert.Equal("existing-child", File.ReadAllText(layout.DiskPath));
+        Assert.Equal(Path.Combine(baseDir, "sandbox.vhdx"), layout.BaseDiskPath);
         Assert.Equal(0, factory.DifferencingCalls);
+        Assert.Equal(0, factory.Calls);
     }
 
     [Fact]

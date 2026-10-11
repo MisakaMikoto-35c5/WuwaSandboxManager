@@ -181,4 +181,17 @@
   <data name="Status.IpAddresses.Text" xml:space="preserve"><value>IP addresses: {0}</value></data>
   <data name="Status.ElevationDeclined.Text" xml:space="preserve"><value>Elevation was declined.</value></data>
   <data name="Status.ManifestMissing.Text" xml:space="preserve"><value>No manifest is available yet.</value></data>
+  <!-- Quick launch (RAIL) -->
+  <data name="QuickLaunchSection.Text" xml:space="preserve"><value>Quick launch</value></data>
+  <data name="QuickLaunchCaption.Text" xml:space="preserve"><value>Open a common program as a RemoteApp window.</value></data>
+  <data name="QuickLaunch.Explorer.Text" xml:space="preserve"><value>File Explorer</value></data>
+  <data name="QuickLaunch.Registry.Text" xml:space="preserve"><value>Registry Editor</value></data>
+  <data name="QuickLaunch.CommandPrompt.Text" xml:space="preserve"><value>Command Prompt</value></data>
+  <data name="QuickLaunch.PowerShell.Text" xml:space="preserve"><value>PowerShell</value></data>
+  <data name="QuickLaunch.Notepad.Text" xml:space="preserve"><value>Notepad</value></data>
+  <data name="QuickLaunch.TaskManager.Text" xml:space="preserve"><value>Task Manager</value></data>
+  <data name="RailProgramBox.Header" xml:space="preserve"><value>Default RAIL program</value></data>
+  <data name="CreateRailProgramBox.Header" xml:space="preserve"><value>Default RAIL program</value></data>
+  <data name="RailProgramHint.Text" xml:space="preserve"><value>The program a RAIL session launches. The WDAG guest has no desktop, so this is what appears.</value></data>
+  <data name="Status.LaunchedProgram.Text" xml:space="preserve"><value>Launching {0}.</value></data>
 </root>

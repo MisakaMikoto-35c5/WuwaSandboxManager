@@ -29,6 +29,14 @@ public sealed record RdpSessionRequest
     /// </summary>
     public bool RemoteApp { get; init; }
 
+    /// <summary>
+    /// The program a RAIL session launches, e.g. <c>C:\Windows\explorer.exe</c>.
+    /// The WDAG guest is RemoteApp-only and does not publish an application list,
+    /// so a RAIL session must name the program to start. Ignored unless
+    /// <see cref="RemoteApp"/> is true.
+    /// </summary>
+    public string? RemoteAppProgram { get; init; }
+
     public string WindowTitle { get; init; } = "Windows Sandbox";
 
     public bool FullScreen { get; init; }

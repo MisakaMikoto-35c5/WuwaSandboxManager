@@ -208,6 +208,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, ISingletonDepende
             VmId = id.Value,
             Transport = RdpTransportKind.NamedPipe,
             RailMode = recipe.RailMode,
+            RailProgram = recipe.ResolvedRailProgram,
             FullScreen = recipe.FullScreen,
             WindowTitle = recipe.Name.Value,
             UserName = "ContainerAdministrator",

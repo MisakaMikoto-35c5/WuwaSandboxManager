@@ -253,6 +253,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             VmId = id.Value,
             Transport = RdpTransportKind.NamedPipe,
             RailMode = recipe.RailMode,
+            RailProgram = recipe.ResolvedRailProgram,
             FullScreen = recipe.FullScreen,
             WindowTitle = recipe.Name.Value,
 

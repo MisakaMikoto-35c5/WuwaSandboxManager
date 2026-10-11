@@ -181,4 +181,17 @@
   <data name="Status.IpAddresses.Text" xml:space="preserve"><value>IP 地址：{0}</value></data>
   <data name="Status.ElevationDeclined.Text" xml:space="preserve"><value>已取消提权。</value></data>
   <data name="Status.ManifestMissing.Text" xml:space="preserve"><value>尚无可用清单。</value></data>
+  <!-- Quick launch (RAIL) -->
+  <data name="QuickLaunchSection.Text" xml:space="preserve"><value>快速启动</value></data>
+  <data name="QuickLaunchCaption.Text" xml:space="preserve"><value>以 RemoteApp 窗口方式打开常用程序。</value></data>
+  <data name="QuickLaunch.Explorer.Text" xml:space="preserve"><value>文件资源管理器</value></data>
+  <data name="QuickLaunch.Registry.Text" xml:space="preserve"><value>注册表编辑器</value></data>
+  <data name="QuickLaunch.CommandPrompt.Text" xml:space="preserve"><value>命令提示符</value></data>
+  <data name="QuickLaunch.PowerShell.Text" xml:space="preserve"><value>PowerShell</value></data>
+  <data name="QuickLaunch.Notepad.Text" xml:space="preserve"><value>记事本</value></data>
+  <data name="QuickLaunch.TaskManager.Text" xml:space="preserve"><value>任务管理器</value></data>
+  <data name="RailProgramBox.Header" xml:space="preserve"><value>默认 RAIL 程序</value></data>
+  <data name="CreateRailProgramBox.Header" xml:space="preserve"><value>默认 RAIL 程序</value></data>
+  <data name="RailProgramHint.Text" xml:space="preserve"><value>RAIL 会话启动的程序。WDAG 客户机没有桌面，因此显示的就是该程序。</value></data>
+  <data name="Status.LaunchedProgram.Text" xml:space="preserve"><value>正在启动 {0}。</value></data>
 </root>

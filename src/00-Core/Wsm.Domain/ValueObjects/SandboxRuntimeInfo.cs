@@ -15,6 +15,13 @@ public sealed record SandboxRuntimeInfo
 
     public bool RailMode { get; init; }
 
+    /// <summary>
+    /// The program a RAIL session should launch, e.g.
+    /// <c>C:\Windows\explorer.exe</c>. Empty means "use the platform default".
+    /// Ignored for full-desktop sessions.
+    /// </summary>
+    public string RailProgram { get; init; } = string.Empty;
+
     public bool FullScreen { get; init; }
 
     public string WindowTitle { get; init; } = "Windows Sandbox";

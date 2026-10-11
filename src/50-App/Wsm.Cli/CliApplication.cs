@@ -82,7 +82,8 @@ public sealed class CliApplication
                 case "connect":
                     await _manager.ConnectAsync(
                         RequireGuid(positional, 0),
-                        options.ContainsKey("remoteapp") ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop);
+                        options.ContainsKey("remoteapp") ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop,
+                        options.GetValueOrDefault("program"));
                     Console.WriteLine("Session launched.");
                     return 0;
 
@@ -370,6 +371,7 @@ public sealed class CliApplication
             Networking = ParseNetworking(options.GetValueOrDefault("networking")),
             VirtualGpu = ParseVgpu(options.GetValueOrDefault("vgpu")),
             RailMode = options.ContainsKey("rail"),
+            RailProgram = options.GetValueOrDefault("rail-program"),
             FullScreen = options.ContainsKey("fullscreen"),
             ProtectedClient = options.ContainsKey("protected"),
             Storage = storage,
@@ -493,7 +495,7 @@ public sealed class CliApplication
               start <id> [--remoteapp]  Start a sandbox
               host <id> [--remoteapp]   Start a sandbox and hold it running until Ctrl+C
               stop <id>                 Stop a sandbox
-              connect <id> [--remoteapp] Connect an RDP session
+              connect <id> [--remoteapp] [--program <path>]  Connect an RDP session
               ip <id>                   Get the sandbox IP addresses
               exec <id> <command>       Execute a command inside the sandbox
               share <id> <host> [sbx] [--rw]  Map a folder
@@ -510,6 +512,8 @@ public sealed class CliApplication
               --networking enable|disable|default
               --vgpu enable|disable|default
               --rail                    Start in RemoteApp (RAIL) mode
+              --rail-program <path>     Program a RAIL session launches
+                                        (default C:\Windows\explorer.exe)
               --fullscreen
               --protected
               --storage-path <dir>      Custom user-data location (HCS engine)

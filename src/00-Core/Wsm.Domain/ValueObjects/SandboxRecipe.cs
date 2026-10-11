@@ -27,6 +27,13 @@ public sealed record SandboxRecipe
     /// <summary>When true the sandbox is presented as RemoteApp/RAIL windows.</summary>
     public bool RailMode { get; init; }
 
+    /// <summary>
+    /// The program a RAIL session launches by default, e.g.
+    /// <c>C:\Windows\explorer.exe</c>. Empty/null means the platform default
+    /// (<see cref="DefaultRailProgram"/>). Ignored for full-desktop sessions.
+    /// </summary>
+    public string? RailProgram { get; init; }
+
     /// <summary>Boot the session in full screen mode.</summary>
     public bool FullScreen { get; init; }
 
@@ -49,6 +56,17 @@ public sealed record SandboxRecipe
     public string? AccountPassword { get; init; }
 
     public static SandboxRecipe Default { get; } = new();
+
+    /// <summary>
+    /// The program a RAIL session starts when the recipe does not pin one. The
+    /// WDAG guest is RemoteApp-only, so a RAIL session must always launch
+    /// something; the shell is the closest thing to "a desktop".
+    /// </summary>
+    public const string DefaultRailProgram = @"C:\Windows\explorer.exe";
+
+    /// <summary>The RAIL program to launch, falling back to <see cref="DefaultRailProgram"/>.</summary>
+    public string ResolvedRailProgram =>
+        string.IsNullOrWhiteSpace(RailProgram) ? DefaultRailProgram : RailProgram!;
 
     public SandboxRecipe WithMappedFolder(MappedFolder folder)
     {

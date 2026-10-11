@@ -50,6 +50,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         VgpuOptions = Enum.GetValues<VirtualGpuMode>()
             .Select(mode => new EnumOption<VirtualGpuMode>(mode, LocalizeVgpu(mode)))
             .ToArray();
+        QuickLaunchPrograms = BuildQuickLaunchPrograms();
 
         Apply(dto);
     }
@@ -64,6 +65,12 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
     public IReadOnlyList<EnumOption<VirtualGpuMode>> VgpuOptions { get; }
 
+    /// <summary>
+    /// Common programs offered as one-click RAIL launches (File Explorer,
+    /// Registry Editor, Command Prompt, …).
+    /// </summary>
+    public IReadOnlyList<QuickLaunchProgram> QuickLaunchPrograms { get; }
+
     [ObservableProperty] private Guid _id;
 
     [ObservableProperty] private string _name = string.Empty;
@@ -77,6 +84,12 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     [ObservableProperty] private EnumOption<VirtualGpuMode>? _selectedVgpu;
 
     [ObservableProperty] private bool _railMode;
+
+    /// <summary>
+    /// The program a RAIL session launches, e.g. <c>C:\Windows\explorer.exe</c>.
+    /// Only meaningful when <see cref="RailMode"/> is set.
+    /// </summary>
+    [ObservableProperty] private string _railProgram = SandboxRecipe.DefaultRailProgram;
 
     [ObservableProperty] private bool _fullScreen;
 
@@ -173,6 +186,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         SelectedNetworking = NetworkingOptions.First(o => o.Value == dto.Recipe.Networking);
         SelectedVgpu = VgpuOptions.First(o => o.Value == dto.Recipe.VirtualGpu);
         RailMode = dto.Recipe.RailMode;
+        RailProgram = dto.Recipe.ResolvedRailProgram;
         FullScreen = dto.Recipe.FullScreen;
         ProtectedClient = dto.Recipe.ProtectedClient;
         RebootSupport = dto.Recipe.RebootSupport;
@@ -242,6 +256,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         Networking = SelectedNetworking?.Value ?? NetworkingMode.Default,
         VirtualGpu = SelectedVgpu?.Value ?? VirtualGpuMode.Default,
         RailMode = RailMode,
+        RailProgram = string.IsNullOrWhiteSpace(RailProgram) ? SandboxRecipe.DefaultRailProgram : RailProgram.Trim(),
         FullScreen = FullScreen,
         ProtectedClient = ProtectedClient,
         RebootSupport = RebootSupport,
@@ -340,6 +355,37 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             Status = _l["Status.Connected.Text"];
         });
     }
+
+    /// <summary>
+    /// Opens the sandbox as a RAIL session that launches <paramref name="program"/>.
+    /// The quick-launch buttons use this so a specific tool (Explorer, Registry
+    /// Editor, Command Prompt, …) starts without editing the definition.
+    /// </summary>
+    [RelayCommand]
+    private async Task LaunchProgramAsync(QuickLaunchProgram? program)
+    {
+        if (program is null)
+        {
+            return;
+        }
+
+        await GuardAsync(async () =>
+        {
+            await _manager.ConnectAsync(Id, SandboxConnectionMode.RemoteApp, program.Path);
+            _userDisconnected = false;
+            Status = _l.Get("Status.LaunchedProgram.Text", program.Path);
+        });
+    }
+
+    private IReadOnlyList<QuickLaunchProgram> BuildQuickLaunchPrograms() =>
+    [
+        new(_l["QuickLaunch.Explorer.Text"], @"C:\Windows\explorer.exe", "\uE8B7"),
+        new(_l["QuickLaunch.Registry.Text"], @"C:\Windows\regedit.exe", "\uE713"),
+        new(_l["QuickLaunch.CommandPrompt.Text"], @"C:\Windows\System32\cmd.exe", "\uE756"),
+        new(_l["QuickLaunch.PowerShell.Text"], @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "\uE756"),
+        new(_l["QuickLaunch.Notepad.Text"], @"C:\Windows\notepad.exe", "\uE70B"),
+        new(_l["QuickLaunch.TaskManager.Text"], @"C:\Windows\System32\taskmgr.exe", "\uE9D9"),
+    ];
 
     /// <summary>
     /// Persists the edited definition. <see cref="ISandboxManager"/> has no

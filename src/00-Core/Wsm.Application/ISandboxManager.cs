@@ -48,7 +48,7 @@ public interface ISandboxManager
     Task<Guid> RestoreCheckpointAsync(Guid id, Guid checkpointId, CancellationToken cancellationToken = default);
 
     /// <summary>Opens the user-visible session for a running instance.</summary>
-    Task ConnectAsync(Guid id, SandboxConnectionMode mode, CancellationToken cancellationToken = default);
+    Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default);
 
     /// <summary>Returns the guest IP addresses of an instance.</summary>
     Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken cancellationToken = default);

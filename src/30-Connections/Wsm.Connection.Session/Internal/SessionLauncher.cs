@@ -35,6 +35,7 @@ internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
         SandboxRuntimeInfo runtime,
         SandboxConnectionMode mode,
         SandboxEngineKind engineKind,
+        string? remoteAppProgram = null,
         CancellationToken cancellationToken = default)
     {
         if (runtime.Transport != RdpTransportKind.NamedPipe || runtime.VmId == Guid.Empty)
@@ -45,9 +46,18 @@ internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
         }
 
         var remoteApp = runtime.RailMode || mode == SandboxConnectionMode.RemoteApp;
+
+        // The RAIL program: an explicit per-connect override wins, then the
+        // recipe's pinned program, then the platform default. Only meaningful in
+        // RAIL mode.
+        var program = remoteApp
+            ? FirstNonEmpty(remoteAppProgram, runtime.RailProgram, SandboxRecipe.DefaultRailProgram)
+            : null;
+
         _logger.LogInformation(
-            "Presenting sandbox {SandboxId} (engine={EngineKind}) over {Endpoint} as {Presentation} through mstscax.",
-            id, engineKind, runtime.NamedPipeEndpoint, remoteApp ? "RAIL" : "full desktop");
+            "Presenting sandbox {SandboxId} (engine={EngineKind}) over {Endpoint} as {Presentation}{Program} through mstscax.",
+            id, engineKind, runtime.NamedPipeEndpoint, remoteApp ? "RAIL" : "full desktop",
+            remoteApp ? $" (program={program})" : string.Empty);
 
         return _rdpHost.ShowAsync(
             new RdpSessionRequest
@@ -55,6 +65,7 @@ internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
                 PipeName = runtime.NamedPipeEndpoint,
                 VmId = runtime.VmId,
                 RemoteApp = remoteApp,
+                RemoteAppProgram = program,
                 WindowTitle = runtime.WindowTitle,
                 FullScreen = runtime.FullScreen,
                 UserName = runtime.UserName,
@@ -63,4 +74,7 @@ internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
             },
             cancellationToken);
     }
+
+    private static string? FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 }

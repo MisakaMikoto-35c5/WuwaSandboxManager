@@ -32,5 +32,6 @@ public interface ISessionLauncher
         SandboxRuntimeInfo runtime,
         SandboxConnectionMode mode,
         SandboxEngineKind engineKind,
+        string? remoteAppProgram = null,
         CancellationToken cancellationToken = default);
 }

@@ -208,6 +208,38 @@
                                     Click="OnInstanceSettingsClick" />
                         </StackPanel>
 
+                        <!-- Quick launch (RAIL): the WDAG guest is RemoteApp-only, so
+                             a program is what actually appears on screen. -->
+                        <Border Style="{StaticResource SectionCard}"
+                                Visibility="{Binding Selected.RailMode, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel Spacing="10">
+                                <TextBlock x:Uid="QuickLaunchSection" Text="Quick launch" Style="{StaticResource SectionTitle}" />
+                                <TextBlock x:Uid="QuickLaunchCaption"
+                                           Text="Open a common program as a RemoteApp window."
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                <ItemsControl ItemsSource="{Binding Selected.QuickLaunchPrograms}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="8" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:QuickLaunchProgram">
+                                            <Button Command="{Binding DataContext.Selected.LaunchProgramCommand, ElementName=Root}"
+                                                    CommandParameter="{x:Bind}">
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <FontIcon Glyph="{x:Bind Glyph}" FontSize="14" />
+                                                    <TextBlock Text="{x:Bind DisplayName}" />
+                                                </StackPanel>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
                         <!-- At a glance -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel Spacing="10">
@@ -411,6 +443,19 @@
                     </RadioButtons>
                 </StackPanel>
 
+                <StackPanel Spacing="4"
+                            Visibility="{Binding IsNewRailMode, Converter={StaticResource BoolToVisibility}}">
+                    <TextBox x:Uid="CreateRailProgramBox"
+                             Header="Default RAIL program"
+                             PlaceholderText="C:\Windows\explorer.exe"
+                             Text="{Binding NewRailProgram, Mode=TwoWay}" />
+                    <TextBlock x:Uid="RailProgramHint"
+                               Text="The program a RAIL session launches. The WDAG guest has no desktop, so this is what appears."
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+
                 <StackPanel Spacing="6">
                     <TextBlock x:Uid="CreateEngineHeader" Text="Engine" Style="{StaticResource FieldLabel}" />
                     <ComboBox HorizontalAlignment="Stretch"
@@ -530,6 +575,18 @@
                         <StackPanel Spacing="6">
                             <TextBlock x:Uid="SessionSection" Text="Session" Style="{StaticResource SectionTitle}" />
                             <ToggleSwitch x:Uid="RailSwitch" Header="RemoteApp (RAIL) mode" IsOn="{Binding Selected.RailMode, Mode=TwoWay}" />
+                            <StackPanel Spacing="4"
+                                        Visibility="{Binding Selected.RailMode, Converter={StaticResource BoolToVisibility}}">
+                                <TextBox x:Uid="RailProgramBox"
+                                         Header="Default RAIL program"
+                                         PlaceholderText="C:\Windows\explorer.exe"
+                                         Text="{Binding Selected.RailProgram, Mode=TwoWay}" />
+                                <TextBlock x:Uid="RailProgramHint"
+                                           Text="The program a RAIL session launches. The WDAG guest has no desktop, so this is what appears."
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </StackPanel>
                             <ToggleSwitch x:Uid="FullScreenSwitch" Header="Full screen" IsOn="{Binding Selected.FullScreen, Mode=TwoWay}" />
                             <ToggleSwitch x:Uid="ProtectedSwitch" Header="Protected client" IsOn="{Binding Selected.ProtectedClient, Mode=TwoWay}" />
                             <ToggleSwitch x:Uid="RebootSwitch" Header="Allow guest reboot" IsOn="{Binding Selected.RebootSupport, Mode=TwoWay}" />

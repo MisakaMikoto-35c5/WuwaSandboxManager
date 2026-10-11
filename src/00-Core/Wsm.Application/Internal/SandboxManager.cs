@@ -219,7 +219,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             .ConfigureAwait(false);
     }
 
-    public async Task ConnectAsync(Guid id, SandboxConnectionMode mode, CancellationToken cancellationToken = default)
+    public async Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default)
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
         var engine = _selector.Select(RequestFor(instance));
@@ -239,7 +239,9 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         // with "too many sessions established", so reclaim the slot first.
         await ReclaimGuestSessionsAsync(engine, instance.Id, cancellationToken).ConfigureAwait(false);
 
-        await _sessionLauncher.LaunchAsync(instance.Id, runtime, mode, engine.Kind, cancellationToken).ConfigureAwait(false);
+        await _sessionLauncher
+            .LaunchAsync(instance.Id, runtime, mode, engine.Kind, remoteAppProgram, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

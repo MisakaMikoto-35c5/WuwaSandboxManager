@@ -91,6 +91,12 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>0 = RemoteApp (RAIL), 1 = full desktop.</summary>
     [ObservableProperty] private int _newTypeIndex = 1;
 
+    /// <summary>
+    /// The program a RAIL sandbox launches by default, e.g.
+    /// <c>C:\Windows\explorer.exe</c>. Only meaningful for the RAIL type.
+    /// </summary>
+    [ObservableProperty] private string _newRailProgram = SandboxRecipe.DefaultRailProgram;
+
     [ObservableProperty] private double _newMemoryMb = SandboxMemoryConfiguration.DefaultMemoryMb;
 
     [ObservableProperty] private double _newCpuCores = 4;
@@ -105,7 +111,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     public bool HasInstances => Instances.Count > 0;
 
+    /// <summary>True when the creation dialog is set to the RemoteApp (RAIL) type.</summary>
+    public bool IsNewRailMode => NewTypeIndex == 0;
+
     partial void OnSelectedChanged(SandboxInstanceViewModel? value) => OnPropertyChanged(nameof(HasSelection));
+
+    partial void OnNewTypeIndexChanged(int value) => OnPropertyChanged(nameof(IsNewRailMode));
 
     public Task InitializeAsync(Guid? selectId = null) => ReloadAsync(selectId);
 
@@ -144,6 +155,7 @@ public sealed partial class MainViewModel : ObservableObject
         NewTypeIndex = 1;
         NewMemoryMb = SandboxMemoryConfiguration.DefaultMemoryMb;
         NewCpuCores = Math.Max(1, Math.Min(Environment.ProcessorCount / 2, 64));
+        NewRailProgram = SandboxRecipe.DefaultRailProgram;
         NewEngineOption = NewEngineOptions.FirstOrDefault();
     }
 
@@ -165,6 +177,7 @@ public sealed partial class MainViewModel : ObservableObject
                 Cpu = new SandboxCpuConfiguration(
                     double.IsFinite(NewCpuCores) ? (int)Math.Round(NewCpuCores) : 4),
                 RailMode = NewTypeIndex == 0,
+                RailProgram = string.IsNullOrWhiteSpace(NewRailProgram) ? SandboxRecipe.DefaultRailProgram : NewRailProgram.Trim(),
                 Storage = SandboxStorageOptions.Default,
             };
 

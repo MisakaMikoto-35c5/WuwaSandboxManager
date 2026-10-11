@@ -282,6 +282,33 @@ public sealed class SandboxManagerTests
         Assert.Equal(engine.Kind, launcher.LastEngineKind);
     }
 
+    [Fact]
+    public async Task Connect_passes_the_rail_program_override_to_the_session_launcher()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        var recipe = SandboxRecipe.Default with { RailMode = true, RailProgram = @"C:\Windows\regedit.exe" };
+        var created = await manager.CreateAsync("Box", recipe);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.RemoteApp);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.RemoteApp, @"C:\Windows\System32\cmd.exe");
+
+        Assert.Equal(SandboxConnectionMode.RemoteApp, launcher.LastMode);
+        Assert.Equal(@"C:\Windows\System32\cmd.exe", launcher.LastRemoteAppProgram);
+    }
+
+    [Fact]
+    public void Recipe_resolves_the_default_rail_program_when_unset()
+    {
+        Assert.Equal(SandboxRecipe.DefaultRailProgram, SandboxRecipe.Default.ResolvedRailProgram);
+        Assert.Equal(
+            @"C:\Windows\regedit.exe",
+            (SandboxRecipe.Default with { RailProgram = @"C:\Windows\regedit.exe" }).ResolvedRailProgram);
+    }
+
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
@@ -305,16 +332,20 @@ public sealed class SandboxManagerTests
 
         public SandboxEngineKind? LastEngineKind { get; private set; }
 
+        public string? LastRemoteAppProgram { get; private set; }
+
         public Task LaunchAsync(
             SandboxInstanceId id,
             SandboxRuntimeInfo runtime,
             SandboxConnectionMode mode,
             SandboxEngineKind engineKind,
+            string? remoteAppProgram = null,
             CancellationToken cancellationToken = default)
         {
             LastId = id;
             LastMode = mode;
             LastEngineKind = engineKind;
+            LastRemoteAppProgram = remoteAppProgram;
             return Task.CompletedTask;
         }
     }

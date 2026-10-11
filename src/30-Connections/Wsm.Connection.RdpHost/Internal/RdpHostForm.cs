@@ -98,29 +98,64 @@ internal sealed class RdpHostForm : Form
             client.DesktopWidth = Math.Max(ClientSize.Width, MinimumSize.Width);
             client.DesktopHeight = Math.Max(ClientSize.Height, MinimumSize.Height);
 
-            // Named-pipe transport, exactly like the platform's own client: NLA
-            // is not used, the security layer is negotiated, and the credential
-            // is supplied in clear text (local pipe trust domain only).
-            client.AdvancedSettings9.EnableCredSspSupport = false;
-            client.AdvancedSettings9.NegotiateSecurityLayer = true;
-            client.AdvancedSettings9.AuthenticationLevel = 0;
-            client.AdvancedSettings9.RedirectClipboard = _request.Redirections.Clipboard;
-            client.AdvancedSettings9.RedirectPrinters = _request.Redirections.Printer;
-            client.AdvancedSettings9.RedirectSmartCards = _request.Redirections.SmartCard;
-            client.Domain = string.Empty;
-            client.UserName = _request.UserName;
-            client.AdvancedSettings9.ClearTextPassword = _request.Password;
+            // Mirror the platform's own remote-session client (the decompiled
+            // WindowsSandboxServer / WindowsSandboxRemoteSession) for the RDPBASE
+            // named-pipe transport, exactly. NLA is not used, the security layer
+            // is negotiated, server authentication is not required, and the
+            // credential is supplied in clear text (local pipe trust domain only).
+            var advanced = client.AdvancedSettings9;
+            advanced.EnableCredSspSupport = false;
+            advanced.NegotiateSecurityLayer = true;
+            advanced.AuthenticationLevel = 0;
+            advanced.RedirectClipboard = _request.Redirections.Clipboard;
+            advanced.RedirectPrinters = _request.Redirections.Printer;
+            advanced.RedirectSmartCards = _request.Redirections.SmartCard;
+            advanced.RedirectDevices = false;
+            advanced.RedirectDrives = false;
+            advanced.RedirectDirectX = false;
+            advanced.RedirectPorts = false;
+            advanced.RedirectPOSDevices = false;
+            advanced.SmartSizing = true;
+            advanced.keepAliveInterval = 10000;
+            advanced.MinutesToIdleTimeout = 0;
+            advanced.overallConnectionTimeout = 120;
+            advanced.PerformanceFlags = 132;
+            advanced.NetworkConnectionType = 6u;
+            advanced.EnableAutoReconnect = true;
+            advanced.MaxReconnectAttempts = 5;
+            advanced.RelativeMouseMode = true;
+            advanced.VideoPlaybackMode = 0u;
 
+            client.UserName = _request.UserName;
+            advanced.ClearTextPassword = _request.Password;
+
+            var extended = (IMsRdpExtendedSettings)client.GetOcx()!;
+            SetExtended(extended, "Workspace Id", "in WindowsSandbox");
+            SetExtended(extended, "ClientDeviceName", _request.VmId.ToString());
+            SetExtended(extended, "EnableHardwareMode", true);
+            SetExtended(extended, "EnableFrameBufferRedirection", true);
+            SetExtended(extended, "AllowSasSequenceTransmission", false);
+            SetExtended(extended, "DisableAutoReconnectComponent", true);
             if (_request.VmId != Guid.Empty)
             {
-                var extended = (IMsRdpExtendedSettings)client.GetOcx()!;
-                object containerGuid = $"{{{_request.VmId}}}";
-                extended.set_Property("HiDefRemoteAppContainerGUID", ref containerGuid);
+                SetExtended(extended, "HiDefRemoteAppContainerGUID", $"{{{_request.VmId}}}");
             }
 
             if (_request.RemoteApp)
             {
                 client.RemoteProgram3.RemoteProgramMode = true;
+
+                // The WDAG guest is RemoteApp-only: it has no explorer desktop and
+                // does not publish an application list, so the client must name the
+                // program to start. Without it the guest tears the empty session
+                // down and nothing appears.
+                if (!string.IsNullOrWhiteSpace(_request.RemoteAppProgram))
+                {
+                    client.RemoteProgram3.RemoteApplicationProgram = _request.RemoteAppProgram;
+                    _logger.LogInformation(
+                        "RAIL session for {Endpoint} will launch {Program}.",
+                        _request.PipeName, _request.RemoteAppProgram);
+                }
             }
 
             client.OnConnected += (_, _) => _logger.LogInformation("RDP session connected for {Endpoint}.", _request.PipeName);
@@ -136,6 +171,11 @@ internal sealed class RdpHostForm : Form
             _logger.LogError(ex, "Unable to present the RDP session through mstscax; aborting.");
             Close();
         }
+    }
+
+    private static void SetExtended(IMsRdpExtendedSettings settings, string name, object value)
+    {
+        settings.set_Property(name, ref value);
     }
 
     private void TearDown()

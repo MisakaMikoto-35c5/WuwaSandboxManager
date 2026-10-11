@@ -116,7 +116,7 @@ public sealed class HcsSandboxEngineTests
     }
 
     [Fact]
-    public async Task Start_provisions_the_guest_account_without_shipping_a_credential()
+    public async Task Start_provisions_the_guest_account_and_reports_the_credential()
     {
         var hcs = new FakeHcsClient();
         var engine = CreateEngine(hcs, out _);
@@ -124,12 +124,11 @@ public sealed class HcsSandboxEngineTests
         var id = SandboxInstanceId.New();
         var runtime = await engine.StartAsync(Request(id));
 
-        // The guest account is activated with a generated password, exactly like the
-        // platform does, but the runtime carries no credential: the WDAG guest logs
-        // itself on, and shipping a credential makes the guest arbitrate and drop the
-        // RDP session instead of showing the desktop.
-        Assert.Equal(string.Empty, runtime.UserName);
-        Assert.Equal(string.Empty, runtime.Password);
+        // The account is activated with a deterministic password (derived from the
+        // sandbox id) and the credential travels with the runtime: the RDP client
+        // must supply it or the WDAG guest stays at its logon screen (black desktop).
+        Assert.Equal("WDAGUtilityAccount", runtime.UserName);
+        Assert.False(string.IsNullOrEmpty(runtime.Password));
         Assert.Contains(hcs.Processes, command => command.StartsWith("net user WDAGUtilityAccount "));
         Assert.Contains(hcs.Processes, command => command == "net user WDAGUtilityAccount /active:yes");
     }
@@ -148,7 +147,7 @@ public sealed class HcsSandboxEngineTests
 
         var runtime = await engine.StartAsync(request);
 
-        Assert.Equal(string.Empty, runtime.Password);
+        Assert.Equal("Sup3rSecret!", runtime.Password);
         Assert.Contains(hcs.Processes, command => command.Contains("Sup3rSecret!"));
     }
 
@@ -163,11 +162,13 @@ public sealed class HcsSandboxEngineTests
 
         // A running system (e.g. held by `wsm host` in another process) is
         // adopted rather than reported as "already exists": no start, no guest
-        // re-provisioning, and the caller still gets a usable runtime.
+        // re-provisioning, and the caller still gets a usable runtime with the
+        // credential re-applied (it is never persisted anywhere).
         Assert.Contains(id.ToString(), hcs.Opened);
         Assert.Empty(hcs.Started);
-        Assert.Empty(hcs.Processes);
-        Assert.Equal(string.Empty, runtime.UserName);
+        Assert.Equal("WDAGUtilityAccount", runtime.UserName);
+        Assert.False(string.IsNullOrEmpty(runtime.Password));
+        Assert.Contains(hcs.Processes, command => command.StartsWith("net user WDAGUtilityAccount "));
         Assert.NotNull(hcs.LastHandle);
         Assert.False(hcs.LastHandle!.Disposed);
 

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.Exceptions;
@@ -164,15 +166,28 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
 
         var (system, adopted) = CreateOrAdopt(id, json);
 
+        string accountUser;
+        string accountPassword;
+
         if (adopted)
         {
             // The compute system was already running (typically started by another
             // process, e.g. `wsm host`, and still up). It is already configured and
-            // provisioned, so adopt it as-is.
+            // provisioned with the deterministic credential, so adopt it as-is.
+            accountUser = string.IsNullOrWhiteSpace(recipe.AccountUser) ? DefaultGuestUser : recipe.AccountUser!;
+            accountPassword = string.IsNullOrWhiteSpace(recipe.AccountPassword)
+                ? DefaultGuestPassword(id)
+                : recipe.AccountPassword!;
             _logger.LogInformation(
                 "Sandbox {SandboxId} was already running; adopted the existing compute system " +
                 "(skipping start and guest provisioning).",
                 id);
+
+            // The credential is not persisted anywhere, so re-apply it: the account's
+            // password may have been set by a previous process (or is simply unknown),
+            // and RDP needs the current one or the logon is refused.
+            CheckGuest(id.ToString(), $"net user {accountUser} {accountPassword}");
+            CheckGuest(id.ToString(), $"net user {accountUser} /active:yes");
         }
         else
         {
@@ -229,7 +244,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
 
             // Mirror the platform's own guest set-up: enable the WDAGUtilityAccount
             // with a known password so the sandbox can actually be reached over RDP.
-            ProvisionGuestAccount(id, recipe);
+            (accountUser, accountPassword) = ProvisionGuestAccount(id, recipe);
         }
 
         var runtime = new SandboxRuntimeInfo
@@ -240,6 +255,12 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             RailMode = recipe.RailMode,
             FullScreen = recipe.FullScreen,
             WindowTitle = recipe.Name.Value,
+
+            // The credential travels with the runtime. The RDP client must supply it
+            // or the WDAG guest stays at its logon screen (the black desktop): it does
+            // not auto-logon on its own, and RDP is the only way in.
+            UserName = accountUser,
+            Password = accountPassword,
             Redirections = recipe.Redirections,
         };
 
@@ -304,21 +325,22 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     /// <summary>Default guest logon account used by the Windows Sandbox image.</summary>
     private const string DefaultGuestUser = "WDAGUtilityAccount";
 
+    /// <summary>
+    /// The guest password used when the recipe does not specify one. It is derived
+    /// <b>deterministically</b> from the sandbox id so any process can compute the
+    /// same credential and actually log the RDP session on: the WDAG guest shows
+    /// its logon screen (a black desktop) until a valid credential is supplied, and
+    /// a random per-start password would be known only to the process that started
+    /// the sandbox, so a separate <c>wsm connect</c> could never log in.
+    /// </summary>
+    private static string DefaultGuestPassword(SandboxInstanceId id)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(id.ToString()));
+        return "Wsm!" + Convert.ToHexString(hash.AsSpan(0, 10));
+    }
+
     /// <summary>How long to wait for the guest to accept processes after start.</summary>
     private const int GuestReadyTimeoutSeconds = 120;
-
-    /// <summary>
-    /// The platform's guest "specialization" tweaks (mirrored from
-    /// <c>WindowsSandboxServer</c>). They are part of completing the guest set-up,
-    /// which is what brings its services — including the RDP endpoint the sandbox
-    /// is reached through — up.
-    /// </summary>
-    private static readonly string[] SpecializationCommands =
-    {
-        "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Network\\NewNetworkWindowOff\" /f",
-        "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FlyoutMenuSettings\" /v ShowLockOption /t REG_DWORD /d 0 /f",
-        "reg add \"HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\" /v ShowTaskViewButton /t REG_DWORD /d 0 /f",
-    };
 
     public Task<int> ExecuteAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
     {
@@ -349,49 +371,29 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     {
         var user = string.IsNullOrWhiteSpace(recipe.AccountUser) ? DefaultGuestUser : recipe.AccountUser!;
         var password = string.IsNullOrWhiteSpace(recipe.AccountPassword)
-            ? Guid.NewGuid().ToString()
+            ? DefaultGuestPassword(id)
             : recipe.AccountPassword!;
 
         try
         {
             WaitForGuestReady(id.ToString());
 
-            // Mirror the platform's guest "specialization": activate the logon
-            // account with a known password, apply the specialization tweaks and
-            // signal that restore is complete. Without the latter the guest never
-            // finishes its set-up and the RDP endpoint is never brought up.
+            // The platform's own guest set-up (mirrored from WindowsSandboxServer):
+            // activate the logon account with a known password, add it to the groups
+            // Remote Desktop Services checks, flip the sandbox's own RDP listener
+            // switch, then complete the image-prep handshake. This exact sequence is
+            // what makes an interactive RDP session bootstrap on a custom VM: the
+            // WDAG guest otherwise shows its logon screen (a black desktop) and
+            // refuses the remote logon.
             CheckGuest(id.ToString(), $"net user {user} {password}");
             CheckGuest(id.ToString(), $"net user {user} /active:yes");
             CheckGuest(id.ToString(), $"wcsetupagent.exe AddUserToUsersGroup {user}");
             CheckGuest(id.ToString(), $"wcsetupagent.exe AddUserToAdminGroup {user}");
-
-            foreach (var specialization in SpecializationCommands)
-            {
-                CheckGuest(id.ToString(), specialization);
-            }
-
+            CheckGuest(
+                id.ToString(),
+                "reg add \"HKLM\\System\\CurrentControlSet\\Control\\Terminal Server\" " +
+                "/v b8ba549e-fb39-441c-b71e-44e9e4818210 /t REG_DWORD /d 1 /f");
             CheckGuest(id.ToString(), "wcsetupagent.exe NotifyRestoreComplete");
-
-            // The sandbox is reached over the RDP named-pipe endpoint, so make
-            // sure the guest's RDP listener is enabled (and record its state).
-            CheckGuest(id.ToString(), "reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections");
-            CheckGuest(id.ToString(), "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections /t REG_DWORD /d 0 /f");
-            CheckGuest(id.ToString(), "net start TermService");
-
-            // Log the sandbox account on automatically. The RDP session is presented
-            // over the named pipe without a usable credential, so without this the
-            // session sits at the guest's logon screen — the blank/white desktop the
-            // user sees. Auto-logon makes the guest present its interactive desktop as
-            // soon as the session is established, exactly like the stock sandbox.
-            var computerName = RunGuestOutput(id.ToString(), "cmd /c echo %COMPUTERNAME%");
-            const string winlogon = "\"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\"";
-            CheckGuest(id.ToString(), $"reg add {winlogon} /v AutoAdminLogon /t REG_SZ /d 1 /f");
-            CheckGuest(id.ToString(), $"reg add {winlogon} /v DefaultUserName /t REG_SZ /d {user} /f");
-            CheckGuest(id.ToString(), $"reg add {winlogon} /v DefaultPassword /t REG_SZ /d {password} /f");
-            if (!string.IsNullOrWhiteSpace(computerName))
-            {
-                CheckGuest(id.ToString(), $"reg add {winlogon} /v DefaultDomainName /t REG_SZ /d {computerName} /f");
-            }
 
             _logger.LogInformation("Provisioned guest account {User} for sandbox {SandboxId}.", user, id);
         }
@@ -461,13 +463,6 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             "Guest command '{Command}' in sandbox {SandboxId} exited {ExitCode}. {Output} {Error}",
             commandLine, id, result.ExitCode, result.StandardOutput.Trim(), result.StandardError.Trim());
         return result.ExitCode;
-    }
-
-    /// <summary>Runs a guest command and returns its trimmed standard output.</summary>
-    private string RunGuestOutput(string id, string commandLine)
-    {
-        var result = _hcs.RunProcess(id, commandLine);
-        return result.StandardOutput.Trim();
     }
 
     /// <summary>
@@ -571,6 +566,13 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             SandboxId = id,
             VmId = id.Value,
             Transport = RdpTransportKind.NamedPipe,
+
+            // A connecting process that did not start the sandbox (a separate CLI
+            // `connect`, the app after a restart) still needs the credential, or the
+            // RDP session stops at the guest logon screen. It is deterministic from
+            // the sandbox id, so it can be recomputed here.
+            UserName = DefaultGuestUser,
+            Password = DefaultGuestPassword(id),
         });
     }
 

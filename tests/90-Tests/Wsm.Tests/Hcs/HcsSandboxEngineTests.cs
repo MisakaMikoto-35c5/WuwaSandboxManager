@@ -116,7 +116,7 @@ public sealed class HcsSandboxEngineTests
     }
 
     [Fact]
-    public async Task Start_provisions_the_guest_account_and_reports_the_credential()
+    public async Task Start_provisions_the_guest_account_without_shipping_a_credential()
     {
         var hcs = new FakeHcsClient();
         var engine = CreateEngine(hcs, out _);
@@ -124,10 +124,12 @@ public sealed class HcsSandboxEngineTests
         var id = SandboxInstanceId.New();
         var runtime = await engine.StartAsync(Request(id));
 
-        // The RDP session needs a usable guest credential: the account is
-        // activated with a generated password, exactly like the platform does.
-        Assert.Equal("WDAGUtilityAccount", runtime.UserName);
-        Assert.False(string.IsNullOrEmpty(runtime.Password));
+        // The guest account is activated with a generated password, exactly like the
+        // platform does, but the runtime carries no credential: the WDAG guest logs
+        // itself on, and shipping a credential makes the guest arbitrate and drop the
+        // RDP session instead of showing the desktop.
+        Assert.Equal(string.Empty, runtime.UserName);
+        Assert.Equal(string.Empty, runtime.Password);
         Assert.Contains(hcs.Processes, command => command.StartsWith("net user WDAGUtilityAccount "));
         Assert.Contains(hcs.Processes, command => command == "net user WDAGUtilityAccount /active:yes");
     }
@@ -146,7 +148,7 @@ public sealed class HcsSandboxEngineTests
 
         var runtime = await engine.StartAsync(request);
 
-        Assert.Equal("Sup3rSecret!", runtime.Password);
+        Assert.Equal(string.Empty, runtime.Password);
         Assert.Contains(hcs.Processes, command => command.Contains("Sup3rSecret!"));
     }
 
@@ -165,7 +167,7 @@ public sealed class HcsSandboxEngineTests
         Assert.Contains(id.ToString(), hcs.Opened);
         Assert.Empty(hcs.Started);
         Assert.Empty(hcs.Processes);
-        Assert.Equal("WDAGUtilityAccount", runtime.UserName);
+        Assert.Equal(string.Empty, runtime.UserName);
         Assert.NotNull(hcs.LastHandle);
         Assert.False(hcs.LastHandle!.Disposed);
 

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain;
 using Wsm.Domain.Exceptions;
@@ -22,15 +23,18 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     private readonly ISandboxInstanceRepository _repository;
     private readonly ISandboxEngineSelector _selector;
     private readonly ISessionLauncher _sessionLauncher;
+    private readonly ILogger<SandboxManager> _logger;
 
     public SandboxManager(
         ISandboxInstanceRepository repository,
         ISandboxEngineSelector selector,
-        ISessionLauncher sessionLauncher)
+        ISessionLauncher sessionLauncher,
+        ILogger<SandboxManager> logger)
     {
         _repository = repository;
         _selector = selector;
         _sessionLauncher = sessionLauncher;
+        _logger = logger;
     }
 
     public async Task<SandboxInstanceDto> CreateAsync(string? name, SandboxRecipe recipe, SandboxEngineKind? engine = null, CancellationToken cancellationToken = default)
@@ -230,7 +234,36 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             await PersistAsync(instance, cancellationToken).ConfigureAwait(false);
         }
 
+        // Force-disconnect any session left over from a previous connect: the WDAG
+        // guest keeps the disconnected session around and then refuses a new one
+        // with "too many sessions established", so reclaim the slot first.
+        await ReclaimGuestSessionsAsync(engine, instance.Id, cancellationToken).ConfigureAwait(false);
+
         await _sessionLauncher.LaunchAsync(instance.Id, runtime, mode, engine.Kind, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Logs off any guest session still present before a new one is established.
+    /// Best effort: engines that cannot run guest commands are skipped, and a
+    /// failed reclaim must never block connecting.
+    /// </summary>
+    private async Task ReclaimGuestSessionsAsync(ISandboxEngine engine, SandboxInstanceId id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await engine.ExecuteAsync(
+                id,
+                new LogonCommand("cmd.exe /c for /l %i in (1,1,20) do @logoff %i 2>nul"),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (SandboxNotSupportedException)
+        {
+            // The engine cannot run guest commands; there is nothing to reclaim.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Reclaiming guest sessions for sandbox {SandboxId} failed.", id);
+        }
     }
 
     public async Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken cancellationToken = default)

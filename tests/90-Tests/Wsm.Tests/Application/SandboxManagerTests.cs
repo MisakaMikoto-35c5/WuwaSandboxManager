@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Wsm.Domain;
 using Wsm.Domain.Exceptions;
 using Wsm.Domain.ValueObjects;
@@ -284,7 +285,7 @@ public sealed class SandboxManagerTests
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
-        return new SandboxManager(repository, selector, new StubSessionLauncher());
+        return new SandboxManager(repository, selector, new StubSessionLauncher(), NullLogger<SandboxManager>.Instance);
     }
 
     private static ISandboxManager Manager(
@@ -293,7 +294,7 @@ public sealed class SandboxManagerTests
         ISessionLauncher sessionLauncher)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
-        return new SandboxManager(repository, selector, sessionLauncher);
+        return new SandboxManager(repository, selector, sessionLauncher, NullLogger<SandboxManager>.Instance);
     }
 
     private sealed class StubSessionLauncher : ISessionLauncher

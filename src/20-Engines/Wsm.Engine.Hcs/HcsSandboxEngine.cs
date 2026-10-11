@@ -164,17 +164,11 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
 
         var (system, adopted) = CreateOrAdopt(id, json);
 
-        string accountUser;
-        string accountPassword;
-
         if (adopted)
         {
             // The compute system was already running (typically started by another
             // process, e.g. `wsm host`, and still up). It is already configured and
-            // provisioned, so adopt it as-is. Its password is unknown here, but the
-            // sandbox guest accepts the connection without an explicit credential.
-            accountUser = string.IsNullOrWhiteSpace(recipe.AccountUser) ? DefaultGuestUser : recipe.AccountUser!;
-            accountPassword = recipe.AccountPassword ?? string.Empty;
+            // provisioned, so adopt it as-is.
             _logger.LogInformation(
                 "Sandbox {SandboxId} was already running; adopted the existing compute system " +
                 "(skipping start and guest provisioning).",
@@ -235,9 +229,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
 
             // Mirror the platform's own guest set-up: enable the WDAGUtilityAccount
             // with a known password so the sandbox can actually be reached over RDP.
-            // Without it the account has no usable credential and any RDP connect is
-            // refused at logon.
-            (accountUser, accountPassword) = ProvisionGuestAccount(id, recipe);
+            ProvisionGuestAccount(id, recipe);
         }
 
         var runtime = new SandboxRuntimeInfo
@@ -248,8 +240,6 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             RailMode = recipe.RailMode,
             FullScreen = recipe.FullScreen,
             WindowTitle = recipe.Name.Value,
-            UserName = accountUser,
-            Password = accountPassword,
             Redirections = recipe.Redirections,
         };
 
@@ -388,6 +378,21 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             CheckGuest(id.ToString(), "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections /t REG_DWORD /d 0 /f");
             CheckGuest(id.ToString(), "net start TermService");
 
+            // Log the sandbox account on automatically. The RDP session is presented
+            // over the named pipe without a usable credential, so without this the
+            // session sits at the guest's logon screen — the blank/white desktop the
+            // user sees. Auto-logon makes the guest present its interactive desktop as
+            // soon as the session is established, exactly like the stock sandbox.
+            var computerName = RunGuestOutput(id.ToString(), "cmd /c echo %COMPUTERNAME%");
+            const string winlogon = "\"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\"";
+            CheckGuest(id.ToString(), $"reg add {winlogon} /v AutoAdminLogon /t REG_SZ /d 1 /f");
+            CheckGuest(id.ToString(), $"reg add {winlogon} /v DefaultUserName /t REG_SZ /d {user} /f");
+            CheckGuest(id.ToString(), $"reg add {winlogon} /v DefaultPassword /t REG_SZ /d {password} /f");
+            if (!string.IsNullOrWhiteSpace(computerName))
+            {
+                CheckGuest(id.ToString(), $"reg add {winlogon} /v DefaultDomainName /t REG_SZ /d {computerName} /f");
+            }
+
             _logger.LogInformation("Provisioned guest account {User} for sandbox {SandboxId}.", user, id);
         }
         catch (Exception ex)
@@ -456,6 +461,13 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             "Guest command '{Command}' in sandbox {SandboxId} exited {ExitCode}. {Output} {Error}",
             commandLine, id, result.ExitCode, result.StandardOutput.Trim(), result.StandardError.Trim());
         return result.ExitCode;
+    }
+
+    /// <summary>Runs a guest command and returns its trimmed standard output.</summary>
+    private string RunGuestOutput(string id, string commandLine)
+    {
+        var result = _hcs.RunProcess(id, commandLine);
+        return result.StandardOutput.Trim();
     }
 
     /// <summary>

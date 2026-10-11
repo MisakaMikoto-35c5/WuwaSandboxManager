@@ -43,6 +43,19 @@ public interface ISandboxEngine
     Task<int> ExecuteAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
         => throw NotSupported(nameof(ExecuteAsync));
 
+    /// <summary>
+    /// Executes a command inside the instance and returns its exit code together
+    /// with the guest's captured standard output and error. Engines that cannot
+    /// capture the guest's streams fall back to <see cref="ExecuteAsync"/> and
+    /// report empty output, so a caller that inspects the output must tolerate
+    /// it being absent.
+    /// </summary>
+    async Task<GuestCommandResult> CaptureAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
+    {
+        var exitCode = await ExecuteAsync(id, command, cancellationToken).ConfigureAwait(false);
+        return GuestCommandResult.FromExitCode(exitCode);
+    }
+
     /// <summary>Returns the guest IP addresses.</summary>
     Task<IReadOnlyList<string>> GetIpAddressesAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
         => throw NotSupported(nameof(GetIpAddressesAsync));

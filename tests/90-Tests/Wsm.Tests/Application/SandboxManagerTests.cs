@@ -309,6 +309,78 @@ public sealed class SandboxManagerTests
             (SandboxRecipe.Default with { RailProgram = @"C:\Windows\regedit.exe" }).ResolvedRailProgram);
     }
 
+    [Fact]
+    public async Task Connect_force_disconnects_an_orphaned_guest_session_before_launching()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        // The session query reports a disconnected ("Disc") leftover session (id
+        // 2); the reclaim must log it off before the session launcher is invoked.
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            "                                                     2  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.Contains("logoff 2", engine.GuestCommands);
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+    }
+
+    [Fact]
+    public async Task Connect_leaves_a_still_connected_guest_session_alone()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        // A session that is still connected is the caller's own (or a concurrent
+        // connect): it must not be force-disconnected.
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4#0                              1  Conn\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.Empty(engine.GuestCommands);
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+    }
+
+    [Fact]
+    public async Task Connect_does_not_touch_guest_sessions_when_the_table_is_clear()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.Empty(engine.GuestCommands);
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+    }
+
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
@@ -396,6 +468,15 @@ public sealed class SandboxManagerTests
 
         public SandboxStartRequest? LastStartRequest { get; private set; }
 
+        /// <summary>Guest commands the reclaim executed (e.g. <c>logoff 1</c>).</summary>
+        public List<string> GuestCommands { get; } = new();
+
+        /// <summary>
+        /// Scripted <c>qwinsta</c> outputs. One entry is returned per query; the
+        /// last entry repeats. An empty queue yields an empty table.
+        /// </summary>
+        public Queue<string> QwinstaTables { get; } = new();
+
         public string Name => "stub";
 
         public SandboxEngineKind Kind => SandboxEngineKind.HcsSandbox;
@@ -462,6 +543,26 @@ public sealed class SandboxManagerTests
 
             DeletedData.Add(id);
             return Task.CompletedTask;
+        }
+
+        public async Task<GuestCommandResult> CaptureAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
+        {
+            if (command.Command == "qwinsta")
+            {
+                var table = QwinstaTables.Count == 0
+                    ? string.Empty
+                    : QwinstaTables.Count == 1 ? QwinstaTables.Peek() : QwinstaTables.Dequeue();
+                return new GuestCommandResult(0, table, string.Empty);
+            }
+
+            var exitCode = await ExecuteAsync(id, command, cancellationToken).ConfigureAwait(false);
+            return GuestCommandResult.FromExitCode(exitCode);
+        }
+
+        public Task<int> ExecuteAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
+        {
+            GuestCommands.Add(command.Command);
+            return Task.FromResult(0);
         }
     }
 

@@ -361,6 +361,25 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     }
 
     /// <summary>
+    /// Runs a guest command and returns its output. Unlike
+    /// <see cref="ExecuteAsync"/> — which logs the streams at Information because
+    /// the caller only wants the exit code — the captured output is logged at
+    /// Debug, so a caller that inspects it (the session reclaim runs
+    /// <c>qwinsta</c> on every connect) does not spam the log.
+    /// </summary>
+    public Task<GuestCommandResult> CaptureAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
+    {
+        EnsureElevated();
+        var result = _hcs.RunProcess(id.ToString(), command.Command);
+
+        _logger.LogDebug(
+            "Captured guest command '{Command}' in sandbox {SandboxId} (exit {ExitCode}). {Output} {Error}",
+            command.Command, id, result.ExitCode, result.StandardOutput.Trim(), result.StandardError.Trim());
+
+        return Task.FromResult(new GuestCommandResult(result.ExitCode, result.StandardOutput, result.StandardError));
+    }
+
+    /// <summary>
     /// Provisions the guest logon account exactly like the platform's own
     /// <c>WindowsSandboxServer</c>: wait for the guest, set the account password,
     /// activate it and add it to the Users/Administrators groups. Returns the

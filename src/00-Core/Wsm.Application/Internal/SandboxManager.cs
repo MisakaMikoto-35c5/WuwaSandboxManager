@@ -245,18 +245,54 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     }
 
     /// <summary>
-    /// Logs off any guest session still present before a new one is established.
-    /// Best effort: engines that cannot run guest commands are skipped, and a
-    /// failed reclaim must never block connecting.
+    /// Force-disconnects any orphaned (disconnected) guest session a previous
+    /// connect left behind before a new one is established. The WDAG guest can
+    /// keep a disconnected session and then refuse the next connection with "too
+    /// many sessions established" (<c>ERROR_REMOTE_SESSION_LIMIT_EXCEEDED</c>),
+    /// so those sessions are logged off first. A session that is still connected
+    /// is left alone: it is the caller's own (or a concurrent connect) and the
+    /// guest already replaces it. Best effort: engines that cannot run guest
+    /// commands are skipped, and a failed reclaim must never block connecting.
     /// </summary>
     private async Task ReclaimGuestSessionsAsync(ISandboxEngine engine, SandboxInstanceId id, CancellationToken cancellationToken)
     {
         try
         {
-            await engine.ExecuteAsync(
-                id,
-                new LogonCommand("cmd.exe /c for /l %i in (1,1,20) do @logoff %i 2>nul"),
-                cancellationToken).ConfigureAwait(false);
+            var table = await engine
+                .CaptureAsync(id, new LogonCommand(QwinstaCommand), cancellationToken)
+                .ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(table.StandardOutput))
+            {
+                // The engine cannot capture the guest's streams, so the session
+                // table is unknown: log off the whole scanned id range and let the
+                // guest ignore the ids that are absent (output suppressed).
+                await engine
+                    .ExecuteAsync(id, new LogonCommand(QuietLogoffRangeCommand), cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var orphans = GuestSessionTable.Parse(table.StandardOutput)
+                .Where(session => !session.IsConnected)
+                .Select(session => session.Id)
+                .ToArray();
+
+            if (orphans.Length == 0)
+            {
+                return;
+            }
+
+            _logger.LogInformation(
+                "Force-disconnecting {Count} orphaned guest session(s) in sandbox {SandboxId}: {Sessions}.",
+                orphans.Length, id, string.Join(", ", orphans));
+
+            foreach (var sessionId in orphans)
+            {
+                await engine
+                    .ExecuteAsync(id, new LogonCommand($"logoff {sessionId}"), cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (SandboxNotSupportedException)
         {
@@ -267,6 +303,16 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             _logger.LogDebug(ex, "Reclaiming guest sessions for sandbox {SandboxId} failed.", id);
         }
     }
+
+    /// <summary>Guest command that lists the current sessions.</summary>
+    private const string QwinstaCommand = "qwinsta";
+
+    /// <summary>
+    /// Blind fallback for engines that cannot capture output: log off every low
+    /// session id, discarding the "Session ID n not found" lines for the ids that
+    /// do not exist.
+    /// </summary>
+    private const string QuietLogoffRangeCommand = "cmd.exe /c for /l %i in (1,1,20) do @logoff %i >nul 2>&1";
 
     public async Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken cancellationToken = default)
     {

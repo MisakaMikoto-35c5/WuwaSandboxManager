@@ -1,8 +1,9 @@
 namespace Wsm.Hcs.Process;
 
 /// <summary>
-/// Executes a process inside an HCS compute system.
-/// <b>Reserved / not implemented yet.</b>
+/// Executes a process inside an HCS compute system. This is the primitive used
+/// by the Windows container engine to run commands (and start services) inside a
+/// container, including one built from the shared Windows Sandbox image.
 /// </summary>
 public interface IComputeProcessExecutor
 {

@@ -2,7 +2,8 @@ namespace Wsm.Hcs.Json.Container;
 
 /// <summary>
 /// Builds the HCS JSON configuration document for a Windows container compute
-/// system. <b>Reserved / not implemented yet.</b>
+/// system. The document follows schema 2.1 and is accepted by
+/// <c>HcsCreateComputeSystem</c> (system type <c>Container</c>).
 /// </summary>
 public interface IContainerJsonBuilder
 {

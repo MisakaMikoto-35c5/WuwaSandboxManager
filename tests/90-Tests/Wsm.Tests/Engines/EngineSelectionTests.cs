@@ -10,6 +10,7 @@ using Wsm.Engines.Abstractions.Internal;
 using Wsm.Hcs.Json.Container;
 using Wsm.Hcs.Network;
 using Wsm.Hcs.Process;
+using Wsm.Host.Elevation;
 using Xunit;
 
 namespace Wsm.Tests.Engines;
@@ -36,9 +37,11 @@ public sealed class EngineSelectionTests
             Assert.Contains(engines, engine => engine.Kind == SandboxEngineKind.HcsSandbox);
             Assert.Contains(engines, engine => engine.Kind == SandboxEngineKind.WindowsSandbox);
 
-            // The reserved Windows Container engine registers but is never available.
+            // The Windows Container engine registers and, like the HCS engine,
+            // is available exactly when the process is elevated (it drives HCS).
             var container = Assert.Single(engines, engine => engine.Kind == SandboxEngineKind.WindowsContainer);
-            Assert.False(container.IsAvailable);
+            var elevation = app.ServiceProvider.GetRequiredService<IElevationService>();
+            Assert.Equal(elevation.IsElevated, container.IsAvailable);
 
             // The registry fast-fails on duplicate kinds, so resolving it proves
             // the engines are distinct.

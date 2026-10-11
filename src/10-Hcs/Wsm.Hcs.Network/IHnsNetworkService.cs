@@ -2,7 +2,8 @@ namespace Wsm.Hcs.Network;
 
 /// <summary>
 /// Creates and queries HNS (Host Network Service) endpoints for HCS compute
-/// systems. <b>Reserved / not implemented yet.</b>
+/// systems. Endpoints are the object HCS containers attach through
+/// <c>Container.Networking.NetworkAdapters</c>.
 /// </summary>
 public interface IHnsNetworkService
 {

@@ -4,13 +4,10 @@ using Wsm.Domain;
 namespace Wsm.Hcs.Process;
 
 /// <summary>
-/// ABP module for the in-guest process execution capability.
-/// <para>
-/// <b>Reserved / not implemented yet.</b> Registered so the module graph is
-/// complete; the executor throws
-/// <see cref="Wsm.Domain.Exceptions.SandboxNotSupportedException"/>
-/// until a later phase implements it.
-/// </para>
+/// ABP module for the in-compute-system process execution capability. It exposes
+/// <see cref="IComputeProcessExecutor"/>, which drives the HCS process API
+/// (<c>HcsCreateProcess</c> / <c>HcsWaitForProcessExit</c>) on
+/// <c>computecore.dll</c>.
 /// </summary>
 [DependsOn(typeof(SandboxDomainModule))]
 public sealed class HcsProcessModule : AbpModule

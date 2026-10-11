@@ -4,7 +4,7 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>Wsm.Hcs.Process</RootNamespace>
     <AssemblyName>Wsm.Hcs.Process</AssemblyName>
-    <Description>Reserved: executes processes inside an HCS compute system.</Description>
+    <Description>Executes processes inside an HCS compute system.</Description>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,6 +13,12 @@
 
   <ItemGroup>
     <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Wsm.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

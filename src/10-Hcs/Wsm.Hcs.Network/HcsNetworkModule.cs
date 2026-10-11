@@ -4,13 +4,9 @@ using Wsm.Domain;
 namespace Wsm.Hcs.Network;
 
 /// <summary>
-/// ABP module for the HNS networking capability.
-/// <para>
-/// <b>Reserved / not implemented yet.</b> Registered so the module graph is
-/// complete; the service throws
-/// <see cref="Wsm.Domain.Exceptions.SandboxNotSupportedException"/>
-/// until a later phase implements it.
-/// </para>
+/// ABP module for the HNS networking capability. It exposes
+/// <see cref="IHnsNetworkService"/>, which calls the Host Network Service JSON
+/// dispatcher (<c>HNSCall</c> in <c>vmcompute.dll</c>).
 /// </summary>
 [DependsOn(typeof(SandboxDomainModule))]
 public sealed class HcsNetworkModule : AbpModule

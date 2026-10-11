@@ -56,7 +56,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     private readonly ConcurrentDictionary<string, LiveSystem> _systems =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private sealed record LiveSystem(IDisposable Handle, SandboxRuntimeInfo Runtime);
+    private sealed record LiveSystem(IDisposable Handle, SandboxRuntimeInfo Runtime, bool Adopted);
 
     public HcsSandboxEngine(
         IHcsClient hcs,
@@ -162,64 +162,83 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             "memory={MemoryMb}MB, cpus={CpuCount})",
             id, baseLayer, storage.Directory, definition.MemoryMb, definition.CpuCount);
 
-        var system = _hcs.Create(id.ToString(), json);
+        var (system, adopted) = CreateOrAdopt(id, json);
 
-        try
+        string accountUser;
+        string accountPassword;
+
+        if (adopted)
         {
-            // The compute system runs as a different identity than this process,
-            // so it needs explicit access to every file backing the sandbox.
-            // Storage under ProgramData inherits a broad ACL, but the default
-            // per-user Documents location does not: before this the parent base
-            // copy (sandbox.base.vhdx) was never granted, so Start failed with
-            // 0xC03A0016 ("the process lacks permission"). The disk/guest-state
-            // files are mandatory, so a failed grant is surfaced (actionable)
-            // rather than swallowed; every other file in the directory — the
-            // crash-dump placeholder, and anything a future provisioner adds —
-            // is granted best-effort, as is the directory itself.
-            GrantDiskFileAccess(id.ToString(), storage.DiskPath);
-            GrantDiskFileAccess(id.ToString(), storage.GuestStatePath);
-
-            // The parent base disk is, by default, the platform's own OS image
-            // that lives outside the sandbox folder (it is referenced, never
-            // copied), so it already carries a broad ACL and needs no grant. Only
-            // a base disk that lives inside the folder (an explicitly configured
-            // image) is granted, and then mandatorily.
-            if (!string.IsNullOrWhiteSpace(storage.BaseDiskPath)
-                && IsWithinDirectory(storage.BaseDiskPath, storage.Directory))
+            // The compute system was already running (typically started by another
+            // process, e.g. `wsm host`, and still up). It is already configured and
+            // provisioned, so adopt it as-is. Its password is unknown here, but the
+            // sandbox guest accepts the connection without an explicit credential.
+            accountUser = string.IsNullOrWhiteSpace(recipe.AccountUser) ? DefaultGuestUser : recipe.AccountUser!;
+            accountPassword = recipe.AccountPassword ?? string.Empty;
+            _logger.LogInformation(
+                "Sandbox {SandboxId} was already running; adopted the existing compute system " +
+                "(skipping start and guest provisioning).",
+                id);
+        }
+        else
+        {
+            try
             {
-                GrantDiskFileAccess(id.ToString(), storage.BaseDiskPath);
+                // The compute system runs as a different identity than this process,
+                // so it needs explicit access to every file backing the sandbox.
+                // Storage under ProgramData inherits a broad ACL, but the default
+                // per-user Documents location does not: before this the parent base
+                // copy (sandbox.base.vhdx) was never granted, so Start failed with
+                // 0xC03A0016 ("the process lacks permission"). The disk/guest-state
+                // files are mandatory, so a failed grant is surfaced (actionable)
+                // rather than swallowed; every other file in the directory — the
+                // crash-dump placeholder, and anything a future provisioner adds —
+                // is granted best-effort, as is the directory itself.
+                GrantDiskFileAccess(id.ToString(), storage.DiskPath);
+                GrantDiskFileAccess(id.ToString(), storage.GuestStatePath);
+
+                // The parent base disk is, by default, the platform's own OS image
+                // that lives outside the sandbox folder (it is referenced, never
+                // copied), so it already carries a broad ACL and needs no grant. Only
+                // a base disk that lives inside the folder (an explicitly configured
+                // image) is granted, and then mandatorily.
+                if (!string.IsNullOrWhiteSpace(storage.BaseDiskPath)
+                    && IsWithinDirectory(storage.BaseDiskPath, storage.Directory))
+                {
+                    GrantDiskFileAccess(id.ToString(), storage.BaseDiskPath);
+                }
+
+                GrantRemainingStorageFilesQuietly(id.ToString(), storage);
+                GrantVmAccessQuietly(id.ToString(), storage.Directory);
+
+                _hcs.Start(id.ToString());
+            }
+            catch (SandboxBackendException ex)
+            {
+                system.Dispose();
+                _logger.LogError(ex, "HCS rejected or failed to start compute system {SandboxId}", id);
+                throw new SandboxBackendException(
+                    $"HCS rejected the configuration or failed to start sandbox {id}: {ex.Message}",
+                    ex.HResult,
+                    ex);
+            }
+            catch (SandboxDomainException)
+            {
+                system.Dispose();
+                throw;
+            }
+            catch
+            {
+                system.Dispose();
+                throw;
             }
 
-            GrantRemainingStorageFilesQuietly(id.ToString(), storage);
-            GrantVmAccessQuietly(id.ToString(), storage.Directory);
-
-            _hcs.Start(id.ToString());
+            // Mirror the platform's own guest set-up: enable the WDAGUtilityAccount
+            // with a known password so the sandbox can actually be reached over RDP.
+            // Without it the account has no usable credential and any RDP connect is
+            // refused at logon.
+            (accountUser, accountPassword) = ProvisionGuestAccount(id, recipe);
         }
-        catch (SandboxBackendException ex)
-        {
-            system.Dispose();
-            _logger.LogError(ex, "HCS rejected or failed to start compute system {SandboxId}", id);
-            throw new SandboxBackendException(
-                $"HCS rejected the configuration or failed to start sandbox {id}: {ex.Message}",
-                ex.HResult,
-                ex);
-        }
-        catch (SandboxDomainException)
-        {
-            system.Dispose();
-            throw;
-        }
-        catch
-        {
-            system.Dispose();
-            throw;
-        }
-
-        // Mirror the platform's own guest set-up: enable the WDAGUtilityAccount
-        // with a known password so the sandbox can actually be reached over RDP.
-        // Without it the account has no usable credential and any RDP connect is
-        // refused at logon.
-        var (accountUser, accountPassword) = ProvisionGuestAccount(id, recipe);
 
         var runtime = new SandboxRuntimeInfo
         {
@@ -236,9 +255,60 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
 
         // Keep the handle (and the runtime info) for the instance's lifetime;
         // releasing it is what stops the sandbox.
-        RememberSystem(id.ToString(), system, runtime);
+        RememberSystem(id.ToString(), system, runtime, adopted);
 
         return Task.FromResult(runtime);
+    }
+
+    /// <summary>
+    /// Creates the compute system, or <b>adopts</b> the existing one when a system
+    /// with this id is already running. Starting a sandbox is therefore
+    /// idempotent: an already-running sandbox (for example one held by
+    /// <c>wsm host</c> in another process) no longer fails with "a compute system
+    /// with that id already exists" and no longer faults the instance, so the
+    /// caller can go straight on to connect.
+    /// </summary>
+    private (IDisposable Handle, bool Adopted) CreateOrAdopt(
+        SandboxInstanceId id,
+        string json)
+    {
+        try
+        {
+            return (_hcs.Create(id.ToString(), json), false);
+        }
+        catch (Exception ex) when (IsRunning(id))
+        {
+            _logger.LogInformation(
+                ex,
+                "A compute system with id {SandboxId} already exists and is running; adopting it.",
+                id);
+
+            try
+            {
+                return (_hcs.Open(id.ToString()), true);
+            }
+            catch (Exception openEx)
+            {
+                _logger.LogWarning(
+                    openEx,
+                    "Unable to adopt the running compute system {SandboxId}.",
+                    id);
+                throw;
+            }
+        }
+    }
+
+    /// <summary>True when a compute system with this id currently exists.</summary>
+    private bool IsRunning(SandboxInstanceId id)
+    {
+        try
+        {
+            return _hcs.Get(id.ToString()) is not null;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>Default guest logon account used by the Windows Sandbox image.</summary>
@@ -446,6 +516,13 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         if (_systems.TryRemove(key, out var live))
         {
             live.Handle.Dispose();
+
+            // An adopted system is also held by whoever started it, so releasing
+            // our handle alone does not terminate it: stop it explicitly.
+            if (live.Adopted)
+            {
+                _hcs.Terminate(key);
+            }
         }
         else
         {
@@ -594,9 +671,9 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         return dumpPath;
     }
 
-    private void RememberSystem(string key, IDisposable handle, SandboxRuntimeInfo runtime)
+    private void RememberSystem(string key, IDisposable handle, SandboxRuntimeInfo runtime, bool adopted = false)
     {
-        var live = new LiveSystem(handle, runtime);
+        var live = new LiveSystem(handle, runtime, adopted);
 
         // A duplicate id should not occur (HCS rejects it), but never leak the
         // previous handle if it does.

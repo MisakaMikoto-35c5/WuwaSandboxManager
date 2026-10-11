@@ -659,6 +659,8 @@ public sealed class StorageProvisioningTests : IDisposable
 
         public IDisposable Create(string id, string configuration) => throw new NotSupportedException();
 
+        public IDisposable Open(string id) => throw new NotSupportedException();
+
         public void Start(string id) => throw new NotSupportedException();
 
         public void Shutdown(string id) => throw new NotSupportedException();

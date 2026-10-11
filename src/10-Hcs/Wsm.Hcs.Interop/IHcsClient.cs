@@ -17,6 +17,15 @@ public interface IHcsClient
     /// </summary>
     IDisposable Create(string id, string configuration);
 
+    /// <summary>
+    /// Opens an <b>existing</b> compute system and returns an RAII handle that
+    /// owns the native <c>HCS_SYSTEM</c>. Used to adopt a system this process did
+    /// not create (for example one started by another process and still running),
+    /// so that starting a sandbox that is already up is idempotent rather than an
+    /// "already exists" failure.
+    /// </summary>
+    IDisposable Open(string id);
+
     void Start(string id);
 
     void Shutdown(string id);

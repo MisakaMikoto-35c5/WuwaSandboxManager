@@ -151,6 +151,31 @@ public sealed class HcsSandboxEngineTests
     }
 
     [Fact]
+    public async Task Start_adopts_an_already_running_system_instead_of_faulting()
+    {
+        var hcs = new FakeHcsClient { CreateThrows = true };
+        var engine = CreateEngine(hcs, out _);
+
+        var id = SandboxInstanceId.New();
+        var runtime = await engine.StartAsync(Request(id));
+
+        // A running system (e.g. held by `wsm host` in another process) is
+        // adopted rather than reported as "already exists": no start, no guest
+        // re-provisioning, and the caller still gets a usable runtime.
+        Assert.Contains(id.ToString(), hcs.Opened);
+        Assert.Empty(hcs.Started);
+        Assert.Empty(hcs.Processes);
+        Assert.Equal("WDAGUtilityAccount", runtime.UserName);
+        Assert.NotNull(hcs.LastHandle);
+        Assert.False(hcs.LastHandle!.Disposed);
+
+        // Stopping the adopted system releases our handle and terminates it.
+        await engine.StopAsync(id);
+        Assert.True(hcs.LastHandle.Disposed);
+        Assert.Contains(id.ToString(), hcs.Terminated);
+    }
+
+    [Fact]
     public async Task DeleteData_removes_storage_and_snapshot_directories()
     {
         var engine = CreateEngine(new FakeHcsClient(), out _);
@@ -218,6 +243,11 @@ public sealed class HcsSandboxEngineTests
 
         public TrackingHandle? LastHandle { get; private set; }
 
+        /// <summary>When set, <see cref="Create"/> throws "already exists".</summary>
+        public bool CreateThrows { get; set; }
+
+        public List<string> Opened { get; } = new();
+
         public IReadOnlyList<HcsComputeSystemInfo> List(string? query = null)
             => Array.Empty<HcsComputeSystemInfo>();
 
@@ -225,6 +255,18 @@ public sealed class HcsSandboxEngineTests
 
         public IDisposable Create(string id, string configuration)
         {
+            if (CreateThrows)
+            {
+                throw new SandboxDomainException("A compute system with that id already exists (HcsCreateComputeSystem).");
+            }
+
+            LastHandle = new TrackingHandle();
+            return LastHandle;
+        }
+
+        public IDisposable Open(string id)
+        {
+            Opened.Add(id);
             LastHandle = new TrackingHandle();
             return LastHandle;
         }

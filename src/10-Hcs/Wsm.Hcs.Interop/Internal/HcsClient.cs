@@ -92,7 +92,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         HcsComputeSystem system;
         try
         {
-            system = Open(id);
+            system = OpenHandle(id);
         }
         catch (SandboxNotFoundException)
         {
@@ -129,9 +129,11 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         return new HcsComputeSystem(handle);
     }
 
+    public IDisposable Open(string id) => OpenHandle(id);
+
     public void Start(string id)
     {
-        using var system = Open(id);
+        using var system = OpenHandle(id);
         using var operation = new HcsOperation();
         var hr = HcsNative.HcsStartComputeSystem(system.Handle, operation.Handle, "{}");
         operation.Complete(hr, nameof(HcsNative.HcsStartComputeSystem));
@@ -139,7 +141,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
 
     public void Shutdown(string id)
     {
-        using var system = Open(id);
+        using var system = OpenHandle(id);
         using var operation = new HcsOperation();
         var hr = HcsNative.HcsShutDownComputeSystem(system.Handle, operation.Handle, "{}");
         operation.Complete(hr, nameof(HcsNative.HcsShutDownComputeSystem));
@@ -150,7 +152,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         HcsComputeSystem system;
         try
         {
-            system = Open(id);
+            system = OpenHandle(id);
         }
         catch (SandboxNotFoundException)
         {
@@ -173,7 +175,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
     /// </summary>
     public string? Save(string id, string options)
     {
-        using var system = Open(id);
+        using var system = OpenHandle(id);
         using var operation = new HcsOperation();
         var hr = HcsNative.HcsSaveComputeSystem(system.Handle, operation.Handle, options);
         return operation.Complete(hr, nameof(HcsNative.HcsSaveComputeSystem));
@@ -196,7 +198,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
 
     public HcsProcessResult RunProcess(string id, string commandLine, string? user = null, uint timeoutMs = 120_000)
     {
-        using var system = Open(id);
+        using var system = OpenHandle(id);
         var parameters = BuildProcessParameters(commandLine, user);
 
         using var operation = new HcsOperation();
@@ -354,7 +356,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         return 0;
     }
 
-    private static HcsComputeSystem Open(string id)
+    private static HcsComputeSystem OpenHandle(string id)
     {
         // 0x10000000 == GENERIC_ALL. HCS rejects an access mask of 0 with
         // E_INVALIDARG (0x80070057), which leaves a null handle that makes the

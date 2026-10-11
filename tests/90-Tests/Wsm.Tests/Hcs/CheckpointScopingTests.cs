@@ -94,6 +94,8 @@ public sealed class CheckpointScopingTests
 
         public IDisposable Create(string id, string configuration) => new NoopDisposable();
 
+        public IDisposable Open(string id) => new NoopDisposable();
+
         public void Start(string id)
         {
         }

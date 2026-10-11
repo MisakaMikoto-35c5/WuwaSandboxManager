@@ -140,13 +140,36 @@ internal sealed class RdpHostForm : Form
 
     private void TearDown()
     {
-        try
+        var client = _client;
+        _client = null;
+
+        if (client is not null)
         {
-            _client?.Dispose();
-        }
-        catch
-        {
-            // Best effort.
+            // Disconnect explicitly before releasing the ActiveX host. Merely
+            // disposing the control can leave the guest session and the RDPBASE
+            // named-pipe connector held, so a later connect is refused ("the
+            // session is occupied"). A graceful Disconnect lets the guest end the
+            // session cleanly.
+            try
+            {
+                if (client.Connected != 0)
+                {
+                    client.Disconnect();
+                }
+            }
+            catch
+            {
+                // Best effort: the control may already be gone.
+            }
+
+            try
+            {
+                client.Dispose();
+            }
+            catch
+            {
+                // Best effort.
+            }
         }
 
         try
@@ -158,7 +181,6 @@ internal sealed class RdpHostForm : Form
             // Best effort.
         }
 
-        _client = null;
         _connector = null;
     }
 }

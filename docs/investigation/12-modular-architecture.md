@@ -34,12 +34,12 @@ module/project dependency graph):
 
 ## 2. 程序集清单 / Assembly inventory
 
-**中文**：下表是**最终** 28 个程序集的完整清单（P8b 之后）。**核心**=已实现；**预留**=可编译空壳，
-`IsAvailable=false` / 成员抛 `SandboxNotSupportedException`。
+**中文**：下表是**最终** 28 个程序集的完整清单（P8b 之后，第三个引擎落地后）。P5 引入的 4 个
+**预留空壳**（容器 JSON / 进程 / 网络 / 容器引擎）现均已实现为 **核心**，因此 28 个程序集全部为已实现。
 
-**English**: The table lists the complete **final** inventory of 28 assemblies (after P8b). **Core** =
-implemented; **Reserved** = compilable shell, `IsAvailable=false` / members throw
-`SandboxNotSupportedException`.
+**English**: The table lists the complete **final** inventory of 28 assemblies (after P8b and after the
+third engine landed). The four **reserved shells** introduced in P5 (container JSON, process, network,
+container engine) are now implemented as **Core**, so all 28 assemblies are implemented.
 
 | 程序集 Assembly | 模块 Module | 公共契约 / 职责 Contract / responsibility | 状态 Status |
 |---|---|---|---|
@@ -50,14 +50,14 @@ implemented; **Reserved** = compilable shell, `IsAvailable=false` / members thro
 | `Wsm.Hcs.Interop` | `HcsInteropModule` | `IHcsClient`（`computecore.dll` P/Invoke）/ `IHcsClient` | 核心 Core |
 | `Wsm.Hcs.Layout` | `HcsLayoutModule` | `IHcsHostLayout`（主机布局 / 基础层）/ `IHcsHostLayout` | 核心 Core |
 | `Wsm.Hcs.Json.Sandbox` | `SandboxVmJsonModule` | `ISandboxVmJsonBuilder`（Sandbox/VM HCS JSON）/ `ISandboxVmJsonBuilder` | 核心 Core |
-| `Wsm.Hcs.Json.Container` | `ContainerJsonModule` | `IContainerJsonBuilder`（容器 HCS JSON）/ `IContainerJsonBuilder` | 预留 Reserved |
+| `Wsm.Hcs.Json.Container` | `ContainerJsonModule` | `IContainerJsonBuilder`（容器 HCS JSON / schema 2.1）/ `IContainerJsonBuilder` | 核心 Core |
 | `Wsm.Hcs.Storage` | `HcsStorageModule` | `ISandboxStorageProvisioner`（用户数据盘）/ `ISandboxStorageProvisioner` | 核心 Core |
 | `Wsm.Hcs.Checkpoint` | `HcsCheckpointModule` | `ICheckpointService`（保存/枚举/恢复）/ `ICheckpointService` | 核心 Core |
-| `Wsm.Hcs.Process` | `HcsProcessModule` | `IComputeProcessExecutor`（in-guest 执行）/ `IComputeProcessExecutor` | 预留 Reserved |
-| `Wsm.Hcs.Network` | `HcsNetworkModule` | `IHnsNetworkService`（HNS endpoint）/ `IHnsNetworkService` | 预留 Reserved |
+| `Wsm.Hcs.Process` | `HcsProcessModule` | `IComputeProcessExecutor`（`HcsCreateProcess`/`HcsWaitForProcessExit`）/ process execution | 核心 Core |
+| `Wsm.Hcs.Network` | `HcsNetworkModule` | `IHnsNetworkService`（HNS `HNSCall` endpoint）/ HNS endpoints | 核心 Core |
 | `Wsm.Engine.Hcs` | `HcsEngineModule` | `HcsSandboxEngine : ISandboxEngine`（默认）/ default engine | 核心 Core |
 | `Wsm.Engine.WindowsSandbox` | `WindowsSandboxEngineModule` | `WindowsSandboxEngine : ISandboxEngine`（gRPC）/ gRPC engine | 核心 Core |
-| `Wsm.Engine.WindowsContainer` | `WindowsContainerEngineModule` | `WindowsContainerEngine : ISandboxEngine` | 预留 Reserved |
+| `Wsm.Engine.WindowsContainer` | `WindowsContainerEngineModule` | `WindowsContainerEngine : ISandboxEngine`（HCS 进程隔离容器，复用 Sandbox 镜像层）/ process-isolated container | 核心 Core |
 | `Wsm.SandboxServer.Client` | `SandboxServerClientModule` | `ISandboxServerClient`（命名管道 gRPC）/ named-pipe gRPC client | 核心 Core |
 | `Wsm.Recipe.Serialization` | `WsbRecipeSerializationModule` | `ISandboxRecipeSerializer`（`.wsb` XML）/ `.wsb` XML codec | 核心 Core |
 | `Wsm.Connection.RdpBase` | `RdpBaseModule` | `IRdpBaseConnectorFactory`、`IRdpBaseConnector` | 核心 Core |
@@ -118,10 +118,12 @@ is available.
 |---|---|---|---|
 | HCS（默认 / default） | `HcsSandbox = 0` | 核心 Core | VM 型 DisposableVM，需提权；JSON/布局/存储/检查点模块支撑 / requires elevation |
 | Windows Sandbox | `WindowsSandbox = 1` | 核心 Core | 非提权 gRPC 控制面（命名管道）/ non-elevated gRPC over named pipe |
-| Windows Container | `WindowsContainer = 2` | 预留 Reserved | 轻量隔离，`IsAvailable=false`；`IContainerJsonBuilder`/`IComputeProcessExecutor`/`IHnsNetworkService` 同为预留 / lightweight isolation, reserved |
+| Windows Container | `WindowsContainer = 2` | 核心 Core | **HCS 进程隔离容器**（MXC `processcontainer` 对应的轻量隔离层）：复用 Windows Sandbox 最小镜像层（只读 `Storage.Layers`）+ 每实例 scratch，需提权；容器 JSON / 进程执行 / HNS 能力模块支撑 / HCS process-isolated container, requires elevation |
 
-> 选择行为与现状一致：提权时 HCS，未提权时 HCS 不可用 → 回退 Windows Sandbox。
-> Selection matches existing behaviour: HCS when elevated, otherwise fall back to Windows Sandbox.
+> 选择行为与现状一致：提权时 HCS，未提权时 HCS 不可用 → 回退 Windows Sandbox；进程隔离容器按
+> `SandboxEngineKind` 升序排在 HCS 之后，仅在显式首选时被选中。
+> Selection matches existing behaviour: HCS when elevated, otherwise fall back to Windows Sandbox; the
+> process-isolated container is ordered after HCS and is selected only when explicitly preferred.
 
 ## 5. 本地化策略 / Localization strategy
 
@@ -184,6 +186,13 @@ later recovery. During the migration the old stack was untouched and the new sta
 | P6 Localization (+ presentation start) | `Wsm.Localization`（ABP JSON）+ 文档 / localization + docs | Gate 6 + final |
 | P7 CLI + WinUI | `Wsm.Cli`、`Wsm.Ui.WinUI`（`.resw`/`x:Uid`、引擎/语言切换）/ CLI + WinUI | final |
 | P8 收尾 Cleanup | 删除旧栈、命名空间重命名（消除 `WindowsSandboxManager.*`）/ delete old stack, rename namespaces | final |
+
+> P5 引入的 4 个**预留空壳**（`Wsm.Engine.WindowsContainer`、`Wsm.Hcs.{Json.Container,Process,Network}`）
+> 已在后续「第三个引擎（进程隔离容器）」落地时**全部实现**；§2 的最终状态已如实标注为**核心**。
+>
+> The four **reserved shells** introduced in P5 (`Wsm.Engine.WindowsContainer` and
+> `Wsm.Hcs.{Json.Container,Process,Network}`) were **fully implemented** when the third engine
+> (process-isolated container) landed; §2 now reflects their true **Core** status.
 
 ## 8. P6 / P7 / P8 收尾 / Finalization (localization · presentation · cleanup)
 
@@ -249,9 +258,11 @@ clean and all 49 tests pass.
 1. 引擎偏好端到端打通：`ISandboxManager.StartAsync` 增加可选 `SandboxEngineKind?`，并接通 WinUI 选择。
 2. 引入就地 `UpdateAsync`，消除 UI「保存」= 删除+重建 导致的实例 ID 变更与检查点孤儿。
 3. 恢复的检查点归入所属实例（或在文档 07/11 中写明孤儿 VM 语义）。
-4. 可选：`wsm layers` 由 `IHcsHostLayout` 重新提供；`WindowsContainerEngine.Capabilities` 改为诚实全 false 或加预留标记；
+4. ~~可选：`WindowsContainerEngine.Capabilities` 改为诚实全 false 或加预留标记~~（**已处理**：第三个引擎已实现，
+   能力矩阵已按其真实支持更新）；其余保留：`wsm layers` 由 `IHcsHostLayout` 重新提供；
    `WindowsSandboxEngine.IsAvailable => _environment.IsSupported`。
 5. 文档微调：P8c 入提交链、§2 记 6 个测试模块、§6 补 `AssemblyName=wsm` 括注；`AppLocalizer` 改 internal（**已处理**）。
+6. **进程隔离容器的后续工作**：scratch 层卷（`\\?\Volume{GUID}\`）自动供给、容器网络的 HNS endpoint attach。
 
 **English**: The ABP modularization refactor (P1–P8) is signed off; all plan §14 items are met.
 Both interpretation notes are ruled acceptable (`Wsm.Cli` keeps `AssemblyName=wsm`; `Wsm.Tests` holds 6

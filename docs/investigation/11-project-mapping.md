@@ -25,14 +25,14 @@
 | HCS 互操作 / HCS interop | `Wsm.Hcs.Interop`（`IHcsClient`） | `Infrastructure/Hcs/HcsService`、`HcsNative`、`HcsOperation` |
 | 主机布局 / Host layout | `Wsm.Hcs.Layout`（`IHcsHostLayout`） | `Infrastructure/Hcs/HcsHostLayout` |
 | Sandbox JSON | `Wsm.Hcs.Json.Sandbox`（`ISandboxVmJsonBuilder`） | `Infrastructure/Hcs/HcsSandboxJson` |
-| 容器 JSON / Container JSON | `Wsm.Hcs.Json.Container`（`IContainerJsonBuilder`，**预留**） | （新拆 / new, reserved） |
+| 容器 JSON / Container JSON | `Wsm.Hcs.Json.Container`（`IContainerJsonBuilder`，容器 HCS JSON） | （新拆 / new） |
 | 存储 / Storage | `Wsm.Hcs.Storage`（`ISandboxStorageProvisioner`） | `Infrastructure/Hcs/HcsStorageManager` |
 | 检查点 / Checkpoint | `Wsm.Hcs.Checkpoint`（`ICheckpointService`） | `Infrastructure/Hcs/HcsCheckpointManager` |
-| in-guest 进程 / process | `Wsm.Hcs.Process`（`IComputeProcessExecutor`，**预留**） | （新拆 / new, reserved） |
-| 网络 / Network | `Wsm.Hcs.Network`（`IHnsNetworkService`，**预留**） | （新拆 / new, reserved） |
+| in-guest 进程 / process | `Wsm.Hcs.Process`（`IComputeProcessExecutor`，`HcsCreateProcess`） | （新拆 / new） |
+| 网络 / Network | `Wsm.Hcs.Network`（`IHnsNetworkService`，HNS `HNSCall`） | （新拆 / new） |
 | HCS 引擎 / HCS engine | `Wsm.Engine.Hcs`（`HcsSandboxEngine : ISandboxEngine`，默认） | `Infrastructure/Hcs/HcsSandboxBackend` |
 | gRPC 引擎 / gRPC engine | `Wsm.Engine.WindowsSandbox`（`WindowsSandboxEngine : ISandboxEngine`） | `Infrastructure/Grpc/WindowsSandboxServerBackend` |
-| 容器引擎 / Container engine | `Wsm.Engine.WindowsContainer`（**预留**，`IsAvailable=false`） | （新拆 / new, reserved） |
+| 容器引擎 / Container engine | `Wsm.Engine.WindowsContainer`（**进程隔离容器**，HCS `Container`，提权时可用） | （新拆 / new） |
 | gRPC 客户端 / gRPC client | `Wsm.SandboxServer.Client`（`ISandboxServerClient`，`sandbox_core.proto` + 命名管道通道） | `Infrastructure/Grpc/*` |
 | 序列化 / Serialization | `Wsm.Recipe.Serialization`（`ISandboxRecipeSerializer`，`.wsb` XML） | `Infrastructure/Serialization/WsbRecipeXmlSerializer` |
 | RDPBASE 连接器 / connector | `Wsm.Connection.RdpBase`（`IRdpBaseConnectorFactory`、`IRdpBaseConnector`） | `Infrastructure/Connectors/RdpBaseNamedPipeConnector` |
@@ -56,27 +56,28 @@
 
 ## 2. 引擎能力矩阵 / Engine capability matrix
 
-| 能力 Capability | HCS（默认） HCS (default) | Windows Sandbox（gRPC） | Windows Container（预留） Reserved |
+| 能力 Capability | HCS（默认） HCS (default) | Windows Sandbox（gRPC） | Windows Container（进程隔离） Process-isolated |
 |---|---|---|---|
 | `SandboxEngineKind` | `HcsSandbox = 0` | `WindowsSandbox = 1` | `WindowsContainer = 2` |
-| `IsAvailable` | 提权时 / when elevated | 恒真 / always | 恒假 / always `false` |
-| 多实例 / multiple instances | ✅（无许可门槛 / no license gate） | ⚠️ 受 `CO_E_APPSINGLEUSE` | 计划 / planned ✅ |
-| CPU 核数 / CPU cores | ✅ `Processor.Count` | ✖ | 计划 / planned ✅ |
-| 自定义用户数据位置 / custom storage location | ✅ `Scsi.Attachments[].Path` | ✖（仅大小 / size only） | 计划 / planned ✅ |
-| 自定义基础镜像层 / custom base image | ✅ `VirtualSmb`/`RunInSilo` | ✖ | 计划 / planned ✅ |
-| 检查点 / checkpoints | ✅ `HcsSaveComputeSystem` | ✖ | 计划 / planned ✅ |
-| 运行期热映射目录 / runtime folder mapping | ✖（创建时 / create-time） | ✅ `MapFolder` | 计划 / planned ✅ |
-| in-guest 进程执行 / process execution | ✖ | ✅ `CreateProcess` | 计划 / planned ✅ |
-| 获取 IP / get IP | ✖（HNS） | ✅ `GetIpAddress` | 计划 / planned ✅ |
+| `IsAvailable` | 提权时 / when elevated | 恒真 / always | 提权时 / when elevated |
+| 多实例 / multiple instances | ✅（无许可门槛 / no license gate） | ⚠️ 受 `CO_E_APPSINGLEUSE` | ✅（无许可门槛 / no license gate） |
+| CPU 核数 / CPU cores | ✅ `Processor.Count` | ✖ | ✅ `Processor.Count` |
+| 自定义用户数据位置 / custom storage location | ✅ `Scsi.Attachments[].Path` | ✖（仅大小 / size only） | ✅（每实例 scratch 目录 / per-instance scratch dir） |
+| 基础镜像层 / base image layer | ✅ `VirtualSmb`/`RunInSilo` | ✖ | 🔁 复用 Sandbox 镜像层 / reuses the Sandbox image layer |
+| 检查点 / checkpoints | ✅ `HcsSaveComputeSystem` | ✖ | ✖ |
+| 运行期热映射目录 / runtime folder mapping | ✖（创建时 / create-time） | ✅ `MapFolder` | ✖（创建时 `MappedDirectories` / create-time） |
+| in-guest 进程执行 / process execution | ✖ | ✅ `CreateProcess` | ✅ `HcsCreateProcess` |
+| 获取 IP / get IP | ✖（HNS） | ✅ `GetIpAddress` | ⚠️ HNS 查询（attach 未接线 / not wired） |
 | 提权要求 / elevation | 需要 / required | 不需要 / not required | 需要 / required |
 
 > 选择器 `ISandboxEngineSelector` **仅考虑 `IsAvailable` 引擎**，按 recipe 能力匹配后按
-> `SandboxEngineKind` 升序（HCS 优先）选择。Windows Container 的“计划 ✅”表示其预留空壳声明的
-> 目标能力（见 `WindowsContainerEngine.Capabilities`），但 `IsAvailable=false` 使其**永不被选中**。
+> `SandboxEngineKind` 升序（HCS 优先）选择。第三个引擎 `WindowsContainerEngine` 是 **HCS 进程隔离容器**：
+> 把 Windows Sandbox 的最小化镜像层作为只读容器层复用（`Storage.Layers`），提权时可用，但按升序排在 HCS 之后。
 >
 > The selector considers only `IsAvailable` engines, matches recipe capabilities, then orders by ascending
-> `SandboxEngineKind` (HCS first). Windows Container's "planned ✅" reflects the target matrix declared by
-> its reserved shell; `IsAvailable == false` keeps it from ever being selected.
+> `SandboxEngineKind` (HCS first). The third engine, `WindowsContainerEngine`, is an **HCS process-isolated
+> container** that reuses the Windows Sandbox minimal image layer as a read-only container layer
+> (`Storage.Layers`); it is available when elevated and ordered after HCS.
 
 ## 3. HCS JSON 字段映射 / HCS JSON field mapping
 
@@ -92,6 +93,19 @@
 | 检查点保存 / checkpoint save | `HcsSaveComputeSystem` + `SaveOptions` | `ICheckpointService.Save` |
 | 检查点恢复 / checkpoint restore | `RestoreState.SaveStateFilePath`/`TemplateSystemId` | `ICheckpointService.Restore` |
 | HvSocket 服务 / services | `HvSocket.HvSocketConfig.ServiceTable` | `ISandboxVmJsonBuilder`（LSM/NLM） |
+
+### 3.1 容器 JSON 映射 / Container JSON mapping
+
+| 概念 Concept | 字段 Field | 代码 Code |
+|---|---|---|
+| 宿主名 / host name | `Container.GuestOs.HostName` | `ContainerDefinition.HostName` |
+| 只读基础层 / read-only base layer | `Container.Storage.Layers[].Path`（`Id` 为层 GUID / layer GUID） | `IHcsHostLayout.ResolveBaseLayerPath()`（复用 Sandbox 镜像 / reuses the Sandbox image） |
+| 可写 scratch / writable scratch | `Container.Storage.Path` | `ContainerDefinition.ScratchPath` |
+| CPU / memory | `Container.Processor.Count` / `Container.Memory.SizeInMB` | `SandboxRecipe.Cpu` / `SandboxRecipe.Memory` |
+| 目录映射 / folders | `Container.MappedDirectories[]` | `SandboxRecipe.MappedFolders` |
+| 网络 / networking | `Container.Networking.NetworkAdapters[]` | `IHnsNetworkService`（attach 未接线 / not wired） |
+| 进程执行 / process execution | `HcsCreateProcess` / `HcsWaitForProcessExit` | `IComputeProcessExecutor` |
+| 必要服务 / required services | 容器内 `sc.exe start <svc>` | `WindowsContainerEngineOptions.RequiredServices` |
 
 ## 4. 存储与检查点映射 / Storage & checkpoint mapping
 
@@ -110,6 +124,9 @@
 - 裸 HCS **冷启动**需要已存在基础层与用户数据盘；`ISandboxStorageProvisioner` 从既有
   `ContainerStorages` 播种。模板（zygote）可选，只影响启动速度。
 - 运行期热映射与进程执行由 Windows Sandbox gRPC 引擎承担。
+- **进程隔离容器（第三个引擎）复用 Windows Sandbox 镜像层**；它同样需要提权。HCS 进程隔离要求
+  `Container.Storage.Path` 指向已挂载的层卷（`\\?\Volume{GUID}\`），该 scratch 卷的自动供给与容器
+  网络 attach 尚未接线（进程执行、必要服务拉起、枚举/停止/删除已实现）。
 - 旧的 `wsm hcs` / `wsm layers` 诊断命令依赖已删除的 `Infrastructure/Hcs`，**未迁移**。
 
 **English**:
@@ -118,6 +135,10 @@
 - Raw-HCS **cold start** needs an existing base layer and user-data disk; `ISandboxStorageProvisioner`
   seeds from an existing `ContainerStorages`. The template (zygote) is optional and only affects speed.
 - Runtime folder mapping and process execution are handled by the Windows Sandbox gRPC engine.
+- **The third engine (process-isolated container) reuses the Windows Sandbox image layer** and likewise
+  requires elevation. HCS process isolation expects `Container.Storage.Path` to be a mounted layer volume
+  (`\\?\Volume{GUID}\`); automatic scratch provisioning and the container network attach are not wired yet
+  (process execution, required-service startup, enumerate/stop/delete are implemented).
 - The legacy `wsm hcs` / `wsm layers` diagnostic commands depended on the deleted `Infrastructure/Hcs`
   and were **not migrated**.
 

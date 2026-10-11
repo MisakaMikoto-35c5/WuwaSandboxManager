@@ -21,24 +21,28 @@ HCS 直连可提供：多实例、CPU 核数、自定义用户数据位置、自
 **仅考虑 `IsAvailable == true` 的引擎**，按 recipe 所需能力匹配后，再按 `SandboxEngineKind` 升序
 （HCS 优先）选择；无可用引擎时抛 `SandboxNotSupportedException`（含提权提示）。
 
-| | **HCS（默认）** | **Windows Sandbox（gRPC）** | **Windows Container（预留）** |
+| | **HCS（默认）** | **Windows Sandbox（gRPC）** | **Windows Container（进程隔离）** |
 | --- | --- | --- | --- |
 | `SandboxEngineKind` | `HcsSandbox = 0` | `WindowsSandbox = 1` | `WindowsContainer = 2` |
-| 入口 | `computecore.dll`（operation-based） | `WindowsSandboxServer` gRPC over named pipe | 轻量隔离（Docker 式，未实现） |
-| `IsAvailable` | 提权时 `true` | 恒 `true` | 恒 `false`（不可被选中） |
+| 入口 | `computecore.dll`（operation-based） | `WindowsSandboxServer` gRPC over named pipe | HCS `Container` 计算系统（进程隔离，`Container` JSON） |
+| `IsAvailable` | 提权时 `true` | 恒 `true` | 提权时 `true` |
 | 提权 | **需要管理员 / Hyper-V 管理员** | 不需要 | 需要 |
-| 多实例 | ✅ 无许可门槛 | ⚠️ 受许可策略限制（`CO_E_APPSINGLEUSE`） | 计划 ✅ |
-| CPU 核数 | ✅ `Processor.Count` | ✖ | 计划 ✅ |
-| 自定义用户数据位置 | ✅ `Scsi.Attachments[].Path` | ✖（仅大小） | 计划 ✅ |
-| 自定义基础镜像层 | ✅ `VirtualSmb.Shares` / `RunInSilo` | ✖ | 计划 ✅ |
-| 检查点 | ✅ `HcsSaveComputeSystem` | ✖ | 计划 ✅ |
-| 运行期热映射目录 | ✖（创建时映射） | ✅ `MapFolder` | 计划 ✅ |
-| in-guest 进程执行 | ✖ | ✅ `CreateProcess` | 计划 ✅ |
-| 获取 IP | ✖（由 HNS 维护） | ✅ `GetIpAddress` | 计划 ✅ |
+| 多实例 | ✅ 无许可门槛 | ⚠️ 受许可策略限制（`CO_E_APPSINGLEUSE`） | ✅ 无许可门槛 |
+| CPU 核数 | ✅ `Processor.Count` | ✖ | ✅ `Processor.Count` |
+| 自定义用户数据位置 | ✅ `Scsi.Attachments[].Path` | ✖（仅大小） | ✅ 每实例 scratch 目录 |
+| 基础镜像层 | ✅ `VirtualSmb.Shares` / `RunInSilo` | ✖ | 🔁 **复用 Windows Sandbox 镜像层**（只读 `Storage.Layers`） |
+| 检查点 | ✅ `HcsSaveComputeSystem` | ✖ | ✖ |
+| 运行期热映射目录 | ✖（创建时映射） | ✅ `MapFolder` | ✖（创建时 `MappedDirectories`） |
+| in-guest 进程执行 | ✖ | ✅ `CreateProcess` | ✅ `HcsCreateProcess` |
+| 获取 IP | ✖（由 HNS 维护） | ✅ `GetIpAddress` | ⚠️ HNS 查询（endpoint attach 未接线） |
 
 引擎在提权时**自动选用 HCS**（`HcsSandboxEngine.IsAvailable == _elevation.IsElevated`），否则回退
-Windows Sandbox gRPC。`WindowsContainerEngine` 是可编译的**预留空壳**（`IsAvailable == false`，
-成员抛 `SandboxNotSupportedException`），不会被选择器选中。`wsm env` 会显示当前所选引擎与能力。
+Windows Sandbox gRPC。第三个引擎 `WindowsContainerEngine` 是 **HCS 进程隔离容器**
+（MXC `processcontainer` 对应的轻量隔离层）：它把 Windows Sandbox 的**最小化系统镜像层**作为只读
+容器层复用（`Storage.Layers`），为每个实例准备可写 scratch，并在容器启动后拉起必要服务
+（主机 `vmcompute`/`hns` + 容器内 `RpcSs`/`DcomLaunch`/`ProfSvc`/`CryptSvc`）。它同样需要提权
+（`IsAvailable == _elevation.IsElevated`），按 `SandboxEngineKind` 升序排在 HCS 之后。`wsm env` 会显示
+当前所选引擎与能力。
 
 ---
 
@@ -46,7 +50,7 @@ Windows Sandbox gRPC。`WindowsContainerEngine` 是可编译的**预留空壳**�
 
 仓库为 **Volo.Abp.Core 模块化单体**：每个程序集恰好一个 `AbpModule` 派生类，公共契约 `public`、
 实现 `internal`；`.slnx` 用**解决方案文件夹**按职责分层（组织用途）。共 **28 个程序集**
-（24 核心 + 4 预留空壳）。命名空间根 **== 程序集名**（`Wsm.*`）；旧的
+（全部已实现；P5 的 4 个预留空壳已在第三个引擎落地时补齐）。命名空间根 **== 程序集名**（`Wsm.*`）；旧的
 `WindowsSandboxManager.*` 命名空间已全部消除。
 
 ```
@@ -64,13 +68,13 @@ Windows Sandbox gRPC。`WindowsContainerEngine` 是可编译的**预留空壳**�
 ┌──────────────▼──────────────────────────────────────────────────────────┐
 │ 引擎层 Engines  /src/20-Engines/                                        │
 │   Wsm.Engine.Hcs (核心/默认)   Wsm.Engine.WindowsSandbox (核心/gRPC)     │
-│   Wsm.Engine.WindowsContainer (预留, IsAvailable=false)                 │
+│   Wsm.Engine.WindowsContainer (进程隔离容器 / process-isolated)          │
 └──────────────┬──────────────────────────────────────────────────────────┘
                │ 能力模块（一模块一程序集）
 ┌──────────────▼──────────────────────────────────────────────────────────┐
 │ /src/10-Hcs/         Wsm.Hcs.Interop / Layout / Json.Sandbox /          │
-│                      Json.Container(预留) / Storage / Checkpoint /      │
-│                      Process(预留) / Network(预留)                       │
+│                      Json.Container / Storage / Checkpoint /            │
+│                      Process / Network                                  │
 │ /src/30-Connections/ Wsm.SandboxServer.Client / Wsm.Recipe.Serialization│
 │                      Wsm.Connection.RdpBase / Session / Legacy          │
 │ /src/40-Host/        Wsm.Persistence / Wsm.Host.Environment / Elevation │
@@ -190,6 +194,10 @@ wsm stop $id
 - **裸 HCS 从零创建可启动的 Sandbox 属实验性**：需已存在基础层与用户数据盘
   （运行一次 Windows Sandbox 或由既有 `ContainerStorages` 播种即可）。
 - HCS 后端不支持运行期热映射目录与 in-guest 进程执行（能力矩阵已如实声明）。
+- **容器引擎（进程隔离容器）为初步实现**：已实现基础层复用 Windows Sandbox 镜像层
+  （只读 `Storage.Layers`）；但 HCS 进程隔离要求 `Container.Storage.Path` 指向**已挂载的层卷**
+  （`\\?\Volume{GUID}\`），该 scratch 卷的自动供给、以及容器网络的 HNS endpoint attach 尚未接线
+  （容器内进程执行、必要服务拉起、枚举/停止/删除均已实现）。
 - `HCS` 的 guest IP 由 HNS 维护，未从 HCS 属性直接暴露。
 - `WindowsSandboxServer` gRPC 契约与 `RDPBASE`/`computecore`/`cmclient` 接口属**非公开**接口，可能随版本变化。
 - `ISandboxEnvironment.PackageInstallPath` 在非提权下可能为 `null`。

@@ -12,6 +12,9 @@ public enum SandboxEngineKind
     /// <summary>Non-elevated Windows Sandbox reached over the named-pipe gRPC server.</summary>
     WindowsSandbox = 1,
 
-    /// <summary>Windows container (lightweight isolation) engine. Reserved, not yet implemented.</summary>
+    /// <summary>
+    /// Windows container (process-isolated, lightweight isolation) engine.
+    /// Reuses the Windows Sandbox minimal image layer and requires elevation.
+    /// </summary>
     WindowsContainer = 2,
 }

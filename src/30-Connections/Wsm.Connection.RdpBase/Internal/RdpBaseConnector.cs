@@ -6,7 +6,15 @@ namespace Wsm.Connection.RdpBase.Internal;
 /// Default <see cref="IRdpBaseConnector"/>. Wraps the RDPBASE named-pipe
 /// connector and surfaces the RDP network-stream endpoint through
 /// <see cref="GetEndpointAsync"/>. Produced by <see cref="RdpBaseConnectorFactory"/>.
+/// <para>
+/// The class is the COM callback sink handed to
+/// <c>IRDPENCNamedPipeDirectConnector.InitializeInstance</c>; it must be
+/// COM-visible so the CLR can build a callable wrapper for it (otherwise the
+/// native connector cannot invoke <c>OnConnectionCompleted</c> and the connect
+/// never completes).
+/// </para>
 /// </summary>
+[ComVisible(true)]
 internal sealed class RdpBaseConnector : RdpBaseInterop.IRDPENCNamedPipeDirectConnectorCallbacks, IRdpBaseConnector
 {
     private RdpBaseInterop.IRDPENCNamedPipeDirectConnector? _connector;

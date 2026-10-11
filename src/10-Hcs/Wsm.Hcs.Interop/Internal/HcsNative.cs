@@ -72,6 +72,54 @@ internal static class HcsNative
     [DllImport(ComputeCore, ExactSpelling = true, CharSet = CharSet.Unicode)]
     public static extern int HcsGrantVmGroupAccess(string filePath);
 
+    // ---- Process execution inside a compute system (HcsCreateProcess) ----
+
+    [DllImport(ComputeCore, ExactSpelling = true, CharSet = CharSet.Unicode)]
+    public static extern int HcsCreateProcess(
+        IntPtr computeSystem,
+        string processParameters,
+        IntPtr operation,
+        IntPtr securityDescriptor,
+        out IntPtr process);
+
+    [DllImport(ComputeCore, ExactSpelling = true)]
+    public static extern int HcsWaitForProcessExit(IntPtr process, uint timeoutMs, out IntPtr resultDocument);
+
+    [DllImport(ComputeCore, ExactSpelling = true)]
+    public static extern void HcsCloseProcess(IntPtr process);
+
+    [DllImport(ComputeCore, ExactSpelling = true)]
+    public static extern int HcsTerminateProcess(IntPtr process, IntPtr operation, string options);
+
+    [DllImport(ComputeCore, ExactSpelling = true)]
+    public static extern int HcsWaitForOperationResultAndProcessInfo(
+        IntPtr operation,
+        uint timeoutMs,
+        out HcsProcessInformation processInformation,
+        out IntPtr resultDocument);
+
+    /// <summary>Mirrors <c>HCS_PROCESS_INFORMATION</c> from <c>computedefs.h</c>.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HcsProcessInformation
+    {
+        public uint ProcessId;
+        public uint Reserved;
+        public IntPtr StdInput;
+        public IntPtr StdOutput;
+        public IntPtr StdError;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool ReadFile(
+        IntPtr hFile,
+        byte[] lpBuffer,
+        uint nNumberOfBytesToRead,
+        out uint lpNumberOfBytesRead,
+        IntPtr lpOverlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CloseHandle(IntPtr hObject);
+
     [DllImport("kernel32.dll")]
     public static extern IntPtr LocalFree(IntPtr hMem);
 }

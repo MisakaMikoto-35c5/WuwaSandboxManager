@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.Exceptions;
@@ -190,6 +192,166 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         {
             throw HcsErrors.ToException(hr, nameof(HcsNative.HcsGrantVmAccess), null);
         }
+    }
+
+    public HcsProcessResult RunProcess(string id, string commandLine, string? user = null, uint timeoutMs = 120_000)
+    {
+        using var system = Open(id);
+        var parameters = BuildProcessParameters(commandLine, user);
+
+        using var operation = new HcsOperation();
+        var hr = HcsNative.HcsCreateProcess(system.Handle, parameters, operation.Handle, IntPtr.Zero, out var process);
+
+        // The process-info variant also hands back the stdio pipe handles, so it
+        // replaces the plain result wait for process creation.
+        var waitResult = HcsNative.HcsWaitForOperationResultAndProcessInfo(
+            operation.Handle, timeoutMs, out var info, out var document);
+        var text = TakeString(document);
+
+        if (hr != HcsNative.HcsEOperationPending && hr < 0)
+        {
+            throw HcsErrors.ToException(hr, nameof(HcsNative.HcsCreateProcess), text);
+        }
+
+        if (waitResult < 0)
+        {
+            throw HcsErrors.ToException(waitResult, nameof(HcsNative.HcsWaitForOperationResultAndProcessInfo), text);
+        }
+
+        if (process == IntPtr.Zero)
+        {
+            throw new SandboxBackendException("HcsCreateProcess returned a null process handle.", 0);
+        }
+
+        try
+        {
+            // Read the pipes to EOF (the guest closes them when the process
+            // exits) before waiting for the exit code.
+            var standardOutput = ReadPipe(info.StdOutput);
+            var standardError = ReadPipe(info.StdError);
+
+            var exitWait = HcsNative.HcsWaitForProcessExit(process, timeoutMs, out var exitDocument);
+            var exitText = TakeString(exitDocument);
+            if (exitWait < 0)
+            {
+                throw HcsErrors.ToException(exitWait, nameof(HcsNative.HcsWaitForProcessExit), exitText);
+            }
+
+            return new HcsProcessResult(ParseExitCode(exitText), standardOutput, standardError);
+        }
+        finally
+        {
+            HcsNative.HcsCloseProcess(process);
+        }
+    }
+
+    /// <summary>
+    /// Builds the <c>ProcessParameters</c> JSON for <c>HcsCreateProcess</c>.
+    /// Standard output/error pipes are requested so the caller can capture the
+    /// guest command's output; <c>User</c> is omitted to run as the system's
+    /// default identity (SYSTEM), which is what the platform's own guest set-up
+    /// uses.
+    /// </summary>
+    private static string BuildProcessParameters(string commandLine, string? user)
+    {
+        var parameters = new Dictionary<string, object?>
+        {
+            ["CommandLine"] = commandLine,
+            ["CreateStdInPipe"] = false,
+            ["CreateStdOutPipe"] = true,
+            ["CreateStdErrPipe"] = true,
+        };
+
+        if (!string.IsNullOrWhiteSpace(user))
+        {
+            parameters["User"] = user;
+        }
+
+        return JsonSerializer.Serialize(parameters);
+    }
+
+    /// <summary>Reads a stdio pipe to EOF and closes the host-side handle.</summary>
+    private static string ReadPipe(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var buffer = new byte[4096];
+            using var stream = new MemoryStream();
+            while (HcsNative.ReadFile(handle, buffer, (uint)buffer.Length, out var read, IntPtr.Zero) && read > 0)
+            {
+                stream.Write(buffer, 0, (int)read);
+            }
+
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch
+        {
+            return string.Empty;
+        }
+        finally
+        {
+            HcsNative.CloseHandle(handle);
+        }
+    }
+
+    private static string? TakeString(IntPtr pointer)
+    {
+        if (pointer == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Marshal.PtrToStringUni(pointer);
+        }
+        finally
+        {
+            HcsNative.LocalFree(pointer);
+        }
+    }
+
+    /// <summary>
+    /// Reads <c>ExitCode</c> from a <c>ProcessStatus</c> document. Some builds
+    /// return it directly, others nest it under <c>ProcessStatus</c>; an empty or
+    /// unparsable document is treated as a successful exit.
+    /// </summary>
+    internal static int ParseExitCode(string? document)
+    {
+        if (string.IsNullOrWhiteSpace(document))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(document);
+            var element = json.RootElement;
+            if (element.ValueKind == JsonValueKind.Object &&
+                element.TryGetProperty("ProcessStatus", out var nested) &&
+                nested.ValueKind == JsonValueKind.Object)
+            {
+                element = nested;
+            }
+
+            if (element.ValueKind == JsonValueKind.Object &&
+                element.TryGetProperty("ExitCode", out var exitCode) &&
+                exitCode.TryGetInt32(out var value))
+            {
+                return value;
+            }
+        }
+        catch (JsonException)
+        {
+            // Treated as a successful exit.
+        }
+
+        return 0;
     }
 
     private static HcsComputeSystem Open(string id)

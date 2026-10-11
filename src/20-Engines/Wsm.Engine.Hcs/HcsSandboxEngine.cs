@@ -90,7 +90,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         SupportsCustomBaseImage = true,
         SupportsCheckpoints = true,
         SupportsRuntimeFolderMapping = false,
-        SupportsProcessExecution = false,
+        SupportsProcessExecution = true,
         SupportsEnumeration = true,
         RequiresElevation = true,
     };
@@ -153,6 +153,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
                 .Select(f => new HcsMappedFolder(f.HostFolder, f.SandboxFolder, f.ReadOnly))
                 .ToArray(),
             RdpNamedPipe = $@"\\.\pipe\{id}",
+            RdpAccessSids = ResolveRdpAccessSids(),
         };
 
         var json = _json.Build(definition);
@@ -204,6 +205,12 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             throw;
         }
 
+        // Mirror the platform's own guest set-up: enable the WDAGUtilityAccount
+        // with a known password so the sandbox can actually be reached over RDP.
+        // Without it the account has no usable credential and any RDP connect is
+        // refused at logon.
+        var (accountUser, accountPassword) = ProvisionGuestAccount(id, recipe);
+
         var runtime = new SandboxRuntimeInfo
         {
             SandboxId = id,
@@ -212,7 +219,8 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             RailMode = recipe.RailMode,
             FullScreen = recipe.FullScreen,
             WindowTitle = recipe.Name.Value,
-            UserName = "WDAGUtilityAccount",
+            UserName = accountUser,
+            Password = accountPassword,
             Redirections = recipe.Redirections,
         };
 
@@ -221,6 +229,181 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         RememberSystem(id.ToString(), system, runtime);
 
         return Task.FromResult(runtime);
+    }
+
+    /// <summary>Default guest logon account used by the Windows Sandbox image.</summary>
+    private const string DefaultGuestUser = "WDAGUtilityAccount";
+
+    /// <summary>How long to wait for the guest to accept processes after start.</summary>
+    private const int GuestReadyTimeoutSeconds = 120;
+
+    /// <summary>
+    /// The platform's guest "specialization" tweaks (mirrored from
+    /// <c>WindowsSandboxServer</c>). They are part of completing the guest set-up,
+    /// which is what brings its services — including the RDP endpoint the sandbox
+    /// is reached through — up.
+    /// </summary>
+    private static readonly string[] SpecializationCommands =
+    {
+        "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Network\\NewNetworkWindowOff\" /f",
+        "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FlyoutMenuSettings\" /v ShowLockOption /t REG_DWORD /d 0 /f",
+        "reg add \"HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\" /v ShowTaskViewButton /t REG_DWORD /d 0 /f",
+    };
+
+    public Task<int> ExecuteAsync(SandboxInstanceId id, LogonCommand command, CancellationToken cancellationToken = default)
+    {
+        EnsureElevated();
+        var result = _hcs.RunProcess(id.ToString(), command.Command);
+        if (!string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            _logger.LogInformation("Guest output for '{Command}': {Output}", command.Command, result.StandardOutput.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.StandardError))
+        {
+            _logger.LogWarning("Guest error for '{Command}': {Error}", command.Command, result.StandardError.Trim());
+        }
+
+        return Task.FromResult(result.ExitCode);
+    }
+
+    /// <summary>
+    /// Provisions the guest logon account exactly like the platform's own
+    /// <c>WindowsSandboxServer</c>: wait for the guest, set the account password,
+    /// activate it and add it to the Users/Administrators groups. Returns the
+    /// user/password the RDP session must use. Best effort: a failure is logged
+    /// loudly and the sandbox still starts, but an RDP connect would then be
+    /// refused, so the failure is never silent.
+    /// </summary>
+    private (string User, string Password) ProvisionGuestAccount(SandboxInstanceId id, SandboxRecipe recipe)
+    {
+        var user = string.IsNullOrWhiteSpace(recipe.AccountUser) ? DefaultGuestUser : recipe.AccountUser!;
+        var password = string.IsNullOrWhiteSpace(recipe.AccountPassword)
+            ? Guid.NewGuid().ToString()
+            : recipe.AccountPassword!;
+
+        try
+        {
+            WaitForGuestReady(id.ToString());
+
+            // Mirror the platform's guest "specialization": activate the logon
+            // account with a known password, apply the specialization tweaks and
+            // signal that restore is complete. Without the latter the guest never
+            // finishes its set-up and the RDP endpoint is never brought up.
+            CheckGuest(id.ToString(), $"net user {user} {password}");
+            CheckGuest(id.ToString(), $"net user {user} /active:yes");
+            CheckGuest(id.ToString(), $"wcsetupagent.exe AddUserToUsersGroup {user}");
+            CheckGuest(id.ToString(), $"wcsetupagent.exe AddUserToAdminGroup {user}");
+
+            foreach (var specialization in SpecializationCommands)
+            {
+                CheckGuest(id.ToString(), specialization);
+            }
+
+            CheckGuest(id.ToString(), "wcsetupagent.exe NotifyRestoreComplete");
+
+            // The sandbox is reached over the RDP named-pipe endpoint, so make
+            // sure the guest's RDP listener is enabled (and record its state).
+            CheckGuest(id.ToString(), "reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections");
+            CheckGuest(id.ToString(), "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fDenyTSConnections /t REG_DWORD /d 0 /f");
+            CheckGuest(id.ToString(), "net start TermService");
+
+            _logger.LogInformation("Provisioned guest account {User} for sandbox {SandboxId}.", user, id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to provision the guest account {User} for sandbox {SandboxId}; an RDP connect will likely be refused.",
+                user, id);
+        }
+
+        return (user, password);
+    }
+
+    /// <summary>
+    /// Waits until the guest accepts process creation. The compute system reports
+    /// "started" before the guest OS is ready to run commands, so the platform's
+    /// <c>net user</c> set-up is retried until it succeeds.
+    /// </summary>
+    private void WaitForGuestReady(string id)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(GuestReadyTimeoutSeconds);
+        Exception? last = null;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (RunGuest(id, "cmd.exe /c exit 0") == 0)
+                {
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+            }
+
+            Thread.Sleep(1000);
+        }
+
+        throw last ?? new SandboxBackendException("The sandbox guest did not become ready in time.", 0);
+    }
+
+    /// <summary>Runs a guest command and logs (but tolerates) a non-zero exit.</summary>
+    private void CheckGuest(string id, string commandLine)
+    {
+        var result = _hcs.RunProcess(id, commandLine);
+        if (result.ExitCode != 0)
+        {
+            _logger.LogWarning(
+                "Guest command '{Command}' in sandbox {SandboxId} exited {ExitCode}. {Error}{Output}",
+                commandLine, id, result.ExitCode, result.StandardError.Trim(), result.StandardOutput.Trim());
+        }
+        else
+        {
+            _logger.LogDebug(
+                "Guest command '{Command}' in sandbox {SandboxId} exited 0. {Output}",
+                commandLine, id, result.StandardOutput.Trim());
+        }
+    }
+
+    private int RunGuest(string id, string commandLine)
+    {
+        var result = _hcs.RunProcess(id, commandLine);
+        _logger.LogDebug(
+            "Guest command '{Command}' in sandbox {SandboxId} exited {ExitCode}. {Output} {Error}",
+            commandLine, id, result.ExitCode, result.StandardOutput.Trim(), result.StandardError.Trim());
+        return result.ExitCode;
+    }
+
+    /// <summary>
+    /// The SIDs allowed to open the EnhancedModeVideo RDP named pipe. The
+    /// connecting process (the app / CLI) runs as the interactive user, so that
+    /// user's SID plus SYSTEM and Administrators are granted; without this the
+    /// RDPBASE connector fails with E_ACCESSDENIED (0x80070005).
+    /// </summary>
+    private static IReadOnlyList<string> ResolveRdpAccessSids()
+    {
+        var sids = new List<string>();
+
+        try
+        {
+            var current = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+            if (current is not null)
+            {
+                sids.Add(current.Value);
+            }
+        }
+        catch
+        {
+            // Fall through to the well-known SIDs below.
+        }
+
+        sids.Add("S-1-5-18");       // LOCAL SYSTEM
+        sids.Add("S-1-5-32-544");   // BUILTIN\Administrators
+        return sids;
     }
 
     public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)

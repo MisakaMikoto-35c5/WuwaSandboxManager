@@ -3,15 +3,25 @@ using Wsm.Domain.ValueObjects;
 namespace Wsm.Connection.RdpHost;
 
 /// <summary>
-/// A request to present a live RDP session through the <c>mstscax</c>
-/// (<c>MsRdpClient10</c>) ActiveX control. The <see cref="Endpoint"/> is the RDP
-/// network stream acquired from the RDPBASE named-pipe connector and is fed to
-/// the control via <c>AdvancedSettings.ConnectWithEndpoint</c>.
+/// A request to present a live RDP session through the <c>mstscax</c> ActiveX
+/// control.
+/// <para>
+/// The host acquires the RDPBASE named-pipe endpoint itself, on its own STA
+/// thread. That is essential: the RDPBASE completion callback is only delivered
+/// on an STA thread that pumps messages, so acquiring it from an MTA thread (a
+/// console/thread-pool continuation) hangs forever.
+/// </para>
 /// </summary>
 public sealed record RdpSessionRequest
 {
-    /// <summary>The RDP net-stream endpoint produced by <c>IRDPENCNamedPipeDirectConnector</c>.</summary>
-    public required object Endpoint { get; init; }
+    /// <summary>The RDPBASE named-pipe endpoint, i.e. <c>\\.\pipe\&lt;VmId&gt;</c>.</summary>
+    public required string PipeName { get; init; }
+
+    /// <summary>
+    /// The compute system / VM id. Drives the named-pipe transport's
+    /// <c>HiDefRemoteAppContainerGUID</c> routing on the control.
+    /// </summary>
+    public Guid VmId { get; init; }
 
     /// <summary>
     /// True to present seamless per-application windows (RAIL); false for a full

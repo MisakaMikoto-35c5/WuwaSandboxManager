@@ -661,5 +661,7 @@ public sealed class StorageProvisioningTests : IDisposable
         public void CreateEmptyRuntimeStateFile(string path) => throw new NotSupportedException();
 
         public void GrantVmAccess(string id, string path) => throw new NotSupportedException();
+
+        public HcsProcessResult RunProcess(string id, string commandLine, string? user = null, uint timeoutMs = 120_000) => throw new NotSupportedException();
     }
 }

@@ -133,6 +133,9 @@ public sealed class CheckpointScopingTests
         {
         }
 
+        public HcsProcessResult RunProcess(string id, string commandLine, string? user = null, uint timeoutMs = 120_000)
+            => new(0, string.Empty, string.Empty);
+
         private sealed class NoopDisposable : IDisposable
         {
             public void Dispose()

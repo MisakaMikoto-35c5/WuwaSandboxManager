@@ -71,6 +71,9 @@ public sealed class CliApplication
                 case "start":
                     return await StartAsync(positional, options);
 
+                case "host":
+                    return await HostAsync(positional, options);
+
                 case "stop":
                     await _manager.StopAsync(RequireGuid(positional, 0));
                     Console.WriteLine("Stopped.");
@@ -176,6 +179,49 @@ public sealed class CliApplication
             Console.WriteLine($"  pipe={dto.Runtime.NamedPipeEndpoint} user={dto.Runtime.UserName}");
         }
 
+        return 0;
+    }
+
+    /// <summary>
+    /// Starts a sandbox and keeps this process alive (holding the engine's
+    /// compute-system handle) until Ctrl+C. Because the HCS configuration sets
+    /// <c>ShouldTerminateOnLastHandleClosed</c>, a plain <c>start</c> tears the
+    /// sandbox down the moment the CLI exits; this command keeps it running
+    /// outside the GUI.
+    /// </summary>
+    private async Task<int> HostAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        var mode = options.ContainsKey("remoteapp") ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop;
+
+        SandboxInstanceDto dto;
+        try
+        {
+            dto = await _manager.StartAsync(RequireGuid(positional, 0), mode);
+        }
+        catch (MultipleInstancesNotAllowedException)
+        {
+            Console.Error.WriteLine(_localizer["MultipleInstances"]);
+            return 1;
+        }
+
+        Console.WriteLine($"Started sandbox {dto.Id} (state={dto.State}); holding until Ctrl+C.");
+        if (dto.Runtime is not null)
+        {
+            Console.WriteLine($"  user={dto.Runtime.UserName} password={(string.IsNullOrEmpty(dto.Runtime.Password) ? "<none>" : "<set>")}");
+        }
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            completion.TrySetResult();
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => completion.TrySetResult();
+
+        await completion.Task;
+
+        await _manager.StopAsync(dto.Id);
+        Console.WriteLine("Stopped.");
         return 0;
     }
 
@@ -445,6 +491,7 @@ public sealed class CliApplication
               create [options]          Create a sandbox definition
               show <id>                 Show a sandbox definition
               start <id> [--remoteapp]  Start a sandbox
+              host <id> [--remoteapp]   Start a sandbox and hold it running until Ctrl+C
               stop <id>                 Stop a sandbox
               connect <id> [--remoteapp] Connect an RDP session
               ip <id>                   Get the sandbox IP addresses

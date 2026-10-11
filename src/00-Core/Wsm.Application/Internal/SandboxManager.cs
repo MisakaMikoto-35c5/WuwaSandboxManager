@@ -230,7 +230,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             await PersistAsync(instance, cancellationToken).ConfigureAwait(false);
         }
 
-        await _sessionLauncher.LaunchAsync(instance.Id, runtime, mode, cancellationToken).ConfigureAwait(false);
+        await _sessionLauncher.LaunchAsync(instance.Id, runtime, mode, engine.Kind, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken cancellationToken = default)

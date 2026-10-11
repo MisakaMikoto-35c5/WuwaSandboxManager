@@ -116,6 +116,41 @@ public sealed class HcsSandboxEngineTests
     }
 
     [Fact]
+    public async Task Start_provisions_the_guest_account_and_reports_the_credential()
+    {
+        var hcs = new FakeHcsClient();
+        var engine = CreateEngine(hcs, out _);
+
+        var id = SandboxInstanceId.New();
+        var runtime = await engine.StartAsync(Request(id));
+
+        // The RDP session needs a usable guest credential: the account is
+        // activated with a generated password, exactly like the platform does.
+        Assert.Equal("WDAGUtilityAccount", runtime.UserName);
+        Assert.False(string.IsNullOrEmpty(runtime.Password));
+        Assert.Contains(hcs.Processes, command => command.StartsWith("net user WDAGUtilityAccount "));
+        Assert.Contains(hcs.Processes, command => command == "net user WDAGUtilityAccount /active:yes");
+    }
+
+    [Fact]
+    public async Task Start_uses_the_recipe_account_password_when_supplied()
+    {
+        var hcs = new FakeHcsClient();
+        var engine = CreateEngine(hcs, out _);
+
+        var id = SandboxInstanceId.New();
+        var request = Request(id) with
+        {
+            Recipe = SandboxRecipe.Default with { AccountPassword = "Sup3rSecret!" },
+        };
+
+        var runtime = await engine.StartAsync(request);
+
+        Assert.Equal("Sup3rSecret!", runtime.Password);
+        Assert.Contains(hcs.Processes, command => command.Contains("Sup3rSecret!"));
+    }
+
+    [Fact]
     public async Task DeleteData_removes_storage_and_snapshot_directories()
     {
         var engine = CreateEngine(new FakeHcsClient(), out _);
@@ -221,6 +256,14 @@ public sealed class HcsSandboxEngineTests
 
             Granted.Add(path);
         }
+
+        public HcsProcessResult RunProcess(string id, string commandLine, string? user = null, uint timeoutMs = 120_000)
+        {
+            Processes.Add(commandLine);
+            return new HcsProcessResult(0, string.Empty, string.Empty);
+        }
+
+        public List<string> Processes { get; } = new();
     }
 
     private sealed class FakeLayout : IHcsHostLayout

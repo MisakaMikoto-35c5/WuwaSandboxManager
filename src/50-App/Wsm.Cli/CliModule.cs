@@ -27,8 +27,14 @@ public sealed class CliModule : AbpModule
 {
     public override void ConfigureServices(ServiceConfigurationContext context)
     {
+        // The log level is Warning by default; set WSM_LOG_LEVEL (e.g. Debug) to
+        // diagnose the engine/connection paths from the CLI.
+        var level = Enum.TryParse<LogLevel>(Environment.GetEnvironmentVariable("WSM_LOG_LEVEL"), ignoreCase: true, out var parsed)
+            ? parsed
+            : LogLevel.Warning;
+
         context.Services.AddLogging(builder => builder
             .AddSimpleConsole(options => options.SingleLine = true)
-            .SetMinimumLevel(LogLevel.Warning));
+            .SetMinimumLevel(level));
     }
 }

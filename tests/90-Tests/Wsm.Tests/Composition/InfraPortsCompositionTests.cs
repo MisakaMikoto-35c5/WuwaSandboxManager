@@ -125,10 +125,11 @@ public sealed class InfraPortsCompositionTests
             await repository.SaveAsync(instance);
             var path = repository.GetManifestPath(instance.Id);
 
-            // The .wsm sits in <configDataFolder>\<id>\<id>.wsm.
+            // The .wsm sits in <configDataFolder>\<Name>\<Name>.wsm.
             Assert.Equal(
-                Path.Combine(configDataFolder, instance.Id.Value.ToString("D")),
+                Path.Combine(configDataFolder, "Portable"),
                 Path.GetDirectoryName(path));
+            Assert.Equal("Portable.wsm", Path.GetFileName(path));
 
             // On disk: relative data path, no absolute storage path, and an
             // outside-the-folder mapped folder stays absolute.

@@ -263,10 +263,37 @@ public sealed class SandboxManagerTests
         Assert.True(capabilities.Capabilities.SupportsCheckpoints);
     }
 
+    [Fact]
+    public async Task Connect_routes_the_connection_with_the_selected_engine_kind()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+        Assert.Equal(SandboxConnectionMode.FullDesktop, launcher.LastMode);
+        Assert.Equal(engine.Kind, launcher.LastEngineKind);
+    }
+
     private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
         return new SandboxManager(repository, selector, new StubSessionLauncher());
+    }
+
+    private static ISandboxManager Manager(
+        ISandboxInstanceRepository repository,
+        ISandboxEngine engine,
+        ISessionLauncher sessionLauncher)
+    {
+        var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
+        return new SandboxManager(repository, selector, sessionLauncher);
     }
 
     private sealed class StubSessionLauncher : ISessionLauncher
@@ -275,14 +302,18 @@ public sealed class SandboxManagerTests
 
         public SandboxConnectionMode? LastMode { get; private set; }
 
+        public SandboxEngineKind? LastEngineKind { get; private set; }
+
         public Task LaunchAsync(
             SandboxInstanceId id,
             SandboxRuntimeInfo runtime,
             SandboxConnectionMode mode,
+            SandboxEngineKind engineKind,
             CancellationToken cancellationToken = default)
         {
             LastId = id;
             LastMode = mode;
+            LastEngineKind = engineKind;
             return Task.CompletedTask;
         }
     }

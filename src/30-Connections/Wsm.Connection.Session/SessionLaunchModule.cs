@@ -8,9 +8,10 @@ namespace Wsm.Connection.Session;
 
 /// <summary>
 /// ABP module for the RDP session launch capability. Opens the user-visible
-/// session through <see cref="ISessionLauncher"/>, routing between the packaged
-/// client full-desktop path (open the sandbox by id), the direct RDPBASE/RAIL
-/// path and the legacy fallback (which starts a new sandbox).
+/// session through <see cref="ISessionLauncher"/>, routing by engine kind: the
+/// Windows Sandbox engine uses the packaged client (open the sandbox by id, with
+/// the legacy launcher as the last resort), while every other engine connects as
+/// a plain RDP session over the direct RDPBASE named-pipe endpoint.
 /// </summary>
 [DependsOn(
     typeof(HostEnvironmentModule),

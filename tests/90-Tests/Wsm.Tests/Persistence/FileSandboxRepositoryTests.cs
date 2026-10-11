@@ -8,11 +8,15 @@ using Xunit;
 namespace Wsm.Tests.Persistence;
 
 /// <summary>
-/// Covers the portable <c>.wsm</c> path rules: the user-data folder and each
-/// mapped host folder are stored relative to the <c>.wsm</c> when they lie
-/// inside the sandbox folder, and absolute when they lie outside; on load a
-/// relative path resolves against the <c>.wsm</c> folder and an absolute path is
-/// used as-is. Missing paths are tolerated.
+/// Covers the on-disk layout (a sandbox lives at
+/// <c>&lt;configDataFolder&gt;\&lt;Name&gt;\&lt;Name&gt;.wsm</c> with its data
+/// disks beside it), name sanitization and collision handling, id-based lookup
+/// (including the scan fallback), rename-relocation and delete, plus the
+/// portable <c>.wsm</c> path rules: the user-data folder and each mapped host
+/// folder are stored relative to the <c>.wsm</c> when they lie inside the
+/// sandbox folder, and absolute when they lie outside; on load a relative path
+/// resolves against the <c>.wsm</c> folder and an absolute path is used as-is.
+/// Missing paths are tolerated.
 /// </summary>
 public sealed class FileSandboxRepositoryTests : IDisposable
 {
@@ -40,17 +44,156 @@ public sealed class FileSandboxRepositoryTests : IDisposable
         }
     }
 
-    private string SandboxFolder(SandboxInstanceId id)
-        => Path.Combine(_configDataFolder, id.Value.ToString("D"));
+    private FileSandboxRepository NewRepository()
+        => new(Options.Create(new SandboxPersistenceOptions { ConfigDataFolder = _configDataFolder }));
+
+    private string SandboxFolder(string name) => Path.Combine(_configDataFolder, name);
+
+    private string SandboxManifestPath(string name)
+        => Path.Combine(SandboxFolder(name), name + SandboxManifest.FileExtension);
 
     private MappedFolder StoredMappedFolder(SandboxInstanceId id)
         => Assert.Single(SandboxManifest.TryReadFile(_repository.GetManifestPath(id))!.Recipe.MappedFolders);
 
     [Fact]
+    public async Task Sandbox_folder_and_manifest_are_named_after_the_sandbox_name()
+    {
+        var id = SandboxInstanceId.New();
+        var instance = SandboxInstance.Create(new SandboxName("My Sandbox"), id: id);
+
+        await _repository.SaveAsync(instance);
+
+        var expected = SandboxManifestPath("My Sandbox");
+        Assert.Equal(expected, _repository.GetManifestPath(id));
+        Assert.True(File.Exists(expected));
+        Assert.Equal(id.Value, SandboxManifest.TryReadFile(expected)?.Id);
+    }
+
+    [Theory]
+    [InlineData("My: Sandbox?", "My Sandbox")]
+    [InlineData("  Spaced   Name  ", "Spaced Name")]
+    [InlineData("Trailing dots... ", "Trailing dots")]
+    [InlineData("a/b\\c", "abc")]
+    public async Task Names_are_sanitized_for_the_file_system(string raw, string expected)
+    {
+        var id = SandboxInstanceId.New();
+        var instance = SandboxInstance.Create(new SandboxName(raw), id: id);
+
+        await _repository.SaveAsync(instance);
+
+        Assert.Equal(SandboxManifestPath(expected), _repository.GetManifestPath(id));
+        Assert.True(File.Exists(SandboxManifestPath(expected)));
+    }
+
+    [Fact]
+    public async Task Name_that_sanitizes_to_nothing_falls_back_to_the_id()
+    {
+        var id = SandboxInstanceId.New();
+        var instance = SandboxInstance.Create(new SandboxName("///"), id: id);
+
+        await _repository.SaveAsync(instance);
+
+        var folder = id.Value.ToString("D");
+        Assert.Equal(SandboxManifestPath(folder), _repository.GetManifestPath(id));
+        Assert.True(File.Exists(SandboxManifestPath(folder)));
+    }
+
+    [Fact]
+    public async Task Colliding_names_get_a_numeric_suffix()
+    {
+        var first = SandboxInstance.Create(new SandboxName("Dup"));
+        var second = SandboxInstance.Create(new SandboxName("Dup"));
+        var third = SandboxInstance.Create(new SandboxName("Dup"));
+
+        await _repository.SaveAsync(first);
+        await _repository.SaveAsync(second);
+        await _repository.SaveAsync(third);
+
+        Assert.Equal(SandboxManifestPath("Dup"), _repository.GetManifestPath(first.Id));
+        Assert.Equal(SandboxManifestPath("Dup (2)"), _repository.GetManifestPath(second.Id));
+        Assert.Equal(SandboxManifestPath("Dup (3)"), _repository.GetManifestPath(third.Id));
+        Assert.True(File.Exists(SandboxManifestPath("Dup")));
+        Assert.True(File.Exists(SandboxManifestPath("Dup (2)")));
+        Assert.True(File.Exists(SandboxManifestPath("Dup (3)")));
+    }
+
+    [Fact]
+    public async Task Collision_is_avoided_across_repository_instances()
+    {
+        var first = SandboxInstance.Create(new SandboxName("Shared"));
+        await _repository.SaveAsync(first);
+
+        // A fresh repository (empty in-memory index) must still not clobber the
+        // existing folder: it discovers the owner by scanning the manifest.
+        var other = NewRepository();
+        var second = SandboxInstance.Create(new SandboxName("Shared"));
+        await other.SaveAsync(second);
+
+        Assert.Equal(SandboxManifestPath("Shared (2)"), other.GetManifestPath(second.Id));
+        Assert.True(File.Exists(SandboxManifestPath("Shared")));
+        Assert.True(File.Exists(SandboxManifestPath("Shared (2)")));
+    }
+
+    [Fact]
+    public async Task Resolving_by_id_works_from_a_fresh_repository_instance()
+    {
+        var id = SandboxInstanceId.New();
+        var instance = SandboxInstance.Create(new SandboxName("Fresh"), id: id);
+        await _repository.SaveAsync(instance);
+        var savedPath = _repository.GetManifestPath(id);
+
+        // A brand-new repository has no in-memory index, so it must find the
+        // manifest by scanning for the matching id (the id is not in the path).
+        var fresh = NewRepository();
+        Assert.Equal(savedPath, fresh.GetManifestPath(id));
+
+        var loaded = await fresh.GetAsync(id);
+        Assert.NotNull(loaded);
+        Assert.Equal(id, loaded!.Id);
+        Assert.Equal("Fresh", loaded.Name.Value);
+    }
+
+    [Fact]
+    public async Task Rename_moves_the_folder_and_manifest()
+    {
+        var id = SandboxInstanceId.New();
+        var instance = SandboxInstance.Create(new SandboxName("Before"), id: id);
+        await _repository.SaveAsync(instance);
+
+        // A data disk beside the manifest must travel with the folder.
+        var dataDisk = Path.Combine(SandboxFolder("Before"), "sandbox.vhdx");
+        await File.WriteAllTextAsync(dataDisk, "data");
+
+        instance.Rename(new SandboxName("After"));
+        await _repository.SaveAsync(instance);
+
+        var newManifest = SandboxManifestPath("After");
+        Assert.False(Directory.Exists(SandboxFolder("Before")));
+        Assert.True(File.Exists(newManifest));
+        Assert.True(File.Exists(Path.Combine(SandboxFolder("After"), "sandbox.vhdx")));
+        Assert.Equal(newManifest, _repository.GetManifestPath(id));
+        Assert.Equal(id.Value, SandboxManifest.TryReadFile(newManifest)?.Id);
+        Assert.Equal("After", SandboxManifest.TryReadFile(newManifest)?.Name);
+    }
+
+    [Fact]
+    public async Task Delete_removes_the_sandbox_folder()
+    {
+        var id = SandboxInstanceId.New();
+        var instance = SandboxInstance.Create(new SandboxName("Doomed"), id: id);
+        await _repository.SaveAsync(instance);
+        await File.WriteAllTextAsync(Path.Combine(SandboxFolder("Doomed"), "sandbox.vhdx"), "data");
+
+        await _repository.DeleteAsync(id);
+
+        Assert.False(Directory.Exists(SandboxFolder("Doomed")));
+    }
+
+    [Fact]
     public async Task Mapped_folder_inside_the_sandbox_folder_is_stored_relative()
     {
         var id = SandboxInstanceId.New();
-        var inside = Path.Combine(SandboxFolder(id), "shared");
+        var inside = Path.Combine(SandboxFolder("Inside"), "shared");
         var recipe = SandboxRecipe.Default.WithMappedFolder(new MappedFolder(inside, readOnly: false));
         var instance = SandboxInstance.Create(new SandboxName("Inside"), recipe, id);
 
@@ -105,7 +248,7 @@ public sealed class FileSandboxRepositoryTests : IDisposable
     public async Task Mapped_relative_path_follows_a_moved_folder()
     {
         var id = SandboxInstanceId.New();
-        var inside = Path.Combine(SandboxFolder(id), "data", "share");
+        var inside = Path.Combine(SandboxFolder("Moved"), "data", "share");
         var recipe = SandboxRecipe.Default.WithMappedFolder(new MappedFolder(inside, readOnly: true));
         var instance = SandboxInstance.Create(new SandboxName("Moved"), recipe, id);
 

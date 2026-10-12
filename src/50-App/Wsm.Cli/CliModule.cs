@@ -7,6 +7,7 @@ using Wsm.Engine.Hcs;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engine.WindowsSandbox;
 using Wsm.Localization;
+using Wsm.Service.Client;
 
 namespace Wsm.Cli;
 
@@ -22,7 +23,8 @@ namespace Wsm.Cli;
     typeof(HcsEngineModule),
     typeof(WindowsSandboxEngineModule),
     typeof(WindowsContainerEngineModule),
-    typeof(WsmLocalizationModule))]
+    typeof(WsmLocalizationModule),
+    typeof(WsmServiceClientModule))]
 public sealed class CliModule : AbpModule
 {
     public override void ConfigureServices(ServiceConfigurationContext context)

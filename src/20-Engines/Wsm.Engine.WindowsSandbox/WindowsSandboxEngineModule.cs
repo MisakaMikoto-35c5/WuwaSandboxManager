@@ -1,14 +1,13 @@
 using Volo.Abp.Modularity;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Environment;
-using Wsm.Recipe.Serialization;
-using Wsm.SandboxServer.Client;
+using Wsm.Udk.Sandbox;
 
 namespace Wsm.Engine.WindowsSandbox;
 
 /// <summary>
-/// ABP module for the non-elevated Windows Sandbox engine. Composes the
-/// control-plane gRPC client, the .wsb recipe serializer and the host
+/// ABP module for the Windows Sandbox engine. It composes the Windows UDK host
+/// (which creates the VM exactly like Windows Sandbox itself) and the host
 /// environment probe, and exposes <see cref="ISandboxEngine"/> through
 /// conventional DI.
 /// <para>
@@ -19,8 +18,7 @@ namespace Wsm.Engine.WindowsSandbox;
 /// </summary>
 [DependsOn(
     typeof(SandboxEngineAbstractionsModule),
-    typeof(SandboxServerClientModule),
-    typeof(WsbRecipeSerializationModule),
+    typeof(UdkSandboxModule),
     typeof(HostEnvironmentModule))]
 public sealed class WindowsSandboxEngineModule : AbpModule
 {

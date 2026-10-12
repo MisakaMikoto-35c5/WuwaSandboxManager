@@ -1,0 +1,84 @@
+// The WSM agent service contract.
+//
+// A long-lived Windows service owns the sandbox VMs (and their process-local
+// running references, which the Windows UDK requires), and exposes the
+// lifecycle + in-guest operations over a named-pipe gRPC endpoint so any other
+// process (the CLI, the WinUI app) can drive them.
+//
+// This mirrors how Microsoft's own WindowsSandboxServer.exe exposes
+// sandboxserver.SandboxCore over \\.\pipe\wsandbox\<MD5(sid)>.
+syntax = "proto3";
+
+package wsm.service;
+
+import "google/protobuf/empty.proto";
+
+option csharp_namespace = "Wsm.Service.Contracts.Grpc.Generated";
+
+message StartRequest {
+  string sandbox_id = 1;
+  // 0 = FullDesktop, 1 = RemoteApp (matches Wsm.Domain SandboxConnectionMode).
+  int32 connection_mode = 2;
+}
+
+message SandboxIdRequest {
+  string sandbox_id = 1;
+}
+
+message EnumerateReply {
+  repeated string sandbox_ids = 1;
+}
+
+message RuntimeReply {
+  string sandbox_id = 1;
+  string vm_id = 2;
+  // Wire transport: 0 = NamedPipe (includes RdpTransportKind.Local, which is
+  // normalised to 0), 1 = Tcp. This is NOT a raw cast of Wsm.Domain
+  // RdpTransportKind (NamedPipe=0, Local=1, Tcp=2); see WsmServiceMapping.
+  int32 transport = 3;
+  bool rail_mode = 4;
+  string rail_program = 5;
+  bool full_screen = 6;
+  string window_title = 7;
+  string user_name = 8;
+  string password = 9;
+  string ip_address = 10;
+  repeated string ip_addresses = 11;
+}
+
+message ExecuteRequest {
+  string sandbox_id = 1;
+  string command_line = 2;
+}
+
+message ExecuteReply {
+  int32 exit_code = 1;
+  string standard_output = 2;
+  string standard_error = 3;
+}
+
+message MapFolderRequest {
+  string sandbox_id = 1;
+  string host_folder = 2;
+  string sandbox_folder = 3;
+  bool read_only = 4;
+}
+
+message IpAddressesReply {
+  repeated string ip_addresses = 1;
+}
+
+service WsmService {
+  rpc Enumerate(google.protobuf.Empty) returns (EnumerateReply);
+  rpc Start(StartRequest) returns (RuntimeReply);
+  rpc Stop(SandboxIdRequest) returns (google.protobuf.Empty);
+  rpc GetRuntime(SandboxIdRequest) returns (RuntimeReply);
+  // Server-side pre-connect preparation: reclaims (force-disconnects) any
+  // orphaned guest sessions and returns the engine-backed live runtime. The RDP
+  // session itself stays client-side (see plan 8.5): the caller reads this
+  // runtime and establishes the session locally.
+  rpc PrepareConnect(SandboxIdRequest) returns (RuntimeReply);
+  rpc Execute(ExecuteRequest) returns (ExecuteReply);
+  rpc MapFolder(MapFolderRequest) returns (google.protobuf.Empty);
+  rpc GetIpAddresses(SandboxIdRequest) returns (IpAddressesReply);
+}

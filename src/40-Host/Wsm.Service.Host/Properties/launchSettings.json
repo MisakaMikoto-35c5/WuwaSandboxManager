@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Wsm.Service.Host": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:3063;http://localhost:3064"
+    }
+  }
+}

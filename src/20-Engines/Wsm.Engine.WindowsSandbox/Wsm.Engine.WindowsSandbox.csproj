@@ -4,14 +4,13 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>Wsm.Engine.WindowsSandbox</RootNamespace>
     <AssemblyName>Wsm.Engine.WindowsSandbox</AssemblyName>
-    <Description>Non-elevated Windows Sandbox engine driven over the named-pipe gRPC control plane.</Description>
+    <Description>Windows Sandbox engine driven through the Windows UDK (ManagedWindowsVM).</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
     <ProjectReference Include="..\..\00-Core\Wsm.Engines.Abstractions\Wsm.Engines.Abstractions.csproj" />
-    <ProjectReference Include="..\..\30-Connections\Wsm.SandboxServer.Client\Wsm.SandboxServer.Client.csproj" />
-    <ProjectReference Include="..\..\30-Connections\Wsm.Recipe.Serialization\Wsm.Recipe.Serialization.csproj" />
+    <ProjectReference Include="..\..\10-Udk\Wsm.Udk.Sandbox\Wsm.Udk.Sandbox.csproj" />
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Environment\Wsm.Host.Environment.csproj" />
   </ItemGroup>
 

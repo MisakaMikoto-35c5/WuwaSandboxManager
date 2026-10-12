@@ -10,6 +10,9 @@
     <Project Path="src/20-Engines/Wsm.Engine.WindowsSandbox/Wsm.Engine.WindowsSandbox.csproj" />
     <Project Path="src/20-Engines/Wsm.Engine.WindowsContainer/Wsm.Engine.WindowsContainer.csproj" />
   </Folder>
+  <Folder Name="/src/10-Udk/">
+    <Project Path="src/10-Udk/Wsm.Udk.Sandbox/Wsm.Udk.Sandbox.csproj" />
+  </Folder>
   <Folder Name="/src/10-Hcs/">
     <Project Path="src/10-Hcs/Wsm.Hcs.Interop/Wsm.Hcs.Interop.csproj" />
     <Project Path="src/10-Hcs/Wsm.Hcs.Layout/Wsm.Hcs.Layout.csproj" />
@@ -27,9 +30,12 @@
     <Project Path="src/30-Connections/Wsm.Connection.RdpHost/Wsm.Connection.RdpHost.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Session/Wsm.Connection.Session.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Legacy/Wsm.Connection.Legacy.csproj" />
+    <Project Path="src/30-Connections/Wsm.Service.Contracts/Wsm.Service.Contracts.csproj" />
+    <Project Path="src/30-Connections/Wsm.Service.Client/Wsm.Service.Client.csproj" />
   </Folder>
   <Folder Name="/src/40-Host/">
     <Project Path="src/40-Host/Wsm.Host.Policy/Wsm.Host.Policy.csproj" />
+    <Project Path="src/40-Host/Wsm.Service.Host/Wsm.Service.Host.csproj" />
     <Project Path="src/40-Host/Wsm.Host.Elevation/Wsm.Host.Elevation.csproj" />
     <Project Path="src/40-Host/Wsm.Host.Environment/Wsm.Host.Environment.csproj" />
     <Project Path="src/40-Host/Wsm.Persistence/Wsm.Persistence.csproj" />

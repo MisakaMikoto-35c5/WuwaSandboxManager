@@ -11,6 +11,7 @@
     <PackageVersion Include="Grpc.Net.Client" Version="2.57.0" />
     <PackageVersion Include="Grpc.Core.Api" Version="2.57.0" />
     <PackageVersion Include="Grpc.Tools" Version="2.57.0" />
+    <PackageVersion Include="Grpc.AspNetCore" Version="2.57.0" />
 
     <!-- Microsoft.Extensions -->
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
@@ -19,6 +20,9 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.2" />
+
+    <!-- Windows service hosting (Wsm.Service.Host: ServiceBase + SCM) -->
+    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.12" />
 
     <!-- ABP (minimal set: module system + conventional DI) -->
     <PackageVersion Include="Volo.Abp.Core" Version="10.2.0" />

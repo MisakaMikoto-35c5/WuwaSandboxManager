@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Udk.Sandbox</RootNamespace>
+    <AssemblyName>Wsm.Udk.Sandbox</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>
+      Windows UDK host (WindowsUdk.Security.Isolation): creates and drives
+      ManagedWindowsVM instances exactly like Windows Sandbox itself, instead of
+      assembling the HCS document by hand.
+    </Description>
+    <!-- Pinned so the HintPaths below stay valid; matches the assembly
+         versions SandboxUDK.dll was compiled against (metadata refs:
+         WinRT.Runtime 2.2.0.0, Microsoft.Windows.SDK.NET 10.0.26100.38). -->
+    <UdkRefPackageVersion>10.0.26100.57</UdkRefPackageVersion>
+  </PropertyGroup>
+
+  <!-- SandboxUDK.dll is the UDK WinRT projection (the exact assembly
+       WindowsSandboxServer.exe loads). It is an OS-derived binary that is on
+       neither NuGet nor any system path, so it is committed under lib/ (the
+       .gitignore excludes the two package-provided siblings below). -->
+  <ItemGroup>
+    <Reference Include="SandboxUDK">
+      <HintPath>lib\SandboxUDK.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- The CsWinRT runtime + Windows SDK projection SandboxUDK needs ship in
+       Microsoft.Windows.SDK.NET.Ref. That package is DotnetPlatform-typed, so
+       it cannot be a PackageReference (NU1213) without moving the whole
+       consumer chain onto a windows10 platform TFM; PackageDownload restores
+       it into the global package cache and the References pick the assemblies
+       up from there — nuget restore is the single source of truth. -->
+  <ItemGroup>
+    <PackageDownload Include="Microsoft.Windows.SDK.NET.Ref" Version="[$(UdkRefPackageVersion)]" />
+    <Reference Include="WinRT.Runtime">
+      <HintPath>$(NuGetPackageRoot)microsoft.windows.sdk.net.ref\$(UdkRefPackageVersion)\lib\net8.0\WinRT.Runtime.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.Windows.SDK.NET">
+      <HintPath>$(NuGetPackageRoot)microsoft.windows.sdk.net.ref\$(UdkRefPackageVersion)\lib\net8.0\Microsoft.Windows.SDK.NET.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+</Project>

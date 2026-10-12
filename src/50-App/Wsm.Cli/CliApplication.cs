@@ -1,13 +1,19 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Localization;
+using Wsm.Domain;
 using Wsm.Domain.Exceptions;
 using Wsm.Domain.ValueObjects;
 using Wsm.Application;
+using Wsm.Connection.Session;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Elevation;
 using Wsm.Host.Policy;
 using Wsm.Localization;
+using Wsm.Persistence;
+using Wsm.Service.Client;
+using Wsm.Service.Contracts.Internal;
 
 namespace Wsm.Cli;
 
@@ -26,6 +32,18 @@ public sealed class CliApplication
     private readonly IMultiInstancePolicy _multiInstancePolicy;
     private readonly IElevationService _elevation;
     private readonly IStringLocalizer<WindowsSandboxManagerResource> _localizer;
+    private readonly IWsmServiceClient? _serviceClient;
+
+    /// <summary>
+    /// The client-side RDP entry point. <c>connect</c> presents the session in
+    /// this process, even when the live VM is owned by the agent service: only
+    /// the connection parameters are sourced from the service (see
+    /// <c>connect</c>), the session itself is never proxied.
+    /// </summary>
+    private readonly ISessionLauncher _sessionLauncher;
+
+    private IWsmServiceClient? _service;
+    private bool _serviceResolved;
 
     public CliApplication(IServiceProvider provider)
     {
@@ -34,6 +52,11 @@ public sealed class CliApplication
         _multiInstancePolicy = provider.GetRequiredService<IMultiInstancePolicy>();
         _elevation = provider.GetRequiredService<IElevationService>();
         _localizer = provider.GetRequiredService<IStringLocalizer<WindowsSandboxManagerResource>>();
+        _sessionLauncher = provider.GetRequiredService<ISessionLauncher>();
+
+        // The agent client is optional at runtime: when the WsmAgent service is
+        // not installed the CLI keeps using the in-process application layer.
+        _serviceClient = provider.GetService<IWsmServiceClient>();
     }
 
     public async Task<int> RunAsync(string[] args)
@@ -60,7 +83,7 @@ public sealed class CliApplication
                     return WriteJson(await _manager.ListAsync());
 
                 case "running":
-                    return WriteJson(await _manager.ListRunningAsync());
+                    return await RunningAsync(options);
 
                 case "create":
                     return await CreateAsync(options);
@@ -75,29 +98,25 @@ public sealed class CliApplication
                     return await HostAsync(positional, options);
 
                 case "stop":
-                    await _manager.StopAsync(RequireGuid(positional, 0));
-                    Console.WriteLine("Stopped.");
-                    return 0;
+                    return await StopAsync(positional, options);
 
                 case "connect":
-                    await _manager.ConnectAsync(
-                        RequireGuid(positional, 0),
-                        options.ContainsKey("remoteapp") ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop,
-                        options.GetValueOrDefault("program"));
-                    Console.WriteLine("Session launched.");
-                    return 0;
+                    return await ConnectAsync(positional, options);
 
                 case "ip":
-                    return WriteJson(await _manager.GetIpAddressesAsync(RequireGuid(positional, 0)));
+                    return await IpAsync(positional, options);
 
                 case "exec":
-                    return await ExecAsync(positional);
+                    return await ExecAsync(positional, options);
 
                 case "share":
                     return await ShareAsync(positional, options);
 
                 case "checkpoint":
                     return await CheckpointAsync(positional, options);
+
+                case "service":
+                    return await ServiceAsync(positional, options);
 
                 case "multi":
                     return Multi(options);
@@ -114,6 +133,17 @@ public sealed class CliApplication
         catch (SandboxNotFoundException)
         {
             Console.Error.WriteLine(_localizer["SandboxNotFound"]);
+            return 1;
+        }
+        catch (SandboxBackendException ex) when (IsForced(options) && ex.HResult == WsmServiceStatus.ServerUnavailable)
+        {
+            // --service was forced and the agent pipe did not answer: keep the
+            // original error, then add the actionable follow-up the raw message
+            // lacks (the auto-detect path degrades to in-process instead).
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            Console.Error.WriteLine(
+                "WsmAgent is not available; check 'wsm service status' or start it, " +
+                "or drop --service to run in-process.");
             return 1;
         }
         catch (Exception ex)
@@ -153,34 +183,112 @@ public sealed class CliApplication
     private async Task<int> CreateAsync(Dictionary<string, string?> options)
     {
         var recipe = BuildRecipe(options);
-        var dto = await _manager.CreateAsync(options.GetValueOrDefault("name"), recipe);
-        Console.WriteLine($"Created sandbox {dto.Id}");
+        var engine = ParseEngine(options.GetValueOrDefault("engine"));
+        var dto = await _manager.CreateAsync(options.GetValueOrDefault("name"), recipe, engine);
+        Console.WriteLine($"Created sandbox {dto.Id} (engine={dto.Engine?.ToString() ?? "auto"})");
         return 0;
     }
+
+    /// <summary>
+    /// Resolves the optional <c>--engine</c> selector. Absent/unknown means
+    /// "let the selector pick" (the lowest available <see cref="SandboxEngineKind"/>).
+    /// </summary>
+    private static SandboxEngineKind? ParseEngine(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or "default" or "auto" => null,
+        "hcs" or "hcs-sandbox" => SandboxEngineKind.HcsSandbox,
+        "wsb" or "udk" or "windows-sandbox" or "windowssandbox" => SandboxEngineKind.WindowsSandbox,
+        "container" or "windows-container" or "windowscontainer" => SandboxEngineKind.WindowsContainer,
+        _ => null,
+    };
 
     private async Task<int> StartAsync(List<string> positional, Dictionary<string, string?> options)
     {
         var mode = options.ContainsKey("remoteapp") ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop;
+        var id = RequireGuid(positional, 0);
 
-        SandboxInstanceDto dto;
-        try
-        {
-            dto = await _manager.StartAsync(RequireGuid(positional, 0), mode);
-        }
-        catch (MultipleInstancesNotAllowedException)
-        {
-            Console.Error.WriteLine(_localizer["MultipleInstances"]);
-            return 1;
-        }
+        return await WithServiceAsync(
+            options,
+            async service =>
+            {
+                SandboxRuntimeInfo runtime;
+                try
+                {
+                    runtime = await service.StartAsync(id, mode);
+                }
+                catch (MultipleInstancesNotAllowedException)
+                {
+                    Console.Error.WriteLine(_localizer["MultipleInstances"]);
+                    return 1;
+                }
 
-        Console.WriteLine($"Started sandbox {dto.Id} (state={dto.State})");
-        if (dto.Runtime is not null)
-        {
-            Console.WriteLine($"  vm={dto.Runtime.VmId} transport={dto.Runtime.Transport} rail={dto.Runtime.RailMode}");
-            Console.WriteLine($"  pipe={dto.Runtime.NamedPipeEndpoint} user={dto.Runtime.UserName}");
-        }
+                Console.WriteLine($"Started sandbox {id} (state={SandboxState.Running})");
+                Console.WriteLine($"  vm={runtime.VmId} transport={runtime.Transport} rail={runtime.RailMode}");
+                Console.WriteLine($"  pipe={runtime.NamedPipeEndpoint} user={runtime.UserName}");
+                return 0;
+            },
+            async () =>
+            {
+                SandboxInstanceDto dto;
+                try
+                {
+                    dto = await _manager.StartAsync(id, mode);
+                }
+                catch (MultipleInstancesNotAllowedException)
+                {
+                    Console.Error.WriteLine(_localizer["MultipleInstances"]);
+                    return 1;
+                }
 
-        return 0;
+                Console.WriteLine($"Started sandbox {dto.Id} (state={dto.State})");
+                if (dto.Runtime is not null)
+                {
+                    Console.WriteLine($"  vm={dto.Runtime.VmId} transport={dto.Runtime.Transport} rail={dto.Runtime.RailMode}");
+                    Console.WriteLine($"  pipe={dto.Runtime.NamedPipeEndpoint} user={dto.Runtime.UserName}");
+                }
+
+                return 0;
+            });
+    }
+
+    /// <summary>
+    /// Routes the read of the running instance ids: through the agent service when
+    /// it is available (or <c>--service</c> was passed), otherwise in-process.
+    /// </summary>
+    private async Task<int> RunningAsync(Dictionary<string, string?> options)
+        => await WithServiceAsync(
+            options,
+            async service => WriteJson(await service.EnumerateAsync()),
+            async () => WriteJson(await _manager.ListRunningAsync()));
+
+    private async Task<int> StopAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        var id = RequireGuid(positional, 0);
+
+        return await WithServiceAsync(
+            options,
+            async service =>
+            {
+                await service.StopAsync(id);
+                Console.WriteLine("Stopped.");
+                return 0;
+            },
+            async () =>
+            {
+                await _manager.StopAsync(id);
+                Console.WriteLine("Stopped.");
+                return 0;
+            });
+    }
+
+    private async Task<int> IpAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        var id = RequireGuid(positional, 0);
+
+        return await WithServiceAsync(
+            options,
+            async service => WriteJson(await service.GetIpAddressesAsync(id)),
+            async () => WriteJson(await _manager.GetIpAddressesAsync(id)));
     }
 
     /// <summary>
@@ -226,7 +334,7 @@ public sealed class CliApplication
         return 0;
     }
 
-    private async Task<int> ExecAsync(List<string> positional)
+    private async Task<int> ExecAsync(List<string> positional, Dictionary<string, string?> options)
     {
         if (positional.Count < 2)
         {
@@ -236,9 +344,21 @@ public sealed class CliApplication
 
         var id = Guid.Parse(positional[0]);
         var command = string.Join(' ', positional.Skip(1));
-        var exitCode = await _manager.ExecuteAsync(id, command);
-        Console.WriteLine($"Exit code: {exitCode}");
-        return exitCode;
+
+        return await WithServiceAsync(
+            options,
+            async service =>
+            {
+                var result = await service.ExecuteAsync(id, command);
+                Console.WriteLine($"Exit code: {result.ExitCode}");
+                return result.ExitCode;
+            },
+            async () =>
+            {
+                var exitCode = await _manager.ExecuteAsync(id, command);
+                Console.WriteLine($"Exit code: {exitCode}");
+                return exitCode;
+            });
     }
 
     private async Task<int> ShareAsync(List<string> positional, Dictionary<string, string?> options)
@@ -253,9 +373,22 @@ public sealed class CliApplication
         var host = positional[1];
         var sandbox = positional.Count > 2 ? positional[2] : string.Empty;
         var readOnly = !options.ContainsKey("rw");
-        await _manager.MapFolderAsync(id, new MappedFolder(host, sandbox, readOnly));
-        Console.WriteLine("Folder mapped.");
-        return 0;
+        var folder = new MappedFolder(host, sandbox, readOnly);
+
+        return await WithServiceAsync(
+            options,
+            async service =>
+            {
+                await service.MapFolderAsync(id, folder);
+                Console.WriteLine("Folder mapped.");
+                return 0;
+            },
+            async () =>
+            {
+                await _manager.MapFolderAsync(id, folder);
+                Console.WriteLine("Folder mapped.");
+                return 0;
+            });
     }
 
     private async Task<int> CheckpointAsync(List<string> positional, Dictionary<string, string?> options)
@@ -349,6 +482,345 @@ public sealed class CliApplication
 
         Console.Error.WriteLine(_localizer["ElevationRequired"]);
         return 1;
+    }
+
+    /// <summary>
+    /// Decides whether a routable command should run through the agent service.
+    /// <c>--service</c> forces the service; by default the agent pipe is probed
+    /// once per invocation and the in-process path is used when it is absent, so
+    /// behavior is unchanged on machines without the service. Returns
+    /// <c>null</c> to select the in-process <see cref="ISandboxManager"/> path.
+    /// </summary>
+    private async Task<IWsmServiceClient?> TryGetServiceAsync(Dictionary<string, string?> options)
+    {
+        if (_serviceClient is null)
+        {
+            return null;
+        }
+
+        if (IsForced(options))
+        {
+            return _serviceClient;
+        }
+
+        if (!_serviceResolved)
+        {
+            _service = await _serviceClient.IsAvailableAsync() ? _serviceClient : null;
+            _serviceResolved = true;
+        }
+
+        return _service;
+    }
+
+    private static bool IsForced(Dictionary<string, string?> options) => options.ContainsKey("service");
+
+    /// <summary>
+    /// Runs <paramref name="viaService"/> when the agent service serves the call,
+    /// otherwise <paramref name="inProcess"/>. In auto-detect mode a service that
+    /// turns out to be unreachable degrades to the in-process path; domain
+    /// exceptions other than "service unavailable" surface exactly as they do
+    /// from the in-process manager.
+    /// </summary>
+    private async Task<int> WithServiceAsync(
+        Dictionary<string, string?> options,
+        Func<IWsmServiceClient, Task<int>> viaService,
+        Func<Task<int>> inProcess)
+    {
+        var service = await TryGetServiceAsync(options);
+        if (service is null)
+        {
+            return await inProcess();
+        }
+
+        try
+        {
+            return await viaService(service);
+        }
+        catch (SandboxBackendException ex) when (!IsForced(options) && ex.HResult == WsmServiceStatus.ServerUnavailable)
+        {
+            // The agent went away between the probe and the call: fall back.
+            return await inProcess();
+        }
+    }
+
+    /// <summary>
+    /// Opens the user-visible RDP session for a running sandbox.
+    /// <para>
+    /// In service mode the live VM (and, for the UDK/Windows Sandbox engine, its
+    /// process-local running reference) belongs to the agent process, so the
+    /// in-process path cannot attach to it. The connection parameters are read
+    /// from the agent instead (<see cref="IWsmServiceClient.PrepareConnectAsync"/>),
+    /// then the session is presented <b>here</b> through
+    /// <see cref="ISessionLauncher"/>: only the parameters are sourced from the
+    /// service, the RDP/ActiveX session is never proxied (plan §8.5). When the
+    /// service is absent the in-process <see cref="ISandboxManager.ConnectAsync"/>
+    /// path is used unchanged.
+    /// </para>
+    /// </summary>
+    private async Task<int> ConnectAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        var id = RequireGuid(positional, 0);
+        var mode = options.ContainsKey("remoteapp") ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop;
+        var program = options.GetValueOrDefault("program");
+
+        var service = await TryGetServiceAsync(options);
+        if (service is null)
+        {
+            await _manager.ConnectAsync(id, mode, program);
+            Console.WriteLine("Session launched.");
+            return 0;
+        }
+
+        SandboxRuntimeInfo runtime;
+        try
+        {
+            // Server-side pre-connect: the agent reclaims orphaned guest
+            // sessions and returns the engine-backed live runtime. A not-running
+            // instance surfaces as the same SandboxDomainException the
+            // in-process path throws. The catch is narrowed to this call only,
+            // so a failure in the session launch below can never be misrouted
+            // into the in-process connect.
+            runtime = await service.PrepareConnectAsync(id);
+        }
+        catch (SandboxBackendException ex) when (!IsForced(options) && ex.HResult == WsmServiceStatus.ServerUnavailable)
+        {
+            // The agent went away between the probe and the runtime fetch: fall back.
+            await _manager.ConnectAsync(id, mode, program);
+            Console.WriteLine("Session launched.");
+            return 0;
+        }
+
+        var engineKind = await ResolveEngineKindAsync(id);
+        await _sessionLauncher.LaunchAsync(SandboxInstanceId.From(id), runtime, mode, engineKind, program);
+        Console.WriteLine("Session launched.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Resolves the engine kind of <paramref name="id"/> from its persisted
+    /// definition so the session launcher logs/errors with the right engine.
+    /// The launcher presents every engine through the same RDP connector, so the
+    /// kind is purely informative and an unreadable definition must not block a
+    /// connect to a service-owned VM.
+    /// </summary>
+    private async Task<SandboxEngineKind> ResolveEngineKindAsync(Guid id)
+    {
+        try
+        {
+            var dto = await _manager.GetAsync(id);
+            return dto.Engine ?? SandboxEngineKind.HcsSandbox;
+        }
+        catch (Exception)
+        {
+            return SandboxEngineKind.HcsSandbox;
+        }
+    }
+
+    private async Task<int> ServiceAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        var subcommand = positional.Count > 0 ? positional[0].ToLowerInvariant() : "status";
+        return subcommand switch
+        {
+            "status" => await ServiceStatusAsync(),
+            "install" => await ServiceInstallAsync(),
+            "uninstall" => await ServiceUninstallAsync(),
+            _ => UnknownServiceSubcommand(subcommand),
+        };
+    }
+
+    private static int UnknownServiceSubcommand(string subcommand)
+    {
+        Console.Error.WriteLine($"Unknown service subcommand '{subcommand}'.");
+        Console.Error.WriteLine("Usage: wsm service status|install|uninstall");
+        return 2;
+    }
+
+    /// <summary>
+    /// Reports whether the agent pipe answers and the SCM service state. Exits 0
+    /// only when the agent is available (the pipe probe succeeds); exits 1 when
+    /// it is not (service missing or pipe not reachable) so scripts can gate on
+    /// the result.
+    /// </summary>
+    private async Task<int> ServiceStatusAsync()
+    {
+        var available = _serviceClient is not null && await _serviceClient.IsAvailableAsync();
+        Console.WriteLine($"Agent pipe  : {(available ? "available" : "not available")}");
+
+        var result = await RunScAsync("query", "WsmAgent");
+        ReportSc(result);
+        ReportScFailure(result);
+
+        return available ? 0 : 1;
+    }
+
+    private async Task<int> ServiceInstallAsync()
+    {
+        var exe = FindServiceHostExe();
+        if (exe is null)
+        {
+            Console.Error.WriteLine("Could not locate Wsm.Service.Host.exe.");
+            Console.Error.WriteLine("Build the host first, e.g. dotnet build src/40-Host/Wsm.Service.Host/Wsm.Service.Host.csproj");
+            return 1;
+        }
+
+        Console.WriteLine($"Installing service 'WsmAgent' -> {exe}");
+
+        // Share the user's config & data folder with the LocalSystem service: the
+        // agent would otherwise resolve SandboxPersistenceOptions against
+        // %USERPROFILE% of LocalSystem and never find the user's .wsm files. This
+        // is resolved exactly as this CLI's own persistence resolves it today (the
+        // CLI does not honour UiSettings, so it is the default folder that
+        // 'wsm create' writes to); the host overrides its own options with --data.
+        var dataFolder = SandboxPersistenceOptions.DefaultConfigDataFolder;
+        var binPath = $"\"{exe}\" --data \"{dataFolder}\"";
+
+        var result = await RunScAsync("create", "WsmAgent", "binPath=", binPath, "start=", "auto");
+        ReportSc(result);
+        if (result.ExitCode != 0)
+        {
+            ReportScFailure(result);
+            return 1;
+        }
+
+        // Best effort: a description is nice but never fatal to the install.
+        var description = await RunScAsync("description", "WsmAgent", "Windows Sandbox Manager agent (holds sandbox VM lifetimes).");
+        ReportSc(description);
+
+        Console.WriteLine("Service 'WsmAgent' installed.");
+        return 0;
+    }
+
+    private async Task<int> ServiceUninstallAsync()
+    {
+        var result = await RunScAsync("delete", "WsmAgent");
+        ReportSc(result);
+        if (result.ExitCode != 0)
+        {
+            ReportScFailure(result);
+            return 1;
+        }
+
+        Console.WriteLine("Service 'WsmAgent' uninstalled.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Maps an sc.exe failure to the actionable follow-up. Only exit code 5
+    /// (ACCESS_DENIED) is an elevation problem; 1060 (service not installed) and
+    /// 1073 (service already installed) get their own remediation, and every
+    /// other code is left to the verbatim sc.exe output. Never fires for a
+    /// successful (zero) exit.
+    /// </summary>
+    private void ReportScFailure(ScResult result)
+    {
+        switch (result.ExitCode)
+        {
+            case 5:
+                if (!_elevation.IsElevated)
+                {
+                    Console.Error.WriteLine("Re-run this command from an elevated (administrator) prompt.");
+                }
+
+                break;
+
+            case 1060:
+                Console.Error.WriteLine("WsmAgent is not installed (run 'wsm service install').");
+                break;
+
+            case 1073:
+                Console.Error.WriteLine("WsmAgent is already installed (run 'wsm service uninstall' first).");
+                break;
+        }
+    }
+
+    private readonly record struct ScResult(int ExitCode, string StandardOutput, string StandardError);
+
+    /// <summary>Runs <c>sc.exe</c> and captures its output; never throws on failure.</summary>
+    private static async Task<ScResult> RunScAsync(params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo("sc.exe")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start sc.exe.");
+
+        var stdout = await process.StandardOutput.ReadToEndAsync();
+        var stderr = await process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        return new ScResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static void ReportSc(ScResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.StandardOutput))
+        {
+            Console.Write(result.StandardOutput);
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.StandardError))
+        {
+            Console.Error.Write(result.StandardError);
+        }
+
+        if (result.ExitCode != 0)
+        {
+            Console.Error.WriteLine($"(sc.exe exited with code {result.ExitCode})");
+        }
+    }
+
+    /// <summary>
+    /// Locates <c>Wsm.Service.Host.exe</c>: next to the running <c>wsm</c>
+    /// executable first, then under a <c>40-Host/Wsm.Service.Host</c> project
+    /// tree found while walking up towards the repository root.
+    /// </summary>
+    private static string? FindServiceHostExe()
+    {
+        const string exeName = "Wsm.Service.Host.exe";
+
+        var direct = Path.Combine(AppContext.BaseDirectory, exeName);
+        if (File.Exists(direct))
+        {
+            return direct;
+        }
+
+        for (var current = new DirectoryInfo(AppContext.BaseDirectory); current is not null; current = current.Parent)
+        {
+            foreach (var projectDirectory in new[]
+                     {
+                         Path.Combine(current.FullName, "src", "40-Host", "Wsm.Service.Host"),
+                         Path.Combine(current.FullName, "40-Host", "Wsm.Service.Host"),
+                     })
+            {
+                var binDirectory = Path.Combine(projectDirectory, "bin");
+                if (!Directory.Exists(binDirectory))
+                {
+                    continue;
+                }
+
+                var match = Directory
+                    .EnumerateFiles(binDirectory, exeName, SearchOption.AllDirectories)
+                    .OrderByDescending(File.GetLastWriteTimeUtc)
+                    .FirstOrDefault();
+
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static SandboxRecipe BuildRecipe(Dictionary<string, string?> options)
@@ -502,11 +974,25 @@ public sealed class CliApplication
               checkpoint save <id> <name> [--template]  Save a checkpoint
               checkpoint list <id>                      List checkpoints
               checkpoint restore <id> <checkpointId>    Restore a checkpoint
+              service status                  Show the agent pipe and WsmAgent service state
+                                              (exits 1 when the agent/pipe is unavailable)
+              service install                 Register the WsmAgent Windows service (needs admin);
+                                              pins the agent to your current WsmContainers folder
+              service uninstall               Remove the WsmAgent Windows service (needs admin)
               multi [--enable|--disable]      Inspect/change the multi-instance policy
               elevate                         Relaunch elevated (needed for HCS)
 
+            options:
+              --service                 Force commands through the resident WsmAgent service.
+                                        By default the agent pipe is probed automatically and
+                                        the CLI falls back to the in-process engine when it is
+                                        not running (behavior is unchanged when the service is
+                                        absent). Affects: running, start, stop, connect, exec,
+                                        ip, share.
+
             create options:
               --name <name>
+              --engine <kind>           auto | hcs | udk (Windows Sandbox) | container
               --memory <MB>             (default 4096)
               --cpu <cores>             (HCS engine)
               --networking enable|disable|default

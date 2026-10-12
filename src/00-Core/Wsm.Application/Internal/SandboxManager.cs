@@ -219,13 +219,48 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             .ConfigureAwait(false);
     }
 
+    public async Task<SandboxRuntimeInfo?> GetRuntimeAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
+        var engine = _selector.Select(RequestFor(instance));
+        return await ResolveRuntimeAsync(instance, engine, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<SandboxRuntimeInfo> PrepareConnectAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var (_, runtime, _) = await PrepareConnectCoreAsync(id, cancellationToken).ConfigureAwait(false);
+        return runtime;
+    }
+
     public async Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default)
+    {
+        var (instanceId, runtime, engine) = await PrepareConnectCoreAsync(id, cancellationToken).ConfigureAwait(false);
+
+        await _sessionLauncher
+            .LaunchAsync(instanceId, runtime, mode, engine.Kind, remoteAppProgram, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Shared pre-connect sequence used by both <see cref="ConnectAsync"/> and
+    /// <see cref="PrepareConnectAsync"/>: resolves the instance's live runtime
+    /// (from the aggregate, falling back to the engine), attaches and persists it
+    /// when it was discovered through the engine, then reclaims any orphaned guest
+    /// sessions so the guest accepts the next connect. Returns the instance id,
+    /// the resolved runtime and the engine that owns it, so callers can launch
+    /// the session.
+    /// </summary>
+    /// <exception cref="SandboxDomainException">
+    /// The instance is not running (no cached runtime and the engine reports none).
+    /// </exception>
+    private async Task<(SandboxInstanceId Id, SandboxRuntimeInfo Runtime, ISandboxEngine Engine)> PrepareConnectCoreAsync(
+        Guid id,
+        CancellationToken cancellationToken)
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
         var engine = _selector.Select(RequestFor(instance));
 
-        var runtime = instance.Runtime
-            ?? await engine.GetRuntimeAsync(instance.Id, cancellationToken).ConfigureAwait(false)
+        var runtime = await ResolveRuntimeAsync(instance, engine, cancellationToken).ConfigureAwait(false)
             ?? throw new SandboxDomainException($"Sandbox '{id}' is not running; start it before connecting.");
 
         if (instance.Runtime is null)
@@ -239,10 +274,20 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         // with "too many sessions established", so reclaim the slot first.
         await ReclaimGuestSessionsAsync(engine, instance.Id, cancellationToken).ConfigureAwait(false);
 
-        await _sessionLauncher
-            .LaunchAsync(instance.Id, runtime, mode, engine.Kind, remoteAppProgram, cancellationToken)
-            .ConfigureAwait(false);
+        return (instance.Id, runtime, engine);
     }
+
+    /// <summary>
+    /// Resolves an instance's live runtime: the aggregate's cached runtime when it
+    /// has one, otherwise the engine's current runtime. Returns <c>null</c> when
+    /// the engine reports the instance is not running.
+    /// </summary>
+    private static async Task<SandboxRuntimeInfo?> ResolveRuntimeAsync(
+        SandboxInstance instance,
+        ISandboxEngine engine,
+        CancellationToken cancellationToken)
+        => instance.Runtime
+            ?? await engine.GetRuntimeAsync(instance.Id, cancellationToken).ConfigureAwait(false);
 
     /// <summary>
     /// Force-disconnects any orphaned (disconnected) guest session a previous

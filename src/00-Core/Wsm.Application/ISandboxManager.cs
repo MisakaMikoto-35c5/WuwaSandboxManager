@@ -47,6 +47,24 @@ public interface ISandboxManager
     /// <summary>Restores a checkpoint of an instance, returning the resulting VM id.</summary>
     Task<Guid> RestoreCheckpointAsync(Guid id, Guid checkpointId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the live runtime of a running instance, resolving it through the
+    /// selected engine when the aggregate does not carry one. Returns <c>null</c>
+    /// when the instance exists but its engine reports it is not running; an
+    /// unknown id throws <see cref="Wsm.Domain.Exceptions.SandboxNotFoundException"/>.
+    /// </summary>
+    Task<SandboxRuntimeInfo?> GetRuntimeAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Server-side pre-connect preparation: resolves the instance's live runtime
+    /// (engine-backed) and reclaims any orphaned guest sessions, returning the
+    /// runtime so the caller can establish the session itself. Throws
+    /// <see cref="Wsm.Domain.Exceptions.SandboxDomainException"/> when the instance
+    /// is not running and <see cref="Wsm.Domain.Exceptions.SandboxNotFoundException"/>
+    /// for an unknown id.
+    /// </summary>
+    Task<SandboxRuntimeInfo> PrepareConnectAsync(Guid id, CancellationToken cancellationToken = default);
+
     /// <summary>Opens the user-visible session for a running instance.</summary>
     Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default);
 

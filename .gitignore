@@ -20,3 +20,8 @@ Thumbs.db
 
 # Deepwork progress (git-local)
 .slim/deepwork/
+
+# UDK WinRT assemblies provided by the Microsoft.Windows.SDK.NET.Ref NuGet
+# package (only the OS-derived SandboxUDK.dll is committed under lib/).
+src/10-Udk/Wsm.Udk.Sandbox/lib/Microsoft.Windows.SDK.NET.dll
+src/10-Udk/Wsm.Udk.Sandbox/lib/WinRT.Runtime.dll

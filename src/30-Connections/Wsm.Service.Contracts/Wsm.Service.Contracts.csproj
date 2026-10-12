@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Service.Contracts</RootNamespace>
+    <AssemblyName>Wsm.Service.Contracts</AssemblyName>
+    <Description>gRPC contract for the WSM agent service (both client and server stubs).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+    <ProjectReference Include="..\..\00-Core\Wsm.Engines.Abstractions\Wsm.Engines.Abstractions.csproj" />
+    <ProjectReference Include="..\..\00-Core\Wsm.Application\Wsm.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Core.Api" />
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Grpc.AspNetCore" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Grpc\wsm_service.proto" GrpcServices="Both" />
+  </ItemGroup>
+
+</Project>

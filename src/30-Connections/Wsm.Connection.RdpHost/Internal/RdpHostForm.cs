@@ -31,6 +31,7 @@ internal sealed class RdpHostForm : Form
 
     private AxMsRdpClient10NotSafeForScripting? _client;
     private IRdpBaseConnector? _connector;
+    private Panel? _overlay;
 
     public RdpHostForm(RdpSessionRequest request, IRdpBaseConnectorFactory connectorFactory, ILogger logger)
     {
@@ -160,7 +161,22 @@ internal sealed class RdpHostForm : Form
 
             client.OnConnected += (_, _) => _logger.LogInformation("RDP session connected for {Endpoint}.", _request.PipeName);
             client.OnLogonError += (_, args) => _logger.LogWarning("RDP logon error {Error} for {Endpoint}.", args.lError, _request.PipeName);
-            client.OnDisconnected += (_, args) => _logger.LogInformation("RDP session disconnected (reason {Reason}) for {Endpoint}.", args.discReason, _request.PipeName);
+            client.OnDisconnected += (_, args) =>
+            {
+                _logger.LogInformation("RDP session disconnected (reason {Reason}) for {Endpoint}.", args.discReason, _request.PipeName);
+                ShowDisconnectedOverlay(
+                    "Connection disconnected",
+                    "The connection to the sandbox has been disconnected.",
+                    DescribeDisconnect(args.discReason));
+            };
+            client.OnFatalError += (_, args) =>
+            {
+                _logger.LogError("RDP session fatal error {Error} for {Endpoint}.", args.errorCode, _request.PipeName);
+                ShowDisconnectedOverlay(
+                    "Connection lost",
+                    "The connection to the sandbox was lost because of a fatal error.",
+                    $"Error code {args.errorCode}.");
+            };
 
             client.AdvancedSettings9.set_ConnectWithEndpoint(ref endpoint);
             client.Connect();
@@ -176,6 +192,162 @@ internal sealed class RdpHostForm : Form
     private static void SetExtended(IMsRdpExtendedSettings settings, string name, object value)
     {
         settings.set_Property(name, ref value);
+    }
+
+    /// <summary>
+    /// Covers the (now blank) ActiveX surface with a readable notice that the
+    /// session has ended. The window is intentionally left open so the user sees
+    /// the message instead of a bare white client area.
+    /// </summary>
+    private void ShowDisconnectedOverlay(string title, string message, string detail)
+    {
+        if (IsDisposed || Disposing || _closeCts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (InvokeRequired)
+        {
+            try
+            {
+                BeginInvoke(new Action(() => ShowDisconnectedOverlay(title, message, detail)));
+            }
+            catch (InvalidOperationException)
+            {
+                // The window is being torn down; there is nothing to show.
+            }
+
+            return;
+        }
+
+        if (_overlay is not null)
+        {
+            return;
+        }
+
+        // Hide the white ActiveX surface so the notice is the only thing visible.
+        try
+        {
+            _client?.Hide();
+        }
+        catch
+        {
+            // Best effort.
+        }
+
+        var content = new TableLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            BackColor = Color.Transparent,
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        var heading = new Label
+        {
+            AutoSize = true,
+            Font = new Font("Segoe UI", 16F, FontStyle.Bold),
+            ForeColor = Color.White,
+            Text = title,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Anchor = AnchorStyles.None,
+            Margin = new Padding(0, 0, 0, 12),
+        };
+        var body = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(560, 0),
+            Font = new Font("Segoe UI", 11F),
+            ForeColor = Color.White,
+            Text = message,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Anchor = AnchorStyles.None,
+            Margin = new Padding(0, 0, 0, 6),
+        };
+        var reason = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(560, 0),
+            Font = new Font("Segoe UI", 9.5F),
+            ForeColor = Color.Gainsboro,
+            Text = detail,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Anchor = AnchorStyles.None,
+            Margin = new Padding(0, 0, 0, 18),
+        };
+        var close = new Button
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(18, 4, 18, 4),
+            Text = "Close",
+            Anchor = AnchorStyles.None,
+        };
+        close.Click += (_, _) => Close();
+
+        content.Controls.Add(heading);
+        content.Controls.Add(body);
+        content.Controls.Add(reason);
+        content.Controls.Add(close);
+
+        var overlay = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Color.FromArgb(24, 24, 28),
+        };
+        overlay.Controls.Add(content);
+
+        void CenterContent()
+        {
+            content.Location = new Point(
+                Math.Max(0, (overlay.ClientSize.Width - content.Width) / 2),
+                Math.Max(0, (overlay.ClientSize.Height - content.Height) / 2));
+        }
+
+        overlay.Resize += (_, _) => CenterContent();
+        content.SizeChanged += (_, _) => CenterContent();
+
+        _overlay = overlay;
+        Controls.Add(overlay);
+        overlay.BringToFront();
+        CenterContent();
+        ActiveControl = close;
+    }
+
+    /// <summary>
+    /// Turns the raw <c>OnDisconnected</c> reason code into a short, human-readable
+    /// sentence. Unknown codes fall back to a generic message with the code kept
+    /// for diagnostics.
+    /// </summary>
+    private static string DescribeDisconnect(int discReason)
+    {
+        // Values are the documented IMsTscAxEvents::OnDisconnected disconnectReason
+        // codes (Microsoft Learn: "IMsTscAxEvents OnDisconnected method"). The
+        // low-value codes (0-3) are informational, not errors.
+        var text = discReason switch
+        {
+            0 => "No additional information is available.",
+            1 => "The local client ended the session.",
+            2 => "The sandbox ended the session (remote disconnection by user).",
+            3 => "The sandbox server ended the session.",
+            260 => "The sandbox address could not be resolved (DNS lookup failed).",
+            262 => "The client ran out of memory.",
+            264 => "The connection attempt timed out.",
+            516 => "The connection to the sandbox could not be established (socket connect failed).",
+            518 => "The client ran out of memory.",
+            774 => "The client ran out of memory.",
+            1028 => "The connection to the sandbox was lost (socket receive failed).",
+            1288 => "The sandbox address could not be resolved (DNS lookup failed).",
+            1798 => "The server certificate could not be unpacked.",
+            2056 => "Licensing negotiation failed.",
+            2312 => "Licensing timed out.",
+            3078 => "The session ended because of a decryption error.",
+            3080 => "The session ended because of a decompression error.",
+            _ => "The session ended unexpectedly.",
+        };
+
+        return $"Reason: {text} (code {discReason}).";
     }
 
     private void TearDown()

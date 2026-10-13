@@ -14,6 +14,28 @@ sandbox's own storage id).
 **English**: Three storages observed: `0f0cd630-…` (4MB, empty), `b8c0e347-…` (88MB) and
 `18be0d40-…` (917MB, equal to layer `e01ff4dc`'s `StorageId`).
 
+## 1b. 存储链：层存储 → 基础镜像 → 沙箱 / Storage chain: layer storage → base image → sandbox
+
+**中文**：`ContainerStorages` 内的三层结构（实测 `PersistedStorages` + VHDX 父定位器）：
+**层存储**（`ParentType=2`，父为层 id，`Bindings\config.json` 仅 `{"Version":1}`；即上面的 917MB
+`18be0d40`）→ **基础镜像**（`ParentType=1`，父为层存储，带 VM 的 `Bindings` 配置；即 88MB /
+本机 178MB 的 `f8299c70`，已完成后宾首次启动/特化）→ **沙箱盘**（4MB，父为基础镜像）。
+平台**从不**让沙箱直接挂在层存储上；它先物化基础镜像，再从基础镜像克隆每个沙箱。WHY：特化
+（shell / 开始菜单 / XAML-AppX 包注册）写在基础镜像里，直接挂层存储会启动**未特化**的来宾
+——会话能起、但 `explorer.exe` 挂起、开始菜单打不开。`Wsm.Hcs.Storage` 的 provisioner 因此
+优先克隆**donor 的直接父盘**（基础镜像），仅在没有基础镜像时回退到链根。
+**English**: Three levels inside `ContainerStorages` (observed via `PersistedStorages` + the VHDX
+parent locator): **layer storage** (`ParentType=2`, parent = layer id, `Bindings\config.json` is
+just `{"Version":1}`; the 917MB `18be0d40`) → **base image** (`ParentType=1`, parent = layer
+storage, carries the VM `Bindings` config; the 88MB / local 178MB `f8299c70`, with the guest's
+first-boot/specialization completed) → **sandbox disk** (4MB, parent = base image). The platform
+**never** boots a sandbox straight on a layer storage; it first materializes a base image and clones
+every sandbox from it. WHY: the specialization (shell / Start menu / XAML-AppX package registration)
+lives in the base image, so chaining to the layer storage boots an **unspecialized** guest — the
+session comes up, but `explorer.exe` hangs and the Start menu never opens. The `Wsm.Hcs.Storage`
+provisioner therefore prefers a donor's **immediate parent** (the base image), falling back to the
+chain root only when no base image exists.
+
 ## 2. 用户数据盘 / User-data disk
 
 **中文**：`sandbox.vhdx` 是动态 VHDX（4MB 起），承载容器写入与用户数据；`sandbox.vmgs` 是持久 guest

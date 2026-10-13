@@ -14,12 +14,14 @@ namespace Wsm.Hcs.Storage.Internal;
 ///   <item>reuse an existing <c>sandbox.vhdx</c> in the target directory when its
 ///   chain is intact and lives inside that directory (an external/compressed
 ///   parent is rebuilt rather than mutated);</item>
-///   <item>reference the platform's base OS disk in place: find it by walking
-///   the VHDX parent locator of the container-storage donors back to the disk
-///   with no parent, then create a differencing child <c>sandbox.vhdx</c> whose
-///   parent <b>is that platform disk</b>. The base is never copied — it is the
-///   shared image Windows Update maintains, so a per-sandbox copy would freeze a
-///   stale OS and waste gigabytes. Only an explicitly configured base image is
+///   <item>reference the platform's <b>prepared base image</b> in place: the
+///   platform never boots a sandbox on a layer's storage, it first materialises a
+///   base image (a child of the layer storage that has completed the guest's
+///   first-boot/specialization) and clones every sandbox from it. A donor's
+///   immediate parent is that base image, and a differencing child
+///   <c>sandbox.vhdx</c> is created over it. The base is never copied — it is the
+///   shared, Windows Update-maintained image, so a per-sandbox copy would freeze
+///   a stale OS and waste gigabytes. Only an explicitly configured base image is
 ///   materialised inside the sandbox folder;</item>
 ///   <item>copy a <b>blank/small standalone donor</b> container storage
 ///   (fast path — an existing Windows Sandbox storage under
@@ -166,10 +168,17 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
     /// <summary>
     /// True when an existing <paramref name="disk"/> can be kept: a standalone
     /// disk, or a differencing child whose parent still exists. The parent is
-    /// normally the platform's own base OS disk (outside the sandbox folder) and
-    /// is left untouched; a parent inside the folder is ours and is kept
+    /// normally the platform's prepared base image (outside the sandbox folder)
+    /// and is left untouched; a parent inside the folder is ours and is kept
     /// uncompressed. A missing parent means the chain is broken and the disk is
     /// rebuilt.
+    /// <para>
+    /// A chain whose direct parent is the platform's <b>raw layer storage</b> (a
+    /// no-parent disk under the platform container-storages folder) is also
+    /// rebuilt: that is the shape produced before the prepared base image was
+    /// used, and it boots an unspecialized guest (the shell hangs, the Start menu
+    /// never opens). Rebuilding repairs an existing sandbox on its next start.
+    /// </para>
     /// </summary>
     private bool IsReusableExistingDisk(string disk, string storageDirectory)
     {
@@ -192,6 +201,15 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
                 return false;
             }
 
+            // The platform's raw layer storage is a no-parent disk under the
+            // platform's container-storages folder; a disk chained to it boots an
+            // unspecialized guest, so it is rebuilt over the prepared base image.
+            if (IsWithinDirectory(parent, _layout.PlatformContainerStoragesFolder) &&
+                TryGetParent(parent) is null)
+            {
+                return false;
+            }
+
             // Only a parent inside the sandbox folder is ours to keep
             // uncompressed; the platform's shared base is referenced, never
             // mutated.
@@ -210,14 +228,24 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
     }
 
     /// <summary>
-    /// Creates the user-data disk as a differencing child of the platform's base
-    /// OS disk, <b>referencing that base in place</b>.
+    /// Creates the user-data disk as a differencing child of the platform's
+    /// <b>prepared base image</b>, <b>referencing it in place</b>.
     /// <para>
-    /// The base is deliberately <b>not copied</b>: it is the platform's shared OS
-    /// image, maintained by Windows Update, and every platform sandbox chains to
-    /// it. A per-sandbox copy would freeze a stale OS and waste gigabytes per
-    /// sandbox. Only an explicitly configured base image is materialised; the
-    /// default path always points at the platform's own disk.
+    /// A Windows Sandbox guest boots from a union of the read-only layer
+    /// (<c>VirtualSmb.Shares["os"]</c>) and a writable OS disk. The platform never
+    /// derives that writable disk from a layer's storage directly: it first
+    /// materialises a <i>base image</i> — a differencing child of the layer
+    /// storage that has completed the guest's first boot / specialization (the
+    /// shell, the Start menu and the XAML/AppX packages are registered there) —
+    /// and clones every sandbox from it. Chaining straight to the layer storage's
+    /// no-parent disk therefore boots an <b>unspecialized</b> guest: the session
+    /// comes up, but <c>explorer.exe</c> hangs and the Start menu never opens.
+    /// </para>
+    /// <para>
+    /// The prepared base is the donor's <b>immediate parent</b> (which is itself a
+    /// differencing child). When no prepared base exists, the previous behaviour —
+    /// the chain root — is used as a fallback so a machine that has not prepared a
+    /// base image yet still provisions.
     /// </para>
     /// Returns <see langword="false"/> when no donor chain resolves to an existing
     /// base disk, so the caller can fall through to the standalone-copy/blank
@@ -233,7 +261,34 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
         parentPath = null;
         source = null;
 
-        foreach (var donor in locator.EnumerateDonorStorages())
+        var donors = locator.EnumerateDonorStorages();
+
+        // Preferred: the platform's prepared base image — a donor whose immediate
+        // parent is itself a differencing child (its parent is the layer storage).
+        foreach (var donor in donors)
+        {
+            var donorDisk = Path.Combine(donor, SandboxStorageTemplateLocator.DiskFileName);
+            if (!File.Exists(donorDisk) || IsWithinDirectory(donorDisk, storageDirectory))
+            {
+                continue;
+            }
+
+            var prepared = ResolvePreparedBase(donorDisk);
+            if (prepared is null)
+            {
+                continue;
+            }
+
+            if (TryChain(disk, prepared, donor, out parentPath, out source))
+            {
+                return true;
+            }
+        }
+
+        // Fallback (previous behaviour): the no-parent chain root. This is the
+        // layer's storage, which boots an unspecialized guest; it is only used
+        // when the platform has not prepared a base image.
+        foreach (var donor in donors)
         {
             var donorDisk = Path.Combine(donor, SandboxStorageTemplateLocator.DiskFileName);
             if (!File.Exists(donorDisk) || IsWithinDirectory(donorDisk, storageDirectory))
@@ -242,9 +297,6 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
             }
 
             var root = ResolveChainRoot(donorDisk);
-
-            // A standalone disk (root == itself) is handled by the legacy copy
-            // path, not here.
             if (root is null ||
                 !File.Exists(root) ||
                 string.Equals(root, donorDisk, StringComparison.OrdinalIgnoreCase))
@@ -252,31 +304,90 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
                 continue;
             }
 
-            try
+            if (TryChain(disk, root, donor, out parentPath, out source))
             {
-                // The platform's base OS disk carries the NTFS Compressed
-                // attribute, which HCS refuses to boot from. Clearing the
-                // attribute in place (a metadata change, not a copy) lets the
-                // disk be referenced directly: its content stays current with
-                // Windows Update and no gigabytes are duplicated per sandbox.
-                NtfsCompression.TryUncompress(root);
-                _diskFactory.CreateDifferencingVhdx(disk, root);
-                parentPath = root;
-                source = donor;
                 return true;
             }
-            catch (SandboxBackendException)
-            {
-                TryDeletePartialCopy(disk);
-            }
-            catch (IOException)
-            {
-                TryDeletePartialCopy(disk);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                TryDeletePartialCopy(disk);
-            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns a donor's prepared base image: its immediate parent when that
+    /// parent is itself a differencing child (i.e. a base image derived from the
+    /// layer storage), or <see langword="null"/> when the donor's parent is the
+    /// layer storage's no-parent disk or is missing.
+    /// </summary>
+    private string? ResolvePreparedBase(string donorDisk)
+    {
+        var candidate = TryGetParent(donorDisk);
+        if (candidate is null ||
+            string.Equals(candidate, donorDisk, StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(candidate))
+        {
+            return null;
+        }
+
+        // A prepared base image is itself a differencing child; the layer storage
+        // is a no-parent disk and must not be treated as the base to clone.
+        return TryGetParent(candidate) is null ? null : candidate;
+    }
+
+    /// <summary>Reads a disk's parent path, tolerating an unreadable chain.</summary>
+    private string? TryGetParent(string disk)
+    {
+        try
+        {
+            return _diskFactory.TryGetParentPath(disk);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Uncompresses <paramref name="baseDisk"/> in place and creates
+    /// <paramref name="disk"/> as its differencing child. A partial child is
+    /// cleaned up on failure so the caller can try the next strategy. The base is
+    /// only ever uncompressed (a metadata change), never copied: its content stays
+    /// current with Windows Update and no gigabytes are duplicated per sandbox.
+    /// </summary>
+    private bool TryChain(
+        string disk,
+        string baseDisk,
+        string sourceDirectory,
+        out string? parentPath,
+        out string? source)
+    {
+        parentPath = null;
+        source = null;
+
+        if (!File.Exists(baseDisk))
+        {
+            return false;
+        }
+
+        try
+        {
+            NtfsCompression.TryUncompress(baseDisk);
+            _diskFactory.CreateDifferencingVhdx(disk, baseDisk);
+            parentPath = baseDisk;
+            source = sourceDirectory;
+            return true;
+        }
+        catch (SandboxBackendException)
+        {
+            TryDeletePartialCopy(disk);
+        }
+        catch (IOException)
+        {
+            TryDeletePartialCopy(disk);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            TryDeletePartialCopy(disk);
         }
 
         return false;

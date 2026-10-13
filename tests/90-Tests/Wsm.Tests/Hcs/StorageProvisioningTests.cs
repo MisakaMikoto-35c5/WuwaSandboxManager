@@ -377,6 +377,107 @@ public sealed class StorageProvisioningTests : IDisposable
     }
 
     [Fact]
+    public void Provision_clones_the_prepared_base_image_not_the_layer_storage()
+    {
+        // Platform layout: layer storage (no parent) -> prepared base image
+        // (a differencing child) -> sandbox (a differencing child).
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", "layer"));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var baseImageDir = NewDirectory(Path.Combine("ContainerStorages", "base-image"));
+        Touch(baseImageDir, "sandbox.vhdx", "base-image");
+
+        var sandboxDir = NewDirectory(Path.Combine("ContainerStorages", "sandbox"));
+        Touch(sandboxDir, "sandbox.vhdx", "sandbox");
+
+        var factory = new FakeVirtualDiskFactory();
+        var layer = Path.Combine(layerDir, "sandbox.vhdx");
+        var baseImage = Path.Combine(baseImageDir, "sandbox.vhdx");
+        var platformSandbox = Path.Combine(sandboxDir, "sandbox.vhdx");
+        factory.Parents[baseImage] = layer;
+        factory.Parents[platformSandbox] = baseImage;
+
+        var provisioner = new SandboxStorageProvisioner(
+            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+
+        var layout = provisioner.Provision(NewDirectory("target"));
+
+        // The new sandbox is cloned from the prepared base image, not the raw
+        // layer storage: the layer storage boots an unspecialized guest whose
+        // explorer.exe hangs and whose Start menu never opens.
+        Assert.Equal(1, factory.DifferencingCalls);
+        Assert.Equal(baseImage, factory.LastParentPath);
+        Assert.Equal(baseImage, layout.BaseDiskPath);
+    }
+
+    [Fact]
+    public void Provision_rebuilds_a_legacy_chain_over_the_layer_storage()
+    {
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", "layer"));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var baseImageDir = NewDirectory(Path.Combine("ContainerStorages", "base-image"));
+        Touch(baseImageDir, "sandbox.vhdx", "base-image");
+
+        var sandboxDir = NewDirectory(Path.Combine("ContainerStorages", "sandbox"));
+        Touch(sandboxDir, "sandbox.vhdx", "sandbox");
+
+        var factory = new FakeVirtualDiskFactory();
+        var layer = Path.Combine(layerDir, "sandbox.vhdx");
+        var baseImage = Path.Combine(baseImageDir, "sandbox.vhdx");
+        var platformSandbox = Path.Combine(sandboxDir, "sandbox.vhdx");
+        factory.Parents[baseImage] = layer;
+        factory.Parents[platformSandbox] = baseImage;
+
+        // The existing target chain points at the raw layer storage (the shape
+        // produced before the prepared base image was used).
+        var target = NewDirectory("target");
+        Touch(target, "sandbox.vhdx", "stale-child");
+        Touch(target, "sandbox.vmgs", "existing-vmgs");
+        factory.Parents[Path.Combine(target, "sandbox.vhdx")] = layer;
+
+        var provisioner = new SandboxStorageProvisioner(
+            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+
+        var layout = provisioner.Provision(target);
+
+        // The stale chain is rebuilt over the prepared base image.
+        Assert.Equal(1, factory.DifferencingCalls);
+        Assert.Equal(baseImage, factory.LastParentPath);
+        Assert.Equal(baseImage, layout.BaseDiskPath);
+        Assert.Equal("diff-vhdx", File.ReadAllText(layout.DiskPath));
+    }
+
+    [Fact]
+    public void Provision_keeps_a_chain_over_the_prepared_base_image()
+    {
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", "layer"));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var baseImageDir = NewDirectory(Path.Combine("ContainerStorages", "base-image"));
+        Touch(baseImageDir, "sandbox.vhdx", "base-image");
+
+        var factory = new FakeVirtualDiskFactory();
+        var layer = Path.Combine(layerDir, "sandbox.vhdx");
+        var baseImage = Path.Combine(baseImageDir, "sandbox.vhdx");
+        factory.Parents[baseImage] = layer;
+
+        var target = NewDirectory("target");
+        Touch(target, "sandbox.vhdx", "existing-child");
+        Touch(target, "sandbox.vmgs", "existing-vmgs");
+        factory.Parents[Path.Combine(target, "sandbox.vhdx")] = baseImage;
+
+        var provisioner = new SandboxStorageProvisioner(
+            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+
+        var layout = provisioner.Provision(target);
+
+        Assert.Equal(0, factory.DifferencingCalls);
+        Assert.Equal("existing-child", File.ReadAllText(layout.DiskPath));
+        Assert.Equal(baseImage, layout.BaseDiskPath);
+    }
+
+    [Fact]
     public void Provision_reuses_an_existing_chain_whose_parent_is_in_the_storage_directory()
     {
         var target = NewDirectory("target");
@@ -401,26 +502,32 @@ public sealed class StorageProvisioningTests : IDisposable
     [Fact]
     public void Provision_reuses_an_existing_child_over_the_external_platform_base()
     {
-        var baseDir = NewDirectory(Path.Combine("ContainerStorages", "base"));
-        Touch(baseDir, "sandbox.vhdx", "base-disk");
+        // Platform layout: layer storage (no parent) -> prepared base image.
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", "layer"));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var baseImageDir = NewDirectory(Path.Combine("ContainerStorages", "base-image"));
+        Touch(baseImageDir, "sandbox.vhdx", "base-image");
 
         var target = NewDirectory("target");
         Touch(target, "sandbox.vhdx", "existing-child");
         Touch(target, "sandbox.vmgs", "existing-vmgs");
 
         var factory = new FakeVirtualDiskFactory();
-        // The normal case: the child's parent is the platform's shared base OS
-        // disk, which lives outside the sandbox folder and is referenced, not
+        var layer = Path.Combine(layerDir, "sandbox.vhdx");
+        var baseImage = Path.Combine(baseImageDir, "sandbox.vhdx");
+        factory.Parents[baseImage] = layer;
+        // The normal case: the child's parent is the platform's prepared base
+        // image, which lives outside the sandbox folder and is referenced, not
         // copied. The chain is intact, so the disk is reused as-is.
-        factory.Parents[Path.Combine(target, "sandbox.vhdx")] =
-            Path.Combine(baseDir, "sandbox.vhdx");
+        factory.Parents[Path.Combine(target, "sandbox.vhdx")] = baseImage;
 
         var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
 
         var layout = provisioner.Provision(target);
 
         Assert.Equal("existing-child", File.ReadAllText(layout.DiskPath));
-        Assert.Equal(Path.Combine(baseDir, "sandbox.vhdx"), layout.BaseDiskPath);
+        Assert.Equal(baseImage, layout.BaseDiskPath);
         Assert.Equal(0, factory.DifferencingCalls);
         Assert.Equal(0, factory.Calls);
     }

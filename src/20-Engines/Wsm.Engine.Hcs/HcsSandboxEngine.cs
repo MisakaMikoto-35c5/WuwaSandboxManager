@@ -140,6 +140,8 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
                 ex);
         }
 
+        var rdpAccessSids = ResolveRdpAccessSids();
+
         var definition = new HcsSandboxDefinition
         {
             Id = id.ToString(),
@@ -155,7 +157,14 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
                 .Select(f => new HcsMappedFolder(f.HostFolder, f.SandboxFolder, f.ReadOnly))
                 .ToArray(),
             RdpNamedPipe = $@"\\.\pipe\{id}",
-            RdpAccessSids = ResolveRdpAccessSids(),
+            RdpAccessSids = rdpAccessSids,
+
+            // The platform's full HvSocket service table: the guest's interactive
+            // session (shell) bootstrap is wired to these services, and with only
+            // the built-in LSM/NLM pair a full-desktop RDP logon is arbitrated and
+            // then dropped without ever starting the shell (the black desktop).
+            AdditionalHvSocketServices = HcsSandboxConstants.PlatformAdditionalHvSocketServices(
+                rdpAccessSids.FirstOrDefault()),
         };
 
         var json = _json.Build(definition);
@@ -662,12 +671,17 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         var storageDirectory = _layout.GetStorageDirectory(id.ToString());
         var storage = _storage.Provision(storageDirectory);
 
+        var rdpAccessSids = ResolveRdpAccessSids();
         var definition = new HcsSandboxDefinition
         {
             Id = id.ToString(),
             BaseLayerPath = baseLayer,
             StorageDiskPath = storage.DiskPath,
             GuestStatePath = storage.GuestStatePath,
+            RdpNamedPipe = $@"\\.\pipe\{id}",
+            RdpAccessSids = rdpAccessSids,
+            AdditionalHvSocketServices = HcsSandboxConstants.PlatformAdditionalHvSocketServices(
+                rdpAccessSids.FirstOrDefault()),
         };
 
         var newId = _checkpoints.Restore(definition, checkpoint);

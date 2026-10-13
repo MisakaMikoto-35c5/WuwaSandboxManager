@@ -52,8 +52,13 @@ public sealed record HcsSandboxDefinition
 
     public IReadOnlyList<string> RdpAccessSids { get; init; } = Array.Empty<string>();
 
-    /// <summary>Extra HvSocket service GUIDs to expose (beyond LSM/NLM).</summary>
-    public IReadOnlyList<Guid> AdditionalHvSocketServices { get; init; } = Array.Empty<Guid>();
+    /// <summary>
+    /// Extra HvSocket services to expose (beyond the built-in LSM/NLM pair). The
+    /// Windows Sandbox configuration carries a fixed set of these; the guest's
+    /// interactive session infrastructure is wired to them, so a configuration
+    /// with only LSM/NLM leaves the session unable to complete its logon.
+    /// </summary>
+    public IReadOnlyList<HcsHvSocketService> AdditionalHvSocketServices { get; init; } = Array.Empty<HcsHvSocketService>();
 
     public int SchemaMajor { get; init; } = 2;
 

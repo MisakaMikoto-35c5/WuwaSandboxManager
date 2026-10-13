@@ -24,12 +24,15 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
         // (0x8037010D): the property is a map, not a list.
         var serviceTable = new Dictionary<string, object?>
         {
-            [HcsSandboxConstants.LsmServiceId.ToString()] = Service("D:P(A;;FA;;;SY)"),
-            [HcsSandboxConstants.NlmServiceId.ToString()] = Service("D:P(A;;FA;;;LS)"),
+            [HcsSandboxConstants.LsmServiceId.ToString()] = Service("D:P(A;;FA;;;SY)", "D:P(A;;FA;;;SY)", allowWildcardBinds: true),
+            [HcsSandboxConstants.NlmServiceId.ToString()] = Service("D:P(A;;FA;;;LS)", "D:P(A;;FA;;;LS)", allowWildcardBinds: true),
         };
-        foreach (var guid in definition.AdditionalHvSocketServices)
+        foreach (var service in definition.AdditionalHvSocketServices)
         {
-            serviceTable[guid.ToString()] = Service("D:P(A;;FA;;;SY)");
+            serviceTable[service.Id.ToString()] = Service(
+                service.BindSecurityDescriptor,
+                service.ConnectSecurityDescriptor,
+                service.AllowWildcardBinds);
         }
 
         var shares = new List<object>
@@ -254,11 +257,11 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
         return JsonSerializer.Serialize(root, Options);
     }
 
-    private static object Service(string descriptor) => new Dictionary<string, object?>
+    private static object Service(string bindDescriptor, string connectDescriptor, bool allowWildcardBinds) => new Dictionary<string, object?>
     {
-        ["BindSecurityDescriptor"] = descriptor,
-        ["ConnectSecurityDescriptor"] = descriptor,
-        ["AllowWildcardBinds"] = true,
+        ["BindSecurityDescriptor"] = bindDescriptor,
+        ["ConnectSecurityDescriptor"] = connectDescriptor,
+        ["AllowWildcardBinds"] = allowWildcardBinds,
     };
 
     private static string ShareName(string sandboxPath)

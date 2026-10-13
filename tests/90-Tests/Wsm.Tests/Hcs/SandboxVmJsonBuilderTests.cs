@@ -130,6 +130,35 @@ public sealed class SandboxVmJsonBuilderTests
     });
 
     [Fact]
+    public Task Hv_socket_exposes_the_full_platform_service_table() => WithBuilderAsync(builder =>
+    {
+        const string userSid = "S-1-5-21-1-2-3-1001";
+        var json = builder.Build(Definition() with
+        {
+            AdditionalHvSocketServices = HcsSandboxConstants.PlatformAdditionalHvSocketServices(userSid),
+        });
+
+        using var doc = JsonDocument.Parse(json);
+        var table = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .GetProperty("HvSocket").GetProperty("HvSocketConfig").GetProperty("ServiceTable");
+
+        // The built-in LSM/NLM pair plus the six platform services.
+        Assert.Equal(8, table.EnumerateObject().Count());
+
+        // The UI-agent service grants the caller's SID on bind and the capability SID.
+        Assert.True(table.TryGetProperty("abd802e8-ffcc-40d2-a5f1-f04b1d12cbc8", out var uiAgent));
+        var bind = uiAgent.GetProperty("BindSecurityDescriptor").GetString();
+        Assert.Contains("S-1-15-3-3", bind);
+        Assert.Contains(userSid, bind);
+        Assert.Equal(HcsSandboxConstants.EveryoneFullAccess, uiAgent.GetProperty("ConnectSecurityDescriptor").GetString());
+
+        // The Virtual Machines group is granted on the VM service bind.
+        Assert.True(table.TryGetProperty("7d2e0620-034a-4438-b0fd-ae27fc0172a1", out var vmService));
+        Assert.Contains(HcsSandboxConstants.VirtualMachinesSid, vmService.GetProperty("BindSecurityDescriptor").GetString());
+        return true;
+    });
+
+    [Fact]
     public Task Licensing_device_is_emitted() => WithBuilderAsync(builder =>
     {
         var json = builder.Build(Definition());

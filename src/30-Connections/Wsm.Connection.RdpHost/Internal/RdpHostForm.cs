@@ -108,6 +108,13 @@ internal sealed class RdpHostForm : Form
             advanced.EnableCredSspSupport = false;
             advanced.NegotiateSecurityLayer = true;
             advanced.AuthenticationLevel = 0;
+
+            // Mirror the platform's own remote-session client for the container
+            // desktop: the container handles full screen, the sandbox's SAS
+            // sequence is not forwarded, and the connection bar is shown.
+            advanced.DisableCtrlAltDel = 1;
+            advanced.DisplayConnectionBar = true;
+            advanced.ContainerHandledFullScreen = 1;
             advanced.RedirectClipboard = _request.Redirections.Clipboard;
             advanced.RedirectPrinters = _request.Redirections.Printer;
             advanced.RedirectSmartCards = _request.Redirections.SmartCard;

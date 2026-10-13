@@ -30,6 +30,18 @@ internal sealed class WindowsSandboxEngine : ISandboxEngine, ISingletonDependenc
     private const string DefaultGuestUser = "WDAGUtilityAccount";
     private const int GuestReadyTimeoutSeconds = 180;
 
+    /// <summary>
+    /// The platform's <c>Constants.VMSpecializationCommands</c> (mirrored from
+    /// <c>WindowsSandboxServer</c>), run as SYSTEM right after the account set-up.
+    /// </summary>
+    private const string GuestSpecializationCommands =
+        "cmd.exe /c " +
+        "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Network\\NewNetworkWindowOff\" /f & " +
+        "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FlyoutMenuSettings\" " +
+        "/v ShowLockOption /t REG_DWORD /d 0 /f & " +
+        "reg add \"HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\" " +
+        "/v ShowTaskViewButton /t REG_DWORD /d 0 /f";
+
     private readonly IUdkSandboxHost _host;
     private readonly ISandboxEnvironment _environment;
     private readonly ILogger<WindowsSandboxEngine> _logger;
@@ -241,10 +253,12 @@ internal sealed class WindowsSandboxEngine : ISandboxEngine, ISingletonDependenc
             CheckGuest(vm, $"net user {user} /active:yes");
             CheckGuest(vm, $"wcsetupagent.exe AddUserToUsersGroup {user}");
             CheckGuest(vm, $"wcsetupagent.exe AddUserToAdminGroup {user}");
+            CheckGuest(vm, $"wcsetupagent.exe AddUserToRemoteDesktopUsers {user}");
             CheckGuest(
                 vm,
                 "reg add \"HKLM\\System\\CurrentControlSet\\Control\\Terminal Server\" " +
                 "/v b8ba549e-fb39-441c-b71e-44e9e4818210 /t REG_DWORD /d 1 /f");
+            CheckGuest(vm, GuestSpecializationCommands);
             CheckGuest(vm, "wcsetupagent.exe NotifyRestoreComplete");
 
             _logger.LogInformation("Provisioned guest account {User} for UDK VM {VmId}.", user, vm.Id);

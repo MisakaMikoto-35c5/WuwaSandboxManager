@@ -336,6 +336,18 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     private const string DefaultGuestUser = "WDAGUtilityAccount";
 
     /// <summary>
+    /// The platform's <c>Constants.VMSpecializationCommands</c> (mirrored from
+    /// <c>WindowsSandboxServer</c>), run as SYSTEM right after the account set-up.
+    /// </summary>
+    private const string GuestSpecializationCommands =
+        "cmd.exe /c " +
+        "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Network\\NewNetworkWindowOff\" /f & " +
+        "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FlyoutMenuSettings\" " +
+        "/v ShowLockOption /t REG_DWORD /d 0 /f & " +
+        "reg add \"HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\" " +
+        "/v ShowTaskViewButton /t REG_DWORD /d 0 /f";
+
+    /// <summary>
     /// The guest password used when the recipe does not specify one. It is derived
     /// <b>deterministically</b> from the sandbox id so any process can compute the
     /// same credential and actually log the RDP session on: the WDAG guest shows
@@ -410,18 +422,20 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             // The platform's own guest set-up (mirrored from WindowsSandboxServer):
             // activate the logon account with a known password, add it to the groups
             // Remote Desktop Services checks, flip the sandbox's own RDP listener
-            // switch, then complete the image-prep handshake. This exact sequence is
-            // what makes an interactive RDP session bootstrap on a custom VM: the
-            // WDAG guest otherwise shows its logon screen (a black desktop) and
-            // refuses the remote logon.
+            // switch, run the platform's specialization commands, then complete the
+            // image-prep handshake. This exact sequence is what makes an interactive
+            // RDP session bootstrap on a custom VM: the WDAG guest otherwise shows
+            // its logon screen (a black desktop) and refuses the remote logon.
             CheckGuest(id.ToString(), $"net user {user} {password}");
             CheckGuest(id.ToString(), $"net user {user} /active:yes");
             CheckGuest(id.ToString(), $"wcsetupagent.exe AddUserToUsersGroup {user}");
             CheckGuest(id.ToString(), $"wcsetupagent.exe AddUserToAdminGroup {user}");
+            CheckGuest(id.ToString(), $"wcsetupagent.exe AddUserToRemoteDesktopUsers {user}");
             CheckGuest(
                 id.ToString(),
                 "reg add \"HKLM\\System\\CurrentControlSet\\Control\\Terminal Server\" " +
                 "/v b8ba549e-fb39-441c-b71e-44e9e4818210 /t REG_DWORD /d 1 /f");
+            CheckGuest(id.ToString(), GuestSpecializationCommands);
             CheckGuest(id.ToString(), "wcsetupagent.exe NotifyRestoreComplete");
 
             _logger.LogInformation("Provisioned guest account {User} for sandbox {SandboxId}.", user, id);

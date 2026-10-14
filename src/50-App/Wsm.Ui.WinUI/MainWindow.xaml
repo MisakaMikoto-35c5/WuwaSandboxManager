@@ -574,6 +574,18 @@
                     <Border Style="{StaticResource SectionCard}">
                         <StackPanel Spacing="6">
                             <TextBlock x:Uid="SessionSection" Text="Session" Style="{StaticResource SectionTitle}" />
+                            <StackPanel Spacing="4">
+                                <ComboBox x:Uid="TransportBox"
+                                          Header="RDP transport"
+                                          HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding Selected.TransportOptions}"
+                                          SelectedItem="{Binding Selected.SelectedTransport, Mode=TwoWay}" />
+                                <TextBlock x:Uid="TransportHint"
+                                           Text="Named pipe is fastest but allows a single session host-wide; use TCP to connect multiple sandboxes at once. TCP requires Networking enabled."
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </StackPanel>
                             <ToggleSwitch x:Uid="RailSwitch" Header="RemoteApp (RAIL) mode" IsOn="{Binding Selected.RailMode, Mode=TwoWay}" />
                             <StackPanel Spacing="4"
                                         Visibility="{Binding Selected.RailMode, Converter={StaticResource BoolToVisibility}}">

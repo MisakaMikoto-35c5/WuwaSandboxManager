@@ -34,4 +34,12 @@ public interface ISessionLauncher
         SandboxEngineKind engineKind,
         string? remoteAppProgram = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Ends every open presentation session (graceful client disconnect, not a
+    /// process kill). Called before a sandbox is stopped so a session host with
+    /// auto-reconnect cannot hold the guest session — or reconnect into it —
+    /// while the compute system is shutting down.
+    /// </summary>
+    void CloseAll();
 }

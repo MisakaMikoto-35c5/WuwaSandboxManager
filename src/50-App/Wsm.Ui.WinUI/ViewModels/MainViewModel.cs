@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Dispatching;
 using Wsm.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Engines.Abstractions;
@@ -23,6 +24,9 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ISandboxEngineRegistry _registry;
     private readonly IMultiInstancePolicy _policy;
     private readonly IAppLocalizer _l;
+    private readonly DispatcherQueue _dispatcher =
+        DispatcherQueue.GetForCurrentThread()
+        ?? throw new InvalidOperationException("The main view model must be created on the UI thread.");
 
     public MainViewModel(
         ISandboxManager manager,
@@ -49,6 +53,8 @@ public sealed partial class MainViewModel : ObservableObject
         SelectedLanguage = LanguageOption.Resolve(_l.CurrentCulture.Name);
         UpdateEnvironmentSummary();
         ResetNewInstance();
+
+        SessionProcessManager.SessionEnded += OnSessionEnded;
     }
 
     public ObservableCollection<SandboxInstanceViewModel> Instances { get; } = [];
@@ -295,5 +301,17 @@ public sealed partial class MainViewModel : ObservableObject
             $"{engine}   ·   {_l["Env.Elevated.Text"]}: {elevated}" +
             $"   ·   {_l["Env.MultiInstance.Text"]}: {multi}" +
             $"   ·   {_l["Env.Build.Text"]}: {BuildBranch}";
+    }
+
+    /// <summary>
+    /// Routes a session-process exit (raised on a thread-pool thread) to the
+    /// current view model for that sandbox, on the UI thread. View models are
+    /// recreated on every refresh, so the single subscription lives here.
+    /// </summary>
+    private void OnSessionEnded(Guid id, int exitCode, string output)
+    {
+        _dispatcher.TryEnqueue(() =>
+            Instances.FirstOrDefault(instance => instance.Id == id)
+                ?.OnSessionProcessEnded(exitCode, output));
     }
 }

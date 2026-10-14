@@ -32,8 +32,6 @@ public sealed record HcsSandboxDefinition
 
     public int CpuCount { get; init; } = 4;
 
-    public bool EnableVirtualGpu { get; init; } = true;
-
     public bool EnableNetworking { get; init; }
 
     /// <summary>HNS endpoint id; required for the guest to actually get a NIC.</summary>

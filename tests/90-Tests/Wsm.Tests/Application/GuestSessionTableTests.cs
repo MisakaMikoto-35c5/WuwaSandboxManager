@@ -96,4 +96,21 @@ public sealed class GuestSessionTableTests
     {
         Assert.Equal([1], Ids(RealGuestOutput));
     }
+
+    [Fact]
+    public void The_rdp_tcp_listener_is_not_a_session_either()
+    {
+        // With TCP RDP enabled in the guest, qwinsta reports a second listener:
+        // the RDP-Tcp winstation (id 65537) next to the hvsocket one (65536).
+        // Filtering must key on the Listen state, not the id — logging off a
+        // listener is impossible and stalls the reclaim for its full timeout.
+        var output =
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n" +
+            " rdp-tcp                                         65537  Listen\n" +
+            " 31c5ce94259d4006a9e4#0  WDAGUtilityAccount           1  Active\n";
+
+        Assert.Equal([1], Ids(output));
+    }
 }

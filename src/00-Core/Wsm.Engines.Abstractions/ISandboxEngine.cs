@@ -74,10 +74,12 @@ public interface ISandboxEngine
 
     /// <summary>
     /// Deletes any on-disk data owned by the instance (container storage,
-    /// differencing disks, snapshots, …). Invoked after an instance is stopped
-    /// as a best-effort reclamation step, so an implementation must tolerate a
-    /// partial failure; engines without host-side storage leave this
-    /// unsupported.
+    /// differencing disks, snapshots, …). Invoked after an instance is stopped.
+    /// An implementation retries transient lock/IO failures and reports a
+    /// persistent failure (a file still in use) as a
+    /// <see cref="SandboxBackendException"/> so the caller can surface it
+    /// instead of silently leaving the data behind; engines without host-side
+    /// storage leave this unsupported.
     /// </summary>
     Task DeleteDataAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
         => throw NotSupported(nameof(DeleteDataAsync));

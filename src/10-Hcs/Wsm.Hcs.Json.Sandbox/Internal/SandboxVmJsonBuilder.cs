@@ -106,7 +106,15 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
             },
             ["Licensing"] = new Dictionary<string, object?>
             {
-                ["ContainerID"] = Guid.Empty.ToString(),
+                // Per-sandbox container identity. Emitting Guid.Empty for every
+                // VM (the platform's own capture) makes all sandboxes share one
+                // licensing identity; the guest session stack then treats
+                // concurrent sessions on different sandboxes as collisions and
+                // kicks the later one ~31s in. The sandbox id is a stable,
+                // unique Guid, so reuse it.
+                ["ContainerID"] = Guid.TryParse(definition.Id, out var containerId)
+                    ? containerId.ToString()
+                    : definition.Id,
                 ["PackageFamilyNames"] = Array.Empty<string>(),
             },
             ["Battery"] = new Dictionary<string, object?>(),
@@ -129,30 +137,32 @@ internal sealed class SandboxVmJsonBuilder : ISandboxVmJsonBuilder, ITransientDe
             };
         }
 
-        if (definition.EnableVirtualGpu)
+        // EnhancedModeVideo is the console's RDP-over-named-pipe transport, not
+        // the GPU: it must be emitted unconditionally. Tying it to the vGPU
+        // toggle removed the pipe for vGPU-disabled sandboxes and made every
+        // connect fail with ERROR_FILE_NOT_FOUND (0x80070002) — while the
+        // official sandbox still presents a desktop with <vGPU>Disable</vGPU>.
+        var connectionOptions = new Dictionary<string, object?>
         {
-            var connectionOptions = new Dictionary<string, object?>
-            {
-                ["NamedPipe"] = definition.RdpNamedPipe ?? $@"\\.\pipe\{definition.Id}",
-            };
+            ["NamedPipe"] = definition.RdpNamedPipe ?? $@"\\.\pipe\{definition.Id}",
+        };
 
-            // AccessSids is optional; an empty array is not meaningful and some
-            // HCS builds reject it, so only emit it when the caller supplied SIDs.
-            if (definition.RdpAccessSids.Count > 0)
-            {
-                connectionOptions["AccessSids"] = definition.RdpAccessSids.ToArray();
-            }
-
-            devices["EnhancedModeVideo"] = new Dictionary<string, object?>
-            {
-                ["ConnectionOptions"] = connectionOptions,
-            };
+        // AccessSids is optional; an empty array is not meaningful and some
+        // HCS builds reject it, so only emit it when the caller supplied SIDs.
+        if (definition.RdpAccessSids.Count > 0)
+        {
+            connectionOptions["AccessSids"] = definition.RdpAccessSids.ToArray();
         }
 
-        // A NetworkAdapter is only valid with a real HNS endpoint id. HCS does
-        // not create network resources, and the HNS endpoint service is not
-        // implemented yet, so the adapter is omitted entirely (no networking in
-        // the guest) unless an explicit endpoint id was supplied.
+        devices["EnhancedModeVideo"] = new Dictionary<string, object?>
+        {
+            ["ConnectionOptions"] = connectionOptions,
+        };
+
+        // A NetworkAdapter is only valid with a real HNS endpoint id (HCS does
+        // not create network resources itself). The engine creates the endpoint
+        // through the HNS service at Start; a definition without one (networking
+        // disabled, or endpoint creation failed) simply gets no NIC.
         if (!string.IsNullOrWhiteSpace(definition.NetworkEndpointId))
         {
             devices["NetworkAdapters"] = new Dictionary<string, object?>

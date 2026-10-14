@@ -20,18 +20,17 @@ internal sealed record GuestSession(int Id, string State)
 
 /// <summary>
 /// Parses the guest's <c>qwinsta</c> (QUERY SESSION) output. The WDAG guest
-/// reports a header line followed by one line per session; two of those entries
-/// are not real logon sessions: the <c>services</c> session (id 0) and the RDP
-/// listener (state <c>Listen</c>, id 65536). Everything else is a session a
-/// previous connection may have left behind.
+/// reports a header line followed by one line per session; the entries that
+/// are not real logon sessions are the <c>services</c> session (id 0) and any
+/// winstation in state <c>Listen</c>: the container hvsocket listener (id
+/// 65536) and, once TCP RDP is enabled in the guest, the RDP-Tcp listener
+/// (id 65537). Everything else is a session a previous connection may have
+/// left behind.
 /// </summary>
 internal static class GuestSessionTable
 {
     /// <summary>Session id of the special <c>services</c> session.</summary>
     internal const int ServicesSessionId = 0;
-
-    /// <summary>Session id the guest reports for an RDP listener.</summary>
-    internal const int ListenerSessionId = 65536;
 
     /// <summary>
     /// Returns the real (non-services, non-listener) sessions in
@@ -64,12 +63,22 @@ internal static class GuestSessionTable
                 continue;
             }
 
-            if (id == ServicesSessionId || id == ListenerSessionId)
+            if (id == ServicesSessionId)
             {
                 continue;
             }
 
             var state = tokens[^1];
+
+            // Any winstation in Listen state is a listener, never a session to
+            // reclaim. Filtering by state (not by the listener's id) matters:
+            // the hvsocket listener is 65536, but the RDP-Tcp listener takes
+            // 65537, and logging off a listener is impossible — the reclaim
+            // loop would wait it out for the full timeout.
+            if (state.Equals("Listen", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
             if (!sessions.Any(session => session.Id == id))
             {
                 sessions.Add(new GuestSession(id, state));

@@ -50,6 +50,9 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         VgpuOptions = Enum.GetValues<VirtualGpuMode>()
             .Select(mode => new EnumOption<VirtualGpuMode>(mode, LocalizeVgpu(mode)))
             .ToArray();
+        TransportOptions = new[] { RdpTransportKind.NamedPipe, RdpTransportKind.Tcp }
+            .Select(kind => new EnumOption<RdpTransportKind>(kind, LocalizeTransport(kind)))
+            .ToArray();
         QuickLaunchPrograms = BuildQuickLaunchPrograms();
 
         Apply(dto);
@@ -64,6 +67,9 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     public IReadOnlyList<EnumOption<NetworkingMode>> NetworkingOptions { get; }
 
     public IReadOnlyList<EnumOption<VirtualGpuMode>> VgpuOptions { get; }
+
+    /// <summary>The selectable RDP transports (the pipe is the default; TCP is opt-in).</summary>
+    public IReadOnlyList<EnumOption<RdpTransportKind>> TransportOptions { get; }
 
     /// <summary>
     /// Common programs offered as one-click RAIL launches (File Explorer,
@@ -82,6 +88,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     [ObservableProperty] private EnumOption<NetworkingMode>? _selectedNetworking;
 
     [ObservableProperty] private EnumOption<VirtualGpuMode>? _selectedVgpu;
+
+    [ObservableProperty] private EnumOption<RdpTransportKind>? _selectedTransport;
 
     [ObservableProperty] private bool _railMode;
 
@@ -185,6 +193,10 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         CpuCores = dto.Recipe.Cpu.CoreCount;
         SelectedNetworking = NetworkingOptions.First(o => o.Value == dto.Recipe.Networking);
         SelectedVgpu = VgpuOptions.First(o => o.Value == dto.Recipe.VirtualGpu);
+        // Manifests written before the selector existed may carry Local (=1);
+        // it normalizes to the pipe (both are local, network-free transports).
+        SelectedTransport = TransportOptions.FirstOrDefault(o => o.Value == dto.Recipe.Transport)
+            ?? TransportOptions[0];
         RailMode = dto.Recipe.RailMode;
         RailProgram = dto.Recipe.ResolvedRailProgram;
         FullScreen = dto.Recipe.FullScreen;
@@ -255,6 +267,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         Cpu = new SandboxCpuConfiguration((int)CpuCores),
         Networking = SelectedNetworking?.Value ?? NetworkingMode.Default,
         VirtualGpu = SelectedVgpu?.Value ?? VirtualGpuMode.Default,
+        Transport = SelectedTransport?.Value ?? RdpTransportKind.NamedPipe,
         RailMode = RailMode,
         RailProgram = string.IsNullOrWhiteSpace(RailProgram) ? SandboxRecipe.DefaultRailProgram : RailProgram.Trim(),
         FullScreen = FullScreen,
@@ -302,6 +315,13 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     {
         await GuardAsync(async () =>
         {
+            // End the RDP session first: the client auto-reconnects, and a
+            // client that is still attached can hold (or immediately
+            // re-establish) the guest session while the engine is trying to
+            // shut the compute system down. The session window lives in its own
+            // child process (see SessionProcessManager).
+            await SessionProcessManager.EndAsync(Id);
+
             await _manager.StopAsync(Id);
             _userDisconnected = false;
             var dto = await _manager.GetAsync(Id);
@@ -312,8 +332,9 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
     /// <summary>Explicitly ends the session; no automatic reconnect afterwards.</summary>
     [RelayCommand]
-    private void Disconnect()
+    private async Task DisconnectAsync()
     {
+        await SessionProcessManager.EndAsync(Id);
         _userDisconnected = true;
         Status = _l["Status.Disconnected.Text"];
         _owner.Status = Status;
@@ -329,31 +350,64 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             Status = _l["Status.Running.Text"];
 
             // Auto-connect after a successful start, unless the user explicitly
-            // disconnected this session.
-            if (!_userDisconnected)
+            // disconnected this session. The session runs in its own process, so
+            // this returns as soon as it is spawned.
+            if (!_userDisconnected && LaunchSession(ConnectionMode))
             {
-                try
-                {
-                    await _manager.ConnectAsync(Id, ConnectionMode);
-                    Status = _l["Status.Connected.Text"];
-                }
-                catch (Exception ex)
-                {
-                    // The sandbox is up; a failed session launch is not fatal.
-                    Status = ex.Message;
-                }
+                Status = _l["Status.Connected.Text"];
             }
         });
     }
 
     private async Task ConnectCoreAsync()
     {
-        await GuardAsync(async () =>
+        await GuardAsync(() =>
         {
-            await _manager.ConnectAsync(Id, ConnectionMode);
-            _userDisconnected = false;
-            Status = _l["Status.Connected.Text"];
+            if (LaunchSession(ConnectionMode))
+            {
+                _userDisconnected = false;
+                Status = _l["Status.Connected.Text"];
+            }
+
+            return Task.CompletedTask;
         });
+    }
+
+    /// <summary>
+    /// Presents the session in a separate <c>wsm connect</c> child process (see
+    /// <see cref="SessionProcessManager"/>). Returns false — with <see cref="Status"/>
+    /// set — when the companion CLI cannot be located, or when a session window
+    /// for this sandbox is already open.
+    /// </summary>
+    private bool LaunchSession(SandboxConnectionMode mode, string? program = null)
+    {
+        var exe = WsmCliLocator.Find();
+        if (exe is null)
+        {
+            Status = _l["Status.CliMissing.Text"];
+            return false;
+        }
+
+        return SessionProcessManager.Start(exe, Id, mode == SandboxConnectionMode.RemoteApp, program);
+    }
+
+    /// <summary>
+    /// Called on the UI thread when this sandbox's session process exits on its
+    /// own (the user closed the window, or the connect failed). Surfaces a
+    /// failed connect; otherwise the status line returns to the running state.
+    /// </summary>
+    internal void OnSessionProcessEnded(int exitCode, string output)
+    {
+        if (exitCode != 0 && !string.IsNullOrWhiteSpace(output))
+        {
+            Status = output;
+            _owner.Status = output;
+        }
+        else if (IsRunning)
+        {
+            Status = _l["Status.Running.Text"];
+            _owner.Status = Status;
+        }
     }
 
     /// <summary>
@@ -371,9 +425,16 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
         await GuardAsync(async () =>
         {
-            await _manager.ConnectAsync(Id, SandboxConnectionMode.RemoteApp, program.Path);
-            _userDisconnected = false;
-            Status = _l.Get("Status.LaunchedProgram.Text", program.Path);
+            // A RAIL connect replaces the guest's current session (the
+            // single-session guest refuses it otherwise): end the existing
+            // window gracefully first so it does not linger as a disconnected
+            // overlay.
+            await SessionProcessManager.EndAsync(Id);
+            if (LaunchSession(SandboxConnectionMode.RemoteApp, program.Path))
+            {
+                _userDisconnected = false;
+                Status = _l.Get("Status.LaunchedProgram.Text", program.Path);
+            }
         });
     }
 
@@ -585,6 +646,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            GuiErrorLog.Write(ex, nameof(GuardAsync));
             Status = ex.Message;
             _owner.Status = ex.Message;
         }
@@ -614,6 +676,12 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         VirtualGpuMode.Enabled => _l["Vgpu.Enabled.Text"],
         VirtualGpuMode.Disabled => _l["Vgpu.Disabled.Text"],
         _ => _l["Vgpu.Default.Text"],
+    };
+
+    private string LocalizeTransport(RdpTransportKind kind) => kind switch
+    {
+        RdpTransportKind.Tcp => _l["Transport.Tcp.Text"],
+        _ => _l["Transport.NamedPipe.Text"],
     };
 
     private string LocalizeEngine(SandboxEngineKind? kind) => kind switch

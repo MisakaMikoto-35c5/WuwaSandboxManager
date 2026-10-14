@@ -67,7 +67,14 @@ public partial class App : Microsoft.UI.Xaml.Application
         window.Activate();
     }
 
-    private async void OnWindowClosed(object sender, WindowEventArgs args) => await ShutdownAsync();
+    private async void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        // End the session child processes first: the VMs they show were held by
+        // this process and die with it, and closing the windows gracefully lets
+        // the guests see a clean disconnect.
+        await SessionProcessManager.EndAllAsync();
+        await ShutdownAsync();
+    }
 
     private async Task ShutdownAsync()
     {

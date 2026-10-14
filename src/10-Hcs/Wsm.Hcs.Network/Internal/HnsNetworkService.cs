@@ -6,37 +6,113 @@ using Wsm.Domain.Exceptions;
 namespace Wsm.Hcs.Network.Internal;
 
 /// <summary>
-/// Default <see cref="IHnsNetworkService"/>: creates NAT endpoints and reads the
-/// IP addresses of a compute system's endpoints through the HNS JSON dispatcher
-/// (<c>HNSCall</c> in <c>vmcompute.dll</c>). <c>HNS</c> owns the container's
-/// network namespace, so the caller addresses it by compute-system id.
+/// Default <see cref="IHnsNetworkService"/>: manages NAT networks and endpoints
+/// through the HNS JSON dispatcher (<c>HNSCall</c> in <c>vmcompute.dll</c>).
+/// <c>HNS</c> owns the container's network namespace, so the caller addresses it
+/// by compute-system id.
 /// </summary>
 [ExposeServices(typeof(IHnsNetworkService))]
 internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependency
 {
+    private const string NetworksPath = "/networks/";
     private const string EndpointsPath = "/endpoints/";
 
+    /// <summary>
+    /// The network created when the host has no NAT/ICS network of its own. An
+    /// existing network (the Hyper-V "Default Switch" is type ICS) is always
+    /// preferred so we neither fragment address space nor fight WinNAT setup.
+    /// </summary>
+    private const string FallbackNetworkName = "wsm-nat";
+    private const string FallbackSubnetPrefix = "192.168.248.0/24";
+    private const string FallbackGateway = "192.168.248.1";
+
+    public Task<string> GetOrCreateNatNetworkIdAsync(CancellationToken ct = default)
+    {
+        foreach (var network in ReadNetworks())
+        {
+            if (network.Type is NetworkTypeNat or NetworkTypeIcs)
+            {
+                return Task.FromResult(network.Id);
+            }
+        }
+
+        var request = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["Name"] = FallbackNetworkName,
+            ["Type"] = "NAT",
+            ["Subnets"] = new[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["AddressPrefix"] = FallbackSubnetPrefix,
+                    ["GatewayAddress"] = FallbackGateway,
+                },
+            },
+        });
+
+        var output = Call("POST", NetworksPath, request);
+        var created = ReadId(output)
+            ?? throw new SandboxBackendException("HNS created a network but returned no id.", 0);
+
+        return Task.FromResult(created);
+    }
+
     public Task<string> CreateNatEndpointAsync(string networkId, CancellationToken ct = default)
+        => CreateNatEndpointAsync(networkId, name: null, ct);
+
+    public Task<string> CreateNatEndpointAsync(string networkId, string? name, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(networkId))
         {
             throw new SandboxValidationException("An HNS network id is required to create an endpoint.");
         }
 
-        var request = JsonSerializer.Serialize(new Dictionary<string, object?>
+        var request = new Dictionary<string, object?>
         {
-            ["Name"] = $"wsm-{Guid.NewGuid():N}",
             // The endpoint joins the given HNS network; HNS assigns the address.
             ["VirtualNetwork"] = networkId,
-        });
+        };
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            request["Name"] = name;
+        }
 
-        var output = Call("POST", EndpointsPath, request);
+        var output = Call("POST", EndpointsPath, JsonSerializer.Serialize(request));
 
-        var id = ReadEndpointId(output)
+        var id = ReadId(output)
             ?? throw new SandboxBackendException(
                 "HNS created an endpoint but returned no id.", 0);
 
         return Task.FromResult(id);
+    }
+
+    public Task DeleteEndpointAsync(string endpointId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(endpointId))
+        {
+            return Task.CompletedTask;
+        }
+
+        Call("DELETE", EndpointsPath + endpointId, string.Empty, allowEmpty: true);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteEndpointByNameAsync(string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (var endpoint in ReadEndpoints())
+        {
+            if (string.Equals(endpoint.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                Call("DELETE", EndpointsPath + endpoint.Id, string.Empty, allowEmpty: true);
+            }
+        }
+
+        return Task.CompletedTask;
     }
 
     public Task<IReadOnlyList<string>> GetIpAddressesAsync(string computeSystemId, CancellationToken ct = default)
@@ -51,12 +127,47 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
         return Task.FromResult<IReadOnlyList<string>>(addresses);
     }
 
+    private const string NetworkTypeNat = "NAT";
+    private const string NetworkTypeIcs = "ICS";
+
+    private sealed record NamedId(string Id, string? Name, string? Type);
+
+    private IReadOnlyList<NamedId> ReadNetworks() => ReadNamedIds(Call("GET", NetworksPath, string.Empty));
+
+    private IReadOnlyList<NamedId> ReadEndpoints() => ReadNamedIds(Call("GET", EndpointsPath, string.Empty));
+
+    /// <summary>Parses a JSON array of HNS objects into id/name/type triples.</summary>
+    private static IReadOnlyList<NamedId> ReadNamedIds(string output)
+    {
+        var results = new List<NamedId>();
+        using var json = JsonDocument.Parse(output);
+        if (json.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return results;
+        }
+
+        foreach (var element in json.RootElement.EnumerateArray())
+        {
+            var id = ReadString(element, "ID");
+            if (id is null)
+            {
+                continue;
+            }
+
+            results.Add(new NamedId(id, ReadString(element, "Name"), ReadString(element, "Type")));
+        }
+
+        return results;
+    }
+
     /// <summary>
     /// Sends a request to HNS and returns the raw <c>Output</c> JSON. A transport
     /// failure or an HNS-level error (<c>Success == false</c>) is surfaced as a
-    /// <see cref="SandboxBackendException"/>.
+    /// <see cref="SandboxBackendException"/>. DELETE responses carry no output, so
+    /// those calls pass <paramref name="allowEmpty"/> (not valid elsewhere: an
+    /// empty response elsewhere means the dispatcher misbehaved).
     /// </summary>
-    private static string Call(string method, string path, string request)
+    private static string Call(string method, string path, string request, bool allowEmpty = false)
     {
         var hr = HnsNative.HNSCall(method, path, request, out var responsePtr);
         var document = TakeString(responsePtr);
@@ -69,6 +180,11 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
 
         if (string.IsNullOrWhiteSpace(document))
         {
+            if (allowEmpty)
+            {
+                return string.Empty;
+            }
+
             throw new SandboxBackendException(
                 $"HNSCall '{method} {path}' returned an empty response.", 0);
         }
@@ -95,13 +211,18 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
         }
     }
 
-    private static string? ReadEndpointId(string output)
+    private static string? ReadId(string output)
     {
         using var json = JsonDocument.Parse(output);
-        return json.RootElement.ValueKind == JsonValueKind.Object &&
-               json.RootElement.TryGetProperty("ID", out var id) &&
-               id.ValueKind == JsonValueKind.String
-            ? id.GetString()
+        return ReadString(json.RootElement, "ID");
+    }
+
+    private static string? ReadString(JsonElement element, string property)
+    {
+        return element.ValueKind == JsonValueKind.Object &&
+               element.TryGetProperty(property, out var value) &&
+               value.ValueKind == JsonValueKind.String
+            ? value.GetString()
             : null;
     }
 

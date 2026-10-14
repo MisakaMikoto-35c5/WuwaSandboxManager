@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Wsm.Domain.Exceptions;
 using Wsm.Hcs.Interop;
 using Wsm.Hcs.Layout;
 using Wsm.Hcs.Storage;
@@ -17,6 +19,9 @@ public sealed class StorageProvisioningTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "wsm-storage-tests", Guid.NewGuid().ToString("N"));
+
+    /// <summary>Captures warning+ log entries emitted by the provisioner.</summary>
+    private readonly ListLogger<SandboxStorageProvisioner> _logger = new();
 
     public StorageProvisioningTests() => Directory.CreateDirectory(_root);
 
@@ -103,56 +108,44 @@ public sealed class StorageProvisioningTests : IDisposable
     // ---- provisioning -------------------------------------------------------
 
     [Fact]
-    public void Provision_creates_blank_disk_and_guest_state_when_no_donor_exists()
+    public void Provision_fails_fast_with_guidance_when_no_prepared_base_exists()
     {
+        // No witness sandbox, no layer with a usable StorageId, no configured
+        // template: provisioning must fail loudly instead of silently creating
+        // a blank disk that boots an unspecialized guest.
         Directory.CreateDirectory(ContainerStoragesFolder);
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs, _logger);
         var target = NewDirectory("target");
 
-        var layout = provisioner.Provision(target);
+        var ex = Assert.Throws<SandboxBackendException>(() => provisioner.Provision(target));
 
-        Assert.Equal(Path.Combine(target, "sandbox.vhdx"), layout.DiskPath);
-        Assert.Equal(Path.Combine(target, "sandbox.vmgs"), layout.GuestStatePath);
-        Assert.True(File.Exists(layout.DiskPath));
-        Assert.True(File.Exists(layout.GuestStatePath));
-
-        Assert.Equal(1, factory.Calls);
-        Assert.Equal(0UL, factory.LastMaximumSizeBytes); // 0 => platform default
-        Assert.Equal(1, hcs.GuestStateCalls);
+        Assert.Contains("prepared base image", ex.Message);
+        Assert.Contains("Windows Sandbox", ex.Message);
+        Assert.False(File.Exists(Path.Combine(target, "sandbox.vhdx")));
+        Assert.Equal(0, factory.Calls);
+        Assert.Equal(0, factory.DifferencingCalls);
     }
 
     [Fact]
-    public void Provision_honours_the_requested_disk_size()
+    public void Provision_does_not_fall_back_to_copying_a_standalone_donor()
     {
-        Directory.CreateDirectory(ContainerStoragesFolder);
-        var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
-
-        provisioner.Provision(NewDirectory("target"), diskSizeMb: 4096);
-
-        Assert.Equal(4096UL * 1024 * 1024, factory.LastMaximumSizeBytes);
-    }
-
-    [Fact]
-    public void Provision_copies_donor_disk_and_guest_state_and_never_creates_a_blank_disk()
-    {
+        // A parentless donor under ContainerStorages is either a layer storage
+        // or another sandbox's blank scratch: chaining/copying it boots an
+        // unspecialized guest. It is not a provisioning source anymore.
         var donor = NewDirectory(Path.Combine("ContainerStorages", "donor"));
         Touch(donor, "sandbox.vhdx", "disk");
         Touch(donor, "sandbox.vmgs", "vmgs");
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
-        var target = NewDirectory("target");
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs, _logger);
 
-        var layout = provisioner.Provision(target);
+        Assert.Throws<SandboxBackendException>(() => provisioner.Provision(NewDirectory("target")));
 
-        Assert.Equal("disk", File.ReadAllText(layout.DiskPath));
-        Assert.Equal("vmgs", File.ReadAllText(layout.GuestStatePath));
         Assert.Equal(0, factory.Calls);
-        Assert.Equal(0, hcs.GuestStateCalls);
+        Assert.Equal(0, factory.DifferencingCalls);
     }
 
     [Fact]
@@ -164,7 +157,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs, _logger);
 
         var layout = provisioner.Provision(target);
 
@@ -175,72 +168,10 @@ public sealed class StorageProvisioningTests : IDisposable
     }
 
     [Fact]
-    public void Provision_creates_guest_state_via_hcs_when_donor_has_only_a_disk()
+    public void Provision_uses_the_configured_template_when_no_prepared_base_exists()
     {
-        var donor = NewDirectory(Path.Combine("ContainerStorages", "donor"));
-        Touch(donor, "sandbox.vhdx", "disk");
-
-        var factory = new FakeVirtualDiskFactory();
-        var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
-
-        var layout = provisioner.Provision(NewDirectory("target"));
-
-        Assert.Equal(0, factory.Calls);
-        Assert.Equal(1, hcs.GuestStateCalls);
-        Assert.True(File.Exists(layout.GuestStatePath));
-    }
-
-    [Fact]
-    public void Provision_prefers_donor_over_template()
-    {
-        var donor = NewDirectory(Path.Combine("ContainerStorages", "donor"));
-        Touch(donor, "sandbox.vhdx", "donor-disk");
-        Touch(donor, "sandbox.vmgs", "donor-vmgs");
-
-        var template = NewDirectory("templates");
-        Touch(template, "sandbox.vhdx", "template-disk");
-
-        var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
-
-        var layout = provisioner.Provision(NewDirectory("target"));
-
-        Assert.Equal("donor-disk", File.ReadAllText(layout.DiskPath));
-        Assert.Equal(0, factory.Calls);
-    }
-
-    // ---- donor robustness / fallback ---------------------------------------
-
-    [Fact]
-    public void Provision_falls_back_to_blank_disk_when_the_donor_disk_is_locked()
-    {
-        var donor = NewDirectory(Path.Combine("ContainerStorages", "donor"));
-        Touch(donor, "sandbox.vhdx", "disk");
-        Touch(donor, "sandbox.vmgs", "vmgs");
-
-        var factory = new FakeVirtualDiskFactory();
-        var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
-        var target = NewDirectory("target");
-
-        using (File.Open(Path.Combine(donor, "sandbox.vhdx"), FileMode.Open, FileAccess.Read, FileShare.None))
-        {
-            var layout = provisioner.Provision(target);
-
-            // The locked donor is skipped: a blank disk is created instead and
-            // the donor's guest state is not paired with it.
-            Assert.Equal("blank-vhdx", File.ReadAllText(layout.DiskPath));
-            Assert.Equal("empty-vmgs", File.ReadAllText(layout.GuestStatePath));
-        }
-
-        Assert.Equal(1, factory.Calls);
-        Assert.Equal(1, hcs.GuestStateCalls);
-    }
-
-    [Fact]
-    public void Provision_falls_back_to_template_when_the_donor_disk_is_locked()
-    {
+        // The explicitly configured template (WSM_HCS_STORAGE_TEMPLATE) remains
+        // the opt-in escape hatch when the platform has no prepared base image.
         var donor = NewDirectory(Path.Combine("ContainerStorages", "donor"));
         Touch(donor, "sandbox.vhdx", "donor-disk");
 
@@ -248,52 +179,7 @@ public sealed class StorageProvisioningTests : IDisposable
         Touch(template, "sandbox.vhdx", "template-disk");
 
         var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
-
-        using var templateScope = new TemplateRootScope(template);
-        using var donorLock = File.Open(
-            Path.Combine(donor, "sandbox.vhdx"), FileMode.Open, FileAccess.Read, FileShare.None);
-
-        var layout = provisioner.Provision(NewDirectory("target"));
-
-        Assert.Equal("template-disk", File.ReadAllText(layout.DiskPath));
-        Assert.Equal(0, factory.Calls);
-    }
-
-    [Fact]
-    public void Provision_skips_a_used_donor_and_creates_a_blank_disk()
-    {
-        var donor = NewDirectory(Path.Combine("ContainerStorages", "used"));
-        CreateSizedFile(
-            Path.Combine(donor, "sandbox.vhdx"),
-            SandboxStorageProvisioner.BlankDonorSizeThresholdBytes + 1);
-        Touch(donor, "sandbox.vmgs", "vmgs");
-
-        var factory = new FakeVirtualDiskFactory();
-        var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
-
-        var layout = provisioner.Provision(NewDirectory("target"));
-
-        Assert.Equal("blank-vhdx", File.ReadAllText(layout.DiskPath));
-        Assert.Equal("empty-vmgs", File.ReadAllText(layout.GuestStatePath));
-        Assert.Equal(1, factory.Calls);
-        Assert.Equal(1, hcs.GuestStateCalls);
-    }
-
-    [Fact]
-    public void Provision_skips_a_used_donor_in_favour_of_the_template()
-    {
-        var donor = NewDirectory(Path.Combine("ContainerStorages", "used"));
-        CreateSizedFile(
-            Path.Combine(donor, "sandbox.vhdx"),
-            SandboxStorageProvisioner.BlankDonorSizeThresholdBytes + 1);
-
-        var template = NewDirectory("templates");
-        Touch(template, "sandbox.vhdx", "template-disk");
-
-        var factory = new FakeVirtualDiskFactory();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient(), _logger);
 
         using var templateScope = new TemplateRootScope(template);
         var layout = provisioner.Provision(NewDirectory("target"));
@@ -316,7 +202,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         var factory = new FakeVirtualDiskFactory();
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs, _logger);
 
         var layout = provisioner.Provision(target);
 
@@ -342,8 +228,15 @@ public sealed class StorageProvisioningTests : IDisposable
     }
 
     [Fact]
-    public void Provision_references_the_platform_base_disk_in_place_without_copying_it()
+    public void Provision_copies_the_guest_state_from_the_witnessed_base_directory()
     {
+        // Platform layout: layer storage (no parent) -> prepared base image
+        // (a differencing child) -> witness sandbox (a differencing child). The
+        // new sandbox is chained to the prepared base, referenced in place; the
+        // guest state is copied from the witness's directory (same source rule).
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", "layer"));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
         var baseDir = NewDirectory(Path.Combine("ContainerStorages", "base"));
         Touch(baseDir, "sandbox.vhdx", "base-disk");
 
@@ -352,20 +245,22 @@ public sealed class StorageProvisioningTests : IDisposable
         Touch(childDir, "sandbox.vmgs", "child-vmgs");
 
         var factory = new FakeVirtualDiskFactory();
+        factory.Parents[Path.Combine(baseDir, "sandbox.vhdx")] =
+            Path.Combine(layerDir, "sandbox.vhdx");
         factory.Parents[Path.Combine(childDir, "sandbox.vhdx")] =
             Path.Combine(baseDir, "sandbox.vhdx");
 
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs, _logger);
         var target = NewDirectory("target");
 
         var layout = provisioner.Provision(target);
 
         var platformBase = Path.Combine(baseDir, "sandbox.vhdx");
 
-        // The child points straight at the platform's base OS disk; the base is
-        // never copied into the sandbox folder (it is the platform's shared image
-        // that Windows Update maintains).
+        // The child points straight at the platform's prepared base disk; the
+        // base is never copied into the sandbox folder (it is the platform's
+        // shared image that Windows Update maintains).
         Assert.Equal(1, factory.DifferencingCalls);
         Assert.Equal(platformBase, factory.LastParentPath);
         Assert.Equal(platformBase, layout.BaseDiskPath);
@@ -398,7 +293,7 @@ public sealed class StorageProvisioningTests : IDisposable
         factory.Parents[platformSandbox] = baseImage;
 
         var provisioner = new SandboxStorageProvisioner(
-            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient(), _logger);
 
         var layout = provisioner.Provision(NewDirectory("target"));
 
@@ -437,7 +332,7 @@ public sealed class StorageProvisioningTests : IDisposable
         factory.Parents[Path.Combine(target, "sandbox.vhdx")] = layer;
 
         var provisioner = new SandboxStorageProvisioner(
-            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient(), _logger);
 
         var layout = provisioner.Provision(target);
 
@@ -468,7 +363,7 @@ public sealed class StorageProvisioningTests : IDisposable
         factory.Parents[Path.Combine(target, "sandbox.vhdx")] = baseImage;
 
         var provisioner = new SandboxStorageProvisioner(
-            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+            new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient(), _logger);
 
         var layout = provisioner.Provision(target);
 
@@ -489,7 +384,7 @@ public sealed class StorageProvisioningTests : IDisposable
         var factory = new FakeVirtualDiskFactory();
         factory.Parents[Path.Combine(target, "sandbox.vhdx")] = baseCopy;
 
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient(), _logger);
 
         var layout = provisioner.Provision(target);
 
@@ -522,7 +417,7 @@ public sealed class StorageProvisioningTests : IDisposable
         // copied. The chain is intact, so the disk is reused as-is.
         factory.Parents[Path.Combine(target, "sandbox.vhdx")] = baseImage;
 
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient());
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, new FakeHcsClient(), _logger);
 
         var layout = provisioner.Provision(target);
 
@@ -533,8 +428,11 @@ public sealed class StorageProvisioningTests : IDisposable
     }
 
     [Fact]
-    public void Provision_falls_back_to_blank_when_the_chain_parent_is_missing()
+    public void Provision_throws_when_the_existing_chain_is_broken_and_no_prepared_base_exists()
     {
+        // The existing chain is broken (its parent is gone), so it must be
+        // rebuilt — but with no prepared base image anywhere the rebuild fails
+        // fast instead of silently provisioning a blank disk.
         var childDir = NewDirectory(Path.Combine("ContainerStorages", "child"));
         Touch(childDir, "sandbox.vhdx", "child-disk");
         Touch(childDir, "sandbox.vmgs", "child-vmgs");
@@ -544,13 +442,152 @@ public sealed class StorageProvisioningTests : IDisposable
             Path.Combine(ContainerStoragesFolder, "gone", "sandbox.vhdx");
 
         var hcs = new FakeHcsClient();
-        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs);
+        var provisioner = new SandboxStorageProvisioner(new FakeLayout(ContainerStoragesFolder), factory, hcs, _logger);
+        var target = NewDirectory("target");
+        Touch(target, "sandbox.vhdx", "stale-child");
+        factory.Parents[Path.Combine(target, "sandbox.vhdx")] =
+            Path.Combine(ContainerStoragesFolder, "gone", "sandbox.vhdx");
 
-        var layout = provisioner.Provision(NewDirectory("target"));
+        Assert.Throws<SandboxBackendException>(() => provisioner.Provision(target));
 
-        Assert.Equal("blank-vhdx", File.ReadAllText(layout.DiskPath));
-        Assert.Equal(1, factory.Calls);
+        // The broken leftover was discarded and nothing new was written.
+        Assert.False(File.Exists(Path.Combine(target, "sandbox.vhdx")));
+        Assert.Equal(0, factory.Calls);
         Assert.Equal(0, factory.DifferencingCalls);
+    }
+
+    // ---- prepared base resolution via the layer's StorageId -----------------
+
+    [Fact]
+    public void Provision_locates_the_prepared_base_via_the_layer_storage_id_without_a_witness()
+    {
+        // No sandbox has ever run (no witness donor). The current base layer's
+        // registry StorageId names the layer's storage disk directly, and the
+        // prepared base is its differencing child.
+        var storageId = Guid.NewGuid();
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", storageId.ToString()));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var preparedDir = NewDirectory(Path.Combine("ContainerStorages", Guid.NewGuid().ToString()));
+        Touch(preparedDir, "sandbox.vhdx", "prepared-base");
+
+        var layerDisk = Path.Combine(layerDir, "sandbox.vhdx");
+        var preparedDisk = Path.Combine(preparedDir, "sandbox.vhdx");
+
+        var factory = new FakeVirtualDiskFactory();
+        factory.Parents[preparedDisk] = layerDisk;
+
+        var layout = new FakeLayout(ContainerStoragesFolder);
+        layout.Layers.Add(UsableLayer(storageId));
+
+        var provisioner = new SandboxStorageProvisioner(layout, factory, new FakeHcsClient(), _logger);
+
+        var result = provisioner.Provision(NewDirectory("target"));
+
+        Assert.Equal(1, factory.DifferencingCalls);
+        Assert.Equal(preparedDisk, factory.LastParentPath);
+        Assert.Equal(preparedDisk, result.BaseDiskPath);
+        Assert.Equal(0, factory.Calls);
+    }
+
+    [Fact]
+    public void Provision_ignores_renamed_storage_directories_when_locating_the_prepared_base()
+    {
+        // A quarantined storage directory ("<guid>.quarantine") still holds a
+        // disk chained to the layer storage, but it is not a platform storage
+        // anymore and must never be cloned — even when it is the only match.
+        var storageId = Guid.NewGuid();
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", storageId.ToString()));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var quarantineDir = NewDirectory(Path.Combine("ContainerStorages", Guid.NewGuid() + ".quarantine"));
+        Touch(quarantineDir, "sandbox.vhdx", "poisoned-base");
+
+        var factory = new FakeVirtualDiskFactory();
+        factory.Parents[Path.Combine(quarantineDir, "sandbox.vhdx")] =
+            Path.Combine(layerDir, "sandbox.vhdx");
+
+        var layout = new FakeLayout(ContainerStoragesFolder);
+        layout.Layers.Add(UsableLayer(storageId));
+
+        var provisioner = new SandboxStorageProvisioner(layout, factory, new FakeHcsClient(), _logger);
+
+        Assert.Throws<SandboxBackendException>(() => provisioner.Provision(NewDirectory("target")));
+        Assert.Equal(0, factory.DifferencingCalls);
+    }
+
+    [Fact]
+    public void Provision_warns_when_reusing_a_parentless_legacy_disk()
+    {
+        // The platform has a prepared base image, but the target still holds a
+        // parentless blank-fallback disk written by an older version: it boots
+        // an unspecialized guest. The disk is kept (never auto-deleted) and a
+        // loud warning tells the user how to repair it.
+        var storageId = Guid.NewGuid();
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", storageId.ToString()));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var preparedDir = NewDirectory(Path.Combine("ContainerStorages", Guid.NewGuid().ToString()));
+        Touch(preparedDir, "sandbox.vhdx", "prepared-base");
+
+        var factory = new FakeVirtualDiskFactory();
+        factory.Parents[Path.Combine(preparedDir, "sandbox.vhdx")] =
+            Path.Combine(layerDir, "sandbox.vhdx");
+
+        var layout = new FakeLayout(ContainerStoragesFolder);
+        layout.Layers.Add(UsableLayer(storageId));
+
+        var target = NewDirectory("target");
+        Touch(target, "sandbox.vhdx", "legacy-blank");
+        Touch(target, "sandbox.vmgs", "existing-vmgs");
+
+        var provisioner = new SandboxStorageProvisioner(layout, factory, new FakeHcsClient(), _logger);
+
+        var result = provisioner.Provision(target);
+
+        Assert.Equal("legacy-blank", File.ReadAllText(result.DiskPath));
+        Assert.Equal(0, factory.DifferencingCalls);
+        Assert.Contains(_logger.Warnings, warning => warning.Contains("blank fallback"));
+    }
+
+    [Fact]
+    public void Provision_logs_the_chain_failure_and_fails_fast()
+    {
+        // A failing VirtDisk chain call must leave a trace: it used to be
+        // swallowed, dropping provisioning into the silent blank-disk fallback.
+        var storageId = Guid.NewGuid();
+        var layerDir = NewDirectory(Path.Combine("ContainerStorages", storageId.ToString()));
+        Touch(layerDir, "sandbox.vhdx", "layer-storage");
+
+        var preparedDir = NewDirectory(Path.Combine("ContainerStorages", Guid.NewGuid().ToString()));
+        Touch(preparedDir, "sandbox.vhdx", "prepared-base");
+
+        var layerDisk = Path.Combine(layerDir, "sandbox.vhdx");
+        var preparedDisk = Path.Combine(preparedDir, "sandbox.vhdx");
+
+        var factory = new FakeVirtualDiskFactory();
+        factory.Parents[preparedDisk] = layerDisk;
+        factory.ThrowOnDifferencing = new IOException("simulated VirtDisk failure");
+
+        var layout = new FakeLayout(ContainerStoragesFolder);
+        layout.Layers.Add(UsableLayer(storageId));
+
+        var provisioner = new SandboxStorageProvisioner(layout, factory, new FakeHcsClient(), _logger);
+        var target = NewDirectory("target");
+
+        Assert.Throws<SandboxBackendException>(() => provisioner.Provision(target));
+
+        Assert.Contains(_logger.Warnings, warning => warning.Contains(preparedDisk));
+
+        // The partial child was cleaned up.
+        Assert.False(File.Exists(Path.Combine(target, "sandbox.vhdx")));
+    }
+
+    private HcsLayerInfo UsableLayer(Guid storageId)
+    {
+        var layerRoot = NewDirectory(Path.Combine("Layers", Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(Path.Combine(layerRoot, "Files", "Windows"));
+        return new HcsLayerInfo { Id = Guid.NewGuid(), Path = layerRoot, StorageId = storageId };
     }
 
     // ---- VHDX parent locator parsing ----------------------------------------
@@ -663,13 +700,6 @@ public sealed class StorageProvisioningTests : IDisposable
         }
     }
 
-    private static void CreateSizedFile(string path, long length)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        using var stream = File.Create(path);
-        stream.SetLength(length);
-    }
-
     /// <summary>
     /// Sets <c>WSM_HCS_STORAGE_TEMPLATE</c> for the duration of a test and
     /// restores the previous value on dispose. Tests in this class run
@@ -709,9 +739,12 @@ public sealed class StorageProvisioningTests : IDisposable
 
         public string SandboxDataFolder => PlatformContainerStoragesFolder;
 
+        /// <summary>Scripted registry layers (the CmService hive content).</summary>
+        public List<HcsLayerInfo> Layers { get; } = new();
+
         public string GetStorageDirectory(string id) => Path.Combine(SandboxDataFolder, id);
 
-        public IReadOnlyList<HcsLayerInfo> ListLayers() => Array.Empty<HcsLayerInfo>();
+        public IReadOnlyList<HcsLayerInfo> ListLayers() => Layers;
 
         public string? ResolveBaseLayerPath() => null;
     }
@@ -726,6 +759,9 @@ public sealed class StorageProvisioningTests : IDisposable
 
         public string? LastParentPath { get; private set; }
 
+        /// <summary>When set, <see cref="CreateDifferencingVhdx"/> throws it.</summary>
+        public Exception? ThrowOnDifferencing { get; set; }
+
         /// <summary>Maps a disk path to its configured parent path (null = base).</summary>
         public Dictionary<string, string> Parents { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -739,6 +775,11 @@ public sealed class StorageProvisioningTests : IDisposable
 
         public void CreateDifferencingVhdx(string path, string parentPath)
         {
+            if (ThrowOnDifferencing is not null)
+            {
+                throw ThrowOnDifferencing;
+            }
+
             DifferencingCalls++;
             LastParentPath = parentPath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -770,7 +811,7 @@ public sealed class StorageProvisioningTests : IDisposable
 
         public void Start(string id) => throw new NotSupportedException();
 
-        public void Shutdown(string id) => throw new NotSupportedException();
+        public void Shutdown(string id, uint timeoutMs = 45_000) => throw new NotSupportedException();
 
         public void Terminate(string id) => throw new NotSupportedException();
 
@@ -781,5 +822,28 @@ public sealed class StorageProvisioningTests : IDisposable
         public void GrantVmAccess(string id, string path) => throw new NotSupportedException();
 
         public HcsProcessResult RunProcess(string id, string commandLine, string? user = null, uint timeoutMs = 120_000) => throw new NotSupportedException();
+    }
+
+    /// <summary>Captures warning-and-above log messages for assertions.</summary>
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<string> Warnings { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel >= LogLevel.Warning)
+            {
+                Warnings.Add(formatter(state, exception));
+            }
+        }
     }
 }

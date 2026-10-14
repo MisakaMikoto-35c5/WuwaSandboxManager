@@ -80,17 +80,18 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             await engine.StopAsync(instance.Id, cancellationToken).ConfigureAwait(false);
         }
 
-        // Best effort: ask the engine to reclaim its on-disk data (HCS container
-        // storage and snapshots). A cleanup failure -- including an engine that
-        // does not support data deletion -- must never fail the delete itself.
+        // Ask the engine to reclaim its on-disk data (HCS container storage and
+        // snapshots). An engine that does not support data deletion at all is
+        // tolerated; a genuine cleanup failure (e.g. the storage is still locked)
+        // is surfaced so the delete does not silently leave the data behind.
         try
         {
             var engine = _selector.Select(RequestFor(instance));
             await engine.DeleteDataAsync(instance.Id, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (SandboxNotSupportedException)
         {
-            // Intentionally swallowed: deletion of the record must still proceed.
+            // The engine has no data lifecycle; the record delete still proceeds.
         }
 
         await _repository.DeleteAsync(instance.Id, cancellationToken).ConfigureAwait(false);
@@ -228,13 +229,17 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
 
     public async Task<SandboxRuntimeInfo> PrepareConnectAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        var (_, runtime, _) = await PrepareConnectCoreAsync(id, cancellationToken).ConfigureAwait(false);
+        var (_, runtime, _) = await PrepareConnectCoreAsync(id, replaceActiveSessions: false, cancellationToken).ConfigureAwait(false);
         return runtime;
     }
 
     public async Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default)
     {
-        var (instanceId, runtime, engine) = await PrepareConnectCoreAsync(id, cancellationToken).ConfigureAwait(false);
+        // A RemoteApp connect replaces whatever session the guest currently holds:
+        // the single-session guest refuses a RAIL logon while another session is
+        // connected ("too many sessions"), so the existing session must go first.
+        var (instanceId, runtime, engine) = await PrepareConnectCoreAsync(
+            id, replaceActiveSessions: mode == SandboxConnectionMode.RemoteApp, cancellationToken).ConfigureAwait(false);
 
         await _sessionLauncher
             .LaunchAsync(instanceId, runtime, mode, engine.Kind, remoteAppProgram, cancellationToken)
@@ -250,11 +255,17 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     /// the resolved runtime and the engine that owns it, so callers can launch
     /// the session.
     /// </summary>
+    /// <param name="replaceActiveSessions">
+    /// When true, even a still-connected session is reclaimed. Required for RAIL
+    /// connects: the single-session guest refuses a RemoteApp logon while another
+    /// session exists instead of arbitrating it.
+    /// </param>
     /// <exception cref="SandboxDomainException">
     /// The instance is not running (no cached runtime and the engine reports none).
     /// </exception>
     private async Task<(SandboxInstanceId Id, SandboxRuntimeInfo Runtime, ISandboxEngine Engine)> PrepareConnectCoreAsync(
         Guid id,
+        bool replaceActiveSessions,
         CancellationToken cancellationToken)
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
@@ -272,7 +283,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         // Force-disconnect any session left over from a previous connect: the WDAG
         // guest keeps the disconnected session around and then refuses a new one
         // with "too many sessions established", so reclaim the slot first.
-        await ReclaimGuestSessionsAsync(engine, instance.Id, cancellationToken).ConfigureAwait(false);
+        await ReclaimGuestSessionsAsync(engine, instance.Id, replaceActiveSessions, cancellationToken).ConfigureAwait(false);
 
         return (instance.Id, runtime, engine);
     }
@@ -286,20 +297,85 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         SandboxInstance instance,
         ISandboxEngine engine,
         CancellationToken cancellationToken)
-        => instance.Runtime
+    {
+        var runtime = instance.Runtime
             ?? await engine.GetRuntimeAsync(instance.Id, cancellationToken).ConfigureAwait(false);
+        return EnforceRecipeTransport(instance, engine, runtime);
+    }
+
+    /// <summary>
+    /// The recipe's transport is authoritative: the named pipe is the default and
+    /// TCP is opt-in (an HCS-sandbox feature). A probe that finds a live 3389
+    /// listener must not silently turn a pipe sandbox onto TCP — the guest's
+    /// registry persists on the user-data disk, so a sandbox that once ran TCP
+    /// keeps listening even after it was switched back to the pipe. Symmetrically,
+    /// a TCP sandbox whose listener is unreachable fails loudly instead of falling
+    /// back to the arbitrated pipe (which would re-introduce the host-wide
+    /// session kicking the user switched away from).
+    /// </summary>
+    /// <exception cref="SandboxBackendException">
+    /// TCP was requested but the guest listener is not reachable.
+    /// </exception>
+    private static SandboxRuntimeInfo? EnforceRecipeTransport(
+        SandboxInstance instance,
+        ISandboxEngine engine,
+        SandboxRuntimeInfo? runtime)
+    {
+        if (runtime is null || engine.Kind != SandboxEngineKind.HcsSandbox)
+        {
+            return runtime;
+        }
+
+        if (instance.Recipe.Transport != RdpTransportKind.Tcp)
+        {
+            return runtime.Transport == RdpTransportKind.Tcp
+                ? runtime with
+                {
+                    Transport = RdpTransportKind.NamedPipe,
+                    IpAddress = string.Empty,
+                    IpAddresses = Array.Empty<string>(),
+                }
+                : runtime;
+        }
+
+        if (runtime.Transport != RdpTransportKind.Tcp)
+        {
+            throw new SandboxBackendException(
+                $"The TCP RDP transport was requested for sandbox {instance.Id}, but the guest " +
+                "listener on 3389 is not reachable. Start the sandbox again, or switch it back " +
+                "to the named-pipe transport.",
+                0);
+        }
+
+        return runtime;
+    }
 
     /// <summary>
     /// Force-disconnects any orphaned (disconnected) guest session a previous
-    /// connect left behind before a new one is established. The WDAG guest can
-    /// keep a disconnected session and then refuse the next connection with "too
-    /// many sessions established" (<c>ERROR_REMOTE_SESSION_LIMIT_EXCEEDED</c>),
-    /// so those sessions are logged off first. A session that is still connected
-    /// is left alone: it is the caller's own (or a concurrent connect) and the
-    /// guest already replaces it. Best effort: engines that cannot run guest
-    /// commands are skipped, and a failed reclaim must never block connecting.
+    /// connect left behind before a new one is established. The WDAG guest
+    /// can keep a disconnected session and then refuse the next connection with
+    /// "too many sessions established" (<c>ERROR_REMOTE_SESSION_LIMIT_EXCEEDED</c>),
+    /// so those sessions are logged off first. When
+    /// <paramref name="replaceActiveSessions"/> is set (a RemoteApp connect), even
+    /// a still-connected session is logged off: the guest does not arbitrate a
+    /// RAIL logon against an existing session, it refuses it.
+    /// <para>
+    /// The guest tears a logged-off session down asynchronously — the session can
+    /// linger for tens of seconds after <c>logoff</c> returns — so the reclaim
+    /// then polls the session table until the reclaimed sessions are actually gone
+    /// (bounded by <see cref="SessionReclaimTimeout"/>); connecting while the slot
+    /// is still occupied is what surfaces as "too many sessions". A session that
+    /// is still connected and is not being replaced is left alone: it is the
+    /// caller's own (or a concurrent connect) and the guest arbitrates it. Best
+    /// effort overall: engines that cannot run guest commands are skipped, and a
+    /// failed reclaim must never block connecting.
+    /// </para>
     /// </summary>
-    private async Task ReclaimGuestSessionsAsync(ISandboxEngine engine, SandboxInstanceId id, CancellationToken cancellationToken)
+    private async Task ReclaimGuestSessionsAsync(
+        ISandboxEngine engine,
+        SandboxInstanceId id,
+        bool replaceActiveSessions,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -319,7 +395,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             }
 
             var orphans = GuestSessionTable.Parse(table.StandardOutput)
-                .Where(session => !session.IsConnected)
+                .Where(session => replaceActiveSessions || !session.IsConnected)
                 .Select(session => session.Id)
                 .ToArray();
 
@@ -329,7 +405,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
             }
 
             _logger.LogInformation(
-                "Force-disconnecting {Count} orphaned guest session(s) in sandbox {SandboxId}: {Sessions}.",
+                "Force-disconnecting {Count} guest session(s) in sandbox {SandboxId}: {Sessions}.",
                 orphans.Length, id, string.Join(", ", orphans));
 
             foreach (var sessionId in orphans)
@@ -338,6 +414,8 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
                     .ExecuteAsync(id, new LogonCommand($"logoff {sessionId}"), cancellationToken)
                     .ConfigureAwait(false);
             }
+
+            await WaitForSessionsGoneAsync(engine, id, orphans, cancellationToken).ConfigureAwait(false);
         }
         catch (SandboxNotSupportedException)
         {
@@ -349,6 +427,47 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         }
     }
 
+    /// <summary>
+    /// Polls the guest session table until every id in <paramref name="sessionIds"/>
+    /// has disappeared. The guest's teardown is asynchronous and slow (observed up
+    /// to ~50s), so the wait is bounded: when <see cref="SessionReclaimTimeout"/>
+    /// elapses the connect proceeds anyway rather than being blocked forever.
+    /// </summary>
+    private async Task WaitForSessionsGoneAsync(
+        ISandboxEngine engine,
+        SandboxInstanceId id,
+        IReadOnlyCollection<int> sessionIds,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + SessionReclaimTimeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(SessionReclaimPollInterval, cancellationToken).ConfigureAwait(false);
+
+            var table = await engine
+                .CaptureAsync(id, new LogonCommand(QwinstaCommand), cancellationToken)
+                .ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(table.StandardOutput))
+            {
+                // Transient capture failure: keep waiting until the deadline.
+                continue;
+            }
+
+            var remaining = GuestSessionTable.Parse(table.StandardOutput)
+                .Count(session => sessionIds.Contains(session.Id));
+            if (remaining == 0)
+            {
+                return;
+            }
+        }
+
+        _logger.LogWarning(
+            "Guest session(s) {Sessions} in sandbox {SandboxId} still present {Timeout}s after logoff; connecting anyway.",
+            string.Join(", ", sessionIds), id, SessionReclaimTimeout.TotalSeconds);
+    }
+
     /// <summary>Guest command that lists the current sessions.</summary>
     private const string QwinstaCommand = "qwinsta";
 
@@ -358,6 +477,15 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     /// do not exist.
     /// </summary>
     private const string QuietLogoffRangeCommand = "cmd.exe /c for /l %i in (1,1,20) do @logoff %i >nul 2>&1";
+
+    /// <summary>
+    /// Bound for waiting out the guest's asynchronous session teardown after a
+    /// <c>logoff</c>. Settable from tests.
+    /// </summary>
+    internal TimeSpan SessionReclaimTimeout { get; set; } = TimeSpan.FromSeconds(75);
+
+    /// <summary>Interval between session-table polls while reclaiming. Settable from tests.</summary>
+    internal TimeSpan SessionReclaimPollInterval { get; set; } = TimeSpan.FromMilliseconds(1500);
 
     public async Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken cancellationToken = default)
     {

@@ -27,8 +27,18 @@ internal sealed class HcsOperation : IDisposable
     /// Throws when either the initial call or the wait reported a failure.
     /// </summary>
     public string? Complete(int callResult, string operationName)
+        => Complete(callResult, operationName, uint.MaxValue);
+
+    /// <summary>
+    /// Waits up to <paramref name="timeoutMs"/> for the operation to complete and
+    /// returns its result document. Throws when either the initial call or the
+    /// wait reported a failure; a wait that exceeds the timeout surfaces as an
+    /// <c>HCS_E_OPERATION_TIMEOUT</c> (<c>0xC0370104</c>) exception instead of
+    /// blocking forever.
+    /// </summary>
+    public string? Complete(int callResult, string operationName, uint timeoutMs)
     {
-        var waitResult = HcsNative.HcsWaitForOperationResult(_handle, uint.MaxValue, out var document);
+        var waitResult = HcsNative.HcsWaitForOperationResult(_handle, timeoutMs, out var document);
         var text = TakeString(document);
 
         if (callResult != HcsNative.HcsEOperationPending && callResult < 0)
@@ -75,6 +85,7 @@ internal sealed class HcsOperation : IDisposable
 internal static class HcsErrors
 {
     public const int HcsEHypervNotInstalled = unchecked((int)0x80370102);
+    public const int HcsESystemNotFound = unchecked((int)0x8037010E);
     public const int HcsESystemAlreadyExists = unchecked((int)0x8037010F);
     public const int HcsENotFound = unchecked((int)0x80370110);
     public const int HcsETerminated = unchecked((int)0x80370117);
@@ -99,7 +110,7 @@ internal static class HcsErrors
             return new SandboxDomainException($"A compute system with that id already exists ({operationName}).{suffix}");
         }
 
-        if (hresult == HcsENotFound)
+        if (hresult == HcsENotFound || hresult == HcsESystemNotFound)
         {
             return new SandboxNotFoundException($"The compute system was not found ({operationName}).{suffix}");
         }
@@ -112,6 +123,13 @@ internal static class HcsErrors
         if (hresult == HcsETerminated)
         {
             return new SandboxDomainException($"The compute system has already terminated ({operationName}).{suffix}");
+        }
+
+        if (hresult == HcsEOperationTimeout)
+        {
+            return new SandboxBackendException(
+                $"HCS '{operationName}' did not complete within the allotted time (HCS_E_OPERATION_TIMEOUT).{suffix}",
+                hresult);
         }
 
         return new SandboxBackendException(

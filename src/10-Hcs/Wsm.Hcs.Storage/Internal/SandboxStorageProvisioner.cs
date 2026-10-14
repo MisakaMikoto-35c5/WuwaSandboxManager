@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.Exceptions;
 using Wsm.Hcs.Interop;
@@ -17,18 +18,20 @@ namespace Wsm.Hcs.Storage.Internal;
 ///   <item>reference the platform's <b>prepared base image</b> in place: the
 ///   platform never boots a sandbox on a layer's storage, it first materialises a
 ///   base image (a child of the layer storage that has completed the guest's
-///   first-boot/specialization) and clones every sandbox from it. A donor's
-///   immediate parent is that base image, and a differencing child
-///   <c>sandbox.vhdx</c> is created over it. The base is never copied — it is the
-///   shared, Windows Update-maintained image, so a per-sandbox copy would freeze
-///   a stale OS and waste gigabytes. Only an explicitly configured base image is
-///   materialised inside the sandbox folder;</item>
-///   <item>copy a <b>blank/small standalone donor</b> container storage
-///   (fast path — an existing Windows Sandbox storage under
-///   <c>ContainerStorages\*</c> that is <i>not</i> a differencing child and has
-///   not grown past <see cref="BlankDonorSizeThresholdBytes"/>);</item>
-///   <item>copy a platform <b>template</b> disk if one is configured;</item>
-///   <item>otherwise create a <b>blank dynamic VHDX</b> from scratch.</item>
+///   first-boot/specialization) and clones every sandbox from it. The base is
+///   located directly — the current base layer's registry <c>StorageId</c> names
+///   the layer's storage disk, and the prepared base is the differencing child
+///   whose direct parent is that disk — with the historical donor-witness
+///   resolution (a sandbox whose immediate parent is itself a differencing
+///   child) kept as a backup. A differencing child <c>sandbox.vhdx</c> is created
+///   over it. The base is never copied — it is the shared, Windows
+///   Update-maintained image, so a per-sandbox copy would freeze a stale OS and
+///   waste gigabytes;</item>
+///   <item>copy an <b>explicitly configured template</b> disk
+///   (<c>WSM_HCS_STORAGE_TEMPLATE</c>, an opt-in development/test hook);</item>
+///   <item>otherwise <b>fail fast</b> with a <see cref="SandboxBackendException"/>
+///   that names the remediation (start the official Windows Sandbox once so the
+///   platform materialises its prepared base image).</item>
 /// </list>
 /// <para>
 /// Why the chain matters: HCS's synthetic storage refuses any disk in the
@@ -36,13 +39,16 @@ namespace Wsm.Hcs.Storage.Internal;
 /// (<c>Start</c> fails with <c>0xC03A001A</c>,
 /// <c>STATUS_VIRTUAL_DISK_LIMITATION</c>). The host's
 /// <c>...\Windows\Containers</c> tree is compressed, so a copied differencing
-/// child still points at a compressed parent. Copying the base <b>uncompressed</b>
-/// and building our own child breaks that dependency.
+/// child still points at a compressed parent. Referencing the platform's
+/// prepared base <b>uncompressed in place</b> and building our own child breaks
+/// that dependency.
 /// </para>
-/// Every copy step is best-effort: a donor that is locked (e.g. the disk of a
-/// <i>running</i> sandbox), that has been used, or that fails for any IO reason
-/// is skipped so provisioning falls through to the next strategy rather than
-/// surfacing a raw <see cref="IOException"/>.
+/// <para>
+/// There is deliberately <b>no silent blank-disk fallback</b>: a blank dynamic
+/// VHDX boots an unspecialized guest whose session comes up but whose
+/// <c>explorer.exe</c> hangs and whose Start menu never opens — a sandbox that
+/// looks started but is unusable. Provisioning fails loudly instead.
+/// </para>
 /// <para>
 /// The guest-state file is taken from the same source that supplied the disk,
 /// when present, otherwise created with <c>HcsCreateEmptyGuestStateFile</c>. A
@@ -65,31 +71,21 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
     /// </summary>
     public const string BaseDiskFileName = "sandbox.base.vhdx";
 
-    /// <summary>
-    /// Largest on-disk size (in bytes) a donor <c>sandbox.vhdx</c> may have and
-    /// still be treated as <b>blank</b>. A freshly-created Windows Sandbox disk
-    /// is ~4&#160;MB; once a sandbox has run it grows to tens or hundreds of MB
-    /// (observed 88&#160;MB / 874&#160;MB / 917&#160;MB). Donors above this
-    /// threshold have been used and would leak another sandbox's data, so they
-    /// are rejected in favour of the template or a fresh blank disk.
-    /// </summary>
-    public const long BlankDonorSizeThresholdBytes = 16L * 1024 * 1024;
-
-    /// <summary>Guard against a corrupt/looping parent chain.</summary>
-    private const int MaxChainDepth = 16;
-
     private readonly IHcsHostLayout _layout;
     private readonly IVirtualDiskFactory _diskFactory;
     private readonly IHcsClient _hcs;
+    private readonly ILogger<SandboxStorageProvisioner> _logger;
 
     public SandboxStorageProvisioner(
         IHcsHostLayout layout,
         IVirtualDiskFactory diskFactory,
-        IHcsClient hcs)
+        IHcsClient hcs,
+        ILogger<SandboxStorageProvisioner> logger)
     {
         _layout = layout;
         _diskFactory = diskFactory;
         _hcs = hcs;
+        _logger = logger;
     }
 
     public StorageLayout Provision(string storageDirectory, uint diskSizeMb = 0)
@@ -133,17 +129,21 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
             {
                 diskSource = chainSource;
             }
-            else if (TryCopyStandaloneDisk(locator.FindDonorStorage(), disk, requireBlank: true))
-            {
-                diskSource = locator.FindDonorStorage();
-            }
-            else if (TryCopyStandaloneDisk(locator.FindTemplateStorage(), disk, requireBlank: false))
+            else if (TryCopyTemplateDisk(locator.FindTemplateStorage(), disk))
             {
                 diskSource = locator.FindTemplateStorage();
             }
             else
             {
-                CreateBlankDisk(disk, diskSizeMb);
+                throw new SandboxBackendException(
+                    "The platform's prepared base image was not found under " +
+                    $"'{_layout.PlatformContainerStoragesFolder}': the current base layer has no " +
+                    "materialised base image to clone. Start the official Windows Sandbox once " +
+                    "(or wait for it to finish its first-boot preparation) so the platform " +
+                    "materialises the prepared base image, then retry. A blank disk is not " +
+                    "created silently anymore because it boots an unspecialized guest whose " +
+                    "explorer.exe hangs and whose Start menu never opens.",
+                    0);
             }
         }
         else
@@ -179,6 +179,13 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
     /// used, and it boots an unspecialized guest (the shell hangs, the Start menu
     /// never opens). Rebuilding repairs an existing sandbox on its next start.
     /// </para>
+    /// <para>
+    /// A <b>parentless</b> disk is the legacy blank-fallback shape. It boots an
+    /// unspecialized guest too, but it may hold data the user wants, so it is
+    /// kept (never auto-deleted): when the platform already has a prepared base
+    /// image, a loud warning tells the user to delete the directory and
+    /// re-create the container.
+    /// </para>
     /// </summary>
     private bool IsReusableExistingDisk(string disk, string storageDirectory)
     {
@@ -192,6 +199,18 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
             var parent = _diskFactory.TryGetParentPath(disk);
             if (parent is null)
             {
+                if (ResolvePreparedBaseFromLayerStorage() is not null)
+                {
+                    _logger.LogWarning(
+                        "The user-data disk '{Disk}' has no parent chain: it is a blank fallback disk " +
+                        "left by an older version and boots an unspecialized guest (no taskbar, " +
+                        "explorer.exe stops responding). It is kept because it may hold data. To " +
+                        "repair the sandbox: stop it, delete the directory '{Directory}', and " +
+                        "re-create the container so a differencing child of the platform's prepared " +
+                        "base image is provisioned.",
+                        disk, storageDirectory);
+                }
+
                 NtfsCompression.TryUncompress(disk);
                 return true;
             }
@@ -242,14 +261,15 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
     /// comes up, but <c>explorer.exe</c> hangs and the Start menu never opens.
     /// </para>
     /// <para>
-    /// The prepared base is the donor's <b>immediate parent</b> (which is itself a
-    /// differencing child). When no prepared base exists, the previous behaviour —
-    /// the chain root — is used as a fallback so a machine that has not prepared a
-    /// base image yet still provisions.
+    /// The prepared base is located directly from the current base layer's
+    /// registry <c>StorageId</c> (no witness sandbox required); the historical
+    /// donor-witness resolution is kept as a backup for hosts whose registry
+    /// hive is not readable. When neither resolves a base image the caller falls
+    /// through to the explicitly-configured template, then fails fast.
     /// </para>
-    /// Returns <see langword="false"/> when no donor chain resolves to an existing
-    /// base disk, so the caller can fall through to the standalone-copy/blank
-    /// strategies.
+    /// Returns <see langword="false"/> when no prepared base resolves to an
+    /// existing base disk, so the caller can fall through to the template
+    /// strategy.
     /// </summary>
     private bool TryCreateChildOverPlatformBase(
         SandboxStorageTemplateLocator locator,
@@ -261,34 +281,20 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
         parentPath = null;
         source = null;
 
-        var donors = locator.EnumerateDonorStorages();
-
-        // Preferred: the platform's prepared base image — a donor whose immediate
-        // parent is itself a differencing child (its parent is the layer storage).
-        foreach (var donor in donors)
+        // Preferred: direct resolution through the base layer's StorageId. This
+        // needs no witness sandbox, so the very first sandbox on a fresh machine
+        // still chains to the prepared base image.
+        var prepared = ResolvePreparedBaseFromLayerStorage();
+        if (prepared is not null &&
+            !IsWithinDirectory(prepared, storageDirectory) &&
+            TryChain(disk, prepared, Path.GetDirectoryName(prepared), out parentPath, out source))
         {
-            var donorDisk = Path.Combine(donor, SandboxStorageTemplateLocator.DiskFileName);
-            if (!File.Exists(donorDisk) || IsWithinDirectory(donorDisk, storageDirectory))
-            {
-                continue;
-            }
-
-            var prepared = ResolvePreparedBase(donorDisk);
-            if (prepared is null)
-            {
-                continue;
-            }
-
-            if (TryChain(disk, prepared, donor, out parentPath, out source))
-            {
-                return true;
-            }
+            return true;
         }
 
-        // Fallback (previous behaviour): the no-parent chain root. This is the
-        // layer's storage, which boots an unspecialized guest; it is only used
-        // when the platform has not prepared a base image.
-        foreach (var donor in donors)
+        // Backup: a witness sandbox — a donor whose immediate parent is itself a
+        // differencing child (that parent is the prepared base image).
+        foreach (var donor in locator.EnumerateDonorStorages())
         {
             var donorDisk = Path.Combine(donor, SandboxStorageTemplateLocator.DiskFileName);
             if (!File.Exists(donorDisk) || IsWithinDirectory(donorDisk, storageDirectory))
@@ -296,21 +302,94 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
                 continue;
             }
 
-            var root = ResolveChainRoot(donorDisk);
-            if (root is null ||
-                !File.Exists(root) ||
-                string.Equals(root, donorDisk, StringComparison.OrdinalIgnoreCase))
+            var witnessed = ResolvePreparedBase(donorDisk);
+            if (witnessed is null || string.Equals(witnessed, prepared, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (TryChain(disk, root, donor, out parentPath, out source))
+            if (TryChain(disk, witnessed, donor, out parentPath, out source))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Locates the platform's prepared base image directly, without needing a
+    /// witness sandbox: the current base layer's registry <c>StorageId</c> names
+    /// the layer's storage disk
+    /// (<c>ContainerStorages\&lt;StorageId&gt;\sandbox.vhdx</c>), and the prepared
+    /// base image is the differencing child whose direct parent is that disk.
+    /// Only GUID-named storage directories are considered (quarantined or
+    /// otherwise renamed folders are ignored); when several children qualify the
+    /// most recently written one wins. Returns <see langword="null"/> when no
+    /// prepared base exists yet.
+    /// </summary>
+    private string? ResolvePreparedBaseFromLayerStorage()
+    {
+        var layer = _layout.ListLayers()
+            .FirstOrDefault(l => l.StorageId is not null && l.IsUsableBaseImage);
+        if (layer?.StorageId is not Guid storageId)
+        {
+            return null;
+        }
+
+        var layerStorageDisk = Path.Combine(
+            _layout.PlatformContainerStoragesFolder,
+            storageId.ToString(),
+            SandboxStorageTemplateLocator.DiskFileName);
+        if (!File.Exists(layerStorageDisk))
+        {
+            return null;
+        }
+
+        string? prepared = null;
+        var preparedWrite = DateTime.MinValue;
+
+        IEnumerable<string> directories;
+        try
+        {
+            directories = Directory.EnumerateDirectories(
+                _layout.PlatformContainerStoragesFolder, "*", SearchOption.TopDirectoryOnly);
+        }
+        catch
+        {
+            return null;
+        }
+
+        foreach (var directory in directories)
+        {
+            // Quarantined/renamed folders ("<guid>.quarantine" and friends) are
+            // not platform storages; only GUID-named directories qualify.
+            if (!Guid.TryParse(Path.GetFileName(directory), out _))
+            {
+                continue;
+            }
+
+            var candidate = Path.Combine(directory, SandboxStorageTemplateLocator.DiskFileName);
+            if (!File.Exists(candidate))
+            {
+                continue;
+            }
+
+            var parent = TryGetParent(candidate);
+            if (parent is null || !PathEquals(parent, layerStorageDisk))
+            {
+                continue;
+            }
+
+            var written = File.GetLastWriteTimeUtc(candidate);
+            if (written >= preparedWrite)
+            {
+                prepared = candidate;
+                preparedWrite = written;
+            }
+        }
+
+        return prepared;
     }
 
     /// <summary>
@@ -353,11 +432,13 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
     /// cleaned up on failure so the caller can try the next strategy. The base is
     /// only ever uncompressed (a metadata change), never copied: its content stays
     /// current with Windows Update and no gigabytes are duplicated per sandbox.
+    /// Failures are logged — a silently skipped base used to drop provisioning
+    /// into the blank-disk fallback with no trace.
     /// </summary>
     private bool TryChain(
         string disk,
         string baseDisk,
-        string sourceDirectory,
+        string? sourceDirectory,
         out string? parentPath,
         out string? source)
     {
@@ -377,16 +458,19 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
             source = sourceDirectory;
             return true;
         }
-        catch (SandboxBackendException)
+        catch (SandboxBackendException ex)
         {
+            _logger.LogWarning(ex, "Failed to chain '{Disk}' to the base image '{BaseDisk}'.", disk, baseDisk);
             TryDeletePartialCopy(disk);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            _logger.LogWarning(ex, "Failed to chain '{Disk}' to the base image '{BaseDisk}'.", disk, baseDisk);
             TryDeletePartialCopy(disk);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
+            _logger.LogWarning(ex, "Failed to chain '{Disk}' to the base image '{BaseDisk}'.", disk, baseDisk);
             TryDeletePartialCopy(disk);
         }
 
@@ -394,52 +478,12 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
     }
 
     /// <summary>
-    /// Walks the parent locator chain from <paramref name="disk"/> up to the
-    /// base (the disk whose parent is absent). Returns <see langword="null"/>
-    /// when a parent is missing or the chain loops/exceeds
-    /// <see cref="MaxChainDepth"/>.
+    /// Best-effort copy of the <b>explicitly configured</b> template
+    /// <c>sandbox.vhdx</c> (<c>WSM_HCS_STORAGE_TEMPLATE</c>). Returns
+    /// <see langword="false"/> (so the caller fails fast) when the template is
+    /// absent, is a differencing child, is locked, or any IO error occurs.
     /// </summary>
-    private string? ResolveChainRoot(string disk)
-    {
-        var current = disk;
-
-        for (var depth = 0; depth < MaxChainDepth; depth++)
-        {
-            string? parent;
-            try
-            {
-                parent = _diskFactory.TryGetParentPath(current);
-            }
-            catch
-            {
-                return null;
-            }
-
-            if (parent is null)
-            {
-                return current;
-            }
-
-            if (!File.Exists(parent))
-            {
-                return null;
-            }
-
-            current = parent;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Best-effort copy of a <b>standalone</b> (non-differencing)
-    /// <c>sandbox.vhdx</c> from <paramref name="source"/>. Returns
-    /// <see langword="false"/> (so the caller can try the next strategy) when the
-    /// source is absent, is a differencing child (handled by the chain path), has
-    /// been used (a donor above the blank-size threshold), is locked by a running
-    /// sandbox, or any IO error occurs.
-    /// </summary>
-    private bool TryCopyStandaloneDisk(string? source, string disk, bool requireBlank)
+    private bool TryCopyTemplateDisk(string? source, string disk)
     {
         if (source is null)
         {
@@ -460,22 +504,19 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
                 return false;
             }
 
-            if (requireBlank && new FileInfo(sourceDisk).Length > BlankDonorSizeThresholdBytes)
-            {
-                return false;
-            }
-
             File.Copy(sourceDisk, disk, overwrite: false);
             NtfsCompression.TryUncompress(disk);
             return true;
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            _logger.LogWarning(ex, "Failed to copy the configured template disk '{SourceDisk}'.", sourceDisk);
             TryDeletePartialCopy(disk);
             return false;
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
+            _logger.LogWarning(ex, "Failed to copy the configured template disk '{SourceDisk}'.", sourceDisk);
             TryDeletePartialCopy(disk);
             return false;
         }
@@ -499,6 +540,22 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
         }
     }
 
+    /// <summary>Path equality that tolerates differing casing and separators.</summary>
+    private static bool PathEquals(string first, string second)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(first),
+                Path.GetFullPath(second),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static void TryDeletePartialCopy(string disk)
     {
         try
@@ -511,26 +568,6 @@ internal sealed class SandboxStorageProvisioner : ISandboxStorageProvisioner, IS
         catch
         {
             // best effort — a later strategy may still succeed
-        }
-    }
-
-    private void CreateBlankDisk(string disk, uint diskSizeMb)
-    {
-        // 0 => the factory's platform default (80 GB, matching Windows Sandbox).
-        var maximumSizeBytes = diskSizeMb == 0 ? 0UL : (ulong)diskSizeMb * 1024 * 1024;
-
-        try
-        {
-            _diskFactory.CreateDynamicVhdx(disk, maximumSizeBytes);
-            NtfsCompression.TryUncompress(disk);
-        }
-        catch (SandboxBackendException ex)
-        {
-            throw new SandboxBackendException(
-                $"No user-data disk (sandbox.vhdx) template was found and a blank dynamic VHDX " +
-                $"could not be created at '{disk}': {ex.Message}",
-                ex.HResult,
-                ex);
         }
     }
 

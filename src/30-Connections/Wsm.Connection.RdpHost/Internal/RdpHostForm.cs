@@ -24,6 +24,17 @@ internal sealed class RdpHostForm : Form
 {
     private static readonly TimeSpan EndpointTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Process-wide gate around <c>IMsRdpClient10.Connect</c>. mstscax performs
+    /// one-time, process-global initialization inside <c>Connect</c> (window
+    /// class registration and shared state) without any synchronization: two
+    /// controls connecting at the same moment in this process fail with
+    /// <c>ERROR_CLASS_ALREADY_EXISTS</c> ("class already exists") or a bogus
+    /// <c>OutOfMemoryException</c>. The sandbox host presents every session from
+    /// this one process, so connects are serialized here.
+    /// </summary>
+    private static readonly SemaphoreSlim ConnectGate = new(1, 1);
+
     private readonly RdpSessionRequest _request;
     private readonly IRdpBaseConnectorFactory _connectorFactory;
     private readonly ILogger _logger;
@@ -76,20 +87,31 @@ internal sealed class RdpHostForm : Form
     {
         try
         {
-            // Acquire the endpoint on this STA thread. The message loop pumps
-            // while we await, which is what lets the RDPBASE callback complete.
-            _connector = _connectorFactory.Create();
-            var endpoint = await _connector
-                .GetEndpointAsync(_request.PipeName, _closeCts.Token)
-                .WaitAsync(EndpointTimeout, _closeCts.Token)
-                .ConfigureAwait(true);
+            var useTcp = !string.IsNullOrWhiteSpace(_request.ServerAddress);
+            object? endpoint = null;
 
-            if (IsDisposed || _closeCts.IsCancellationRequested)
+            if (useTcp)
             {
-                return;
+                _logger.LogInformation(
+                    "Presenting {Endpoint} through mstscax over TCP.", EndpointLabel);
             }
+            else
+            {
+                // Acquire the endpoint on this STA thread. The message loop pumps
+                // while we await, which is what lets the RDPBASE callback complete.
+                _connector = _connectorFactory.Create();
+                endpoint = await _connector
+                    .GetEndpointAsync(_request.PipeName, _closeCts.Token)
+                    .WaitAsync(EndpointTimeout, _closeCts.Token)
+                    .ConfigureAwait(true);
 
-            _logger.LogInformation("Acquired RDPBASE endpoint {Endpoint}; presenting through mstscax.", _request.PipeName);
+                if (IsDisposed || _closeCts.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                _logger.LogInformation("Acquired RDPBASE endpoint {Endpoint}; presenting through mstscax.", _request.PipeName);
+            }
 
             var client = new AxMsRdpClient10NotSafeForScripting { Dock = DockStyle.Fill };
             _client = client;
@@ -99,22 +121,16 @@ internal sealed class RdpHostForm : Form
             client.DesktopWidth = Math.Max(ClientSize.Width, MinimumSize.Width);
             client.DesktopHeight = Math.Max(ClientSize.Height, MinimumSize.Height);
 
-            // Mirror the platform's own remote-session client (the decompiled
-            // WindowsSandboxServer / WindowsSandboxRemoteSession) for the RDPBASE
-            // named-pipe transport, exactly. NLA is not used, the security layer
-            // is negotiated, server authentication is not required, and the
-            // credential is supplied in clear text (local pipe trust domain only).
+            // Mirror the platform's own remote-session client: NLA is not used,
+            // the security layer is negotiated, server authentication is not
+            // required, and the credential is supplied in clear text.
             var advanced = client.AdvancedSettings9;
             advanced.EnableCredSspSupport = false;
             advanced.NegotiateSecurityLayer = true;
             advanced.AuthenticationLevel = 0;
 
-            // Mirror the platform's own remote-session client for the container
-            // desktop: the container handles full screen, the sandbox's SAS
-            // sequence is not forwarded, and the connection bar is shown.
             advanced.DisableCtrlAltDel = 1;
             advanced.DisplayConnectionBar = true;
-            advanced.ContainerHandledFullScreen = 1;
             advanced.RedirectClipboard = _request.Redirections.Clipboard;
             advanced.RedirectPrinters = _request.Redirections.Printer;
             advanced.RedirectSmartCards = _request.Redirections.SmartCard;
@@ -138,16 +154,33 @@ internal sealed class RdpHostForm : Form
             advanced.ClearTextPassword = _request.Password;
 
             var extended = (IMsRdpExtendedSettings)client.GetOcx()!;
-            SetExtended(extended, "Workspace Id", "in WindowsSandbox");
-            SetExtended(extended, "ClientDeviceName", _request.VmId.ToString());
-            SetExtended(extended, "EnableHardwareMode", true);
-            SetExtended(extended, "EnableFrameBufferRedirection", true);
+            // The workspace id scopes the client's per-process session tracking;
+            // it must differ per sandbox, or connections made from this process
+            // are treated as one workspace and a new connect bumps the previous
+            // session. (The platform's own client hosts a single sandbox per
+            // process, so its constant id never collides there.)
+            SetExtended(
+                extended,
+                "Workspace Id",
+                _request.VmId != Guid.Empty ? $"in WindowsSandbox:{_request.VmId}" : "in WindowsSandbox");
+            if (!useTcp)
+            {
+                // Container/pipe-only knobs. The HiDef container channel drives
+                // full screen and the framebuffer and routes by container GUID;
+                // over TCP there is no container channel at all, and setting
+                // these crashes the control outright (SEHException from the
+                // message loop right after Connect).
+                advanced.ContainerHandledFullScreen = 1;
+                SetExtended(extended, "ClientDeviceName", _request.VmId.ToString());
+                SetExtended(extended, "EnableHardwareMode", true);
+                SetExtended(extended, "EnableFrameBufferRedirection", true);
+                if (_request.VmId != Guid.Empty)
+                {
+                    SetExtended(extended, "HiDefRemoteAppContainerGUID", $"{{{_request.VmId}}}");
+                }
+            }
             SetExtended(extended, "AllowSasSequenceTransmission", false);
             SetExtended(extended, "DisableAutoReconnectComponent", true);
-            if (_request.VmId != Guid.Empty)
-            {
-                SetExtended(extended, "HiDefRemoteAppContainerGUID", $"{{{_request.VmId}}}");
-            }
 
             if (_request.RemoteApp)
             {
@@ -162,15 +195,34 @@ internal sealed class RdpHostForm : Form
                     client.RemoteProgram3.RemoteApplicationProgram = _request.RemoteAppProgram;
                     _logger.LogInformation(
                         "RAIL session for {Endpoint} will launch {Program}.",
-                        _request.PipeName, _request.RemoteAppProgram);
+                        EndpointLabel, _request.RemoteAppProgram);
                 }
             }
 
-            client.OnConnected += (_, _) => _logger.LogInformation("RDP session connected for {Endpoint}.", _request.PipeName);
-            client.OnLogonError += (_, args) => _logger.LogWarning("RDP logon error {Error} for {Endpoint}.", args.lError, _request.PipeName);
+            client.OnConnected += (_, _) =>
+            {
+                _logger.LogInformation("RDP session connected for {Endpoint}.", EndpointLabel);
+                RdpEventLog.Write("Connected", EndpointLabel);
+            };
+            client.OnLogonError += (_, args) =>
+            {
+                // Arbitration codes (-2..-7) are logon progress events, not
+                // errors: -2 (ARBITRATION_CODE_CONTINUE_LOGON) fires on every
+                // normal logon. Only genuine failures deserve a warning.
+                if (args.lError is >= -7 and <= -2)
+                {
+                    _logger.LogInformation("RDP logon arbitration code {Code} for {Endpoint}.", args.lError, EndpointLabel);
+                }
+                else
+                {
+                    _logger.LogWarning("RDP logon error {Error} for {Endpoint}.", args.lError, EndpointLabel);
+                    RdpEventLog.Write("LogonError", $"code {args.lError} at {EndpointLabel}");
+                }
+            };
             client.OnDisconnected += (_, args) =>
             {
-                _logger.LogInformation("RDP session disconnected (reason {Reason}) for {Endpoint}.", args.discReason, _request.PipeName);
+                _logger.LogInformation("RDP session disconnected (reason {Reason}) for {Endpoint}.", args.discReason, EndpointLabel);
+                RdpEventLog.Write("Disconnected", $"reason {args.discReason} at {EndpointLabel}");
                 ShowDisconnectedOverlay(
                     "Connection disconnected",
                     "The connection to the sandbox has been disconnected.",
@@ -178,15 +230,36 @@ internal sealed class RdpHostForm : Form
             };
             client.OnFatalError += (_, args) =>
             {
-                _logger.LogError("RDP session fatal error {Error} for {Endpoint}.", args.errorCode, _request.PipeName);
+                _logger.LogError("RDP session fatal error {Error} for {Endpoint}.", args.errorCode, EndpointLabel);
+                RdpEventLog.Write("FatalError", $"code {args.errorCode} at {EndpointLabel}");
                 ShowDisconnectedOverlay(
                     "Connection lost",
                     "The connection to the sandbox was lost because of a fatal error.",
                     $"Error code {args.errorCode}.");
             };
 
-            client.AdvancedSettings9.set_ConnectWithEndpoint(ref endpoint);
-            client.Connect();
+            if (useTcp)
+            {
+                client.Server = _request.ServerAddress!;
+                advanced.RDPPort = _request.ServerPort;
+            }
+            else
+            {
+                var endpointObject = endpoint!;
+                client.AdvancedSettings9.set_ConnectWithEndpoint(ref endpointObject);
+            }
+
+            // Serialized: mstscax is not safe for concurrent Connect calls
+            // within one process (see ConnectGate).
+            await ConnectGate.WaitAsync(_closeCts.Token).ConfigureAwait(true);
+            try
+            {
+                client.Connect();
+            }
+            finally
+            {
+                ConnectGate.Release();
+            }
         }
         catch (Exception ex)
         {
@@ -195,6 +268,11 @@ internal sealed class RdpHostForm : Form
             Close();
         }
     }
+
+    /// <summary>Human-readable session endpoint: the TCP address over TCP, else the pipe.</summary>
+    private string EndpointLabel => !string.IsNullOrWhiteSpace(_request.ServerAddress)
+        ? $"{_request.ServerAddress}:{_request.ServerPort}"
+        : _request.PipeName;
 
     private static void SetExtended(IMsRdpExtendedSettings settings, string name, object value)
     {

@@ -15,6 +15,7 @@
     <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Json.Sandbox\Wsm.Hcs.Json.Sandbox.csproj" />
     <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Storage\Wsm.Hcs.Storage.csproj" />
     <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Checkpoint\Wsm.Hcs.Checkpoint.csproj" />
+    <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Network\Wsm.Hcs.Network.csproj" />
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
   </ItemGroup>
 

@@ -97,6 +97,9 @@ public sealed class CliApplication
                 case "host":
                     return await HostAsync(positional, options);
 
+                case "multiconnect":
+                    return await MultiConnectAsync(positional, options);
+
                 case "stop":
                     return await StopAsync(positional, options);
 
@@ -334,6 +337,83 @@ public sealed class CliApplication
         return 0;
     }
 
+    /// <summary>
+    /// Diagnostic verb (not part of the supported command surface): starts and
+    /// connects several sandboxes from this single process, mirroring how the
+    /// GUI hosts every session in its own process. Each chain is
+    /// start-then-auto-connect, exactly like the GUI's primary action. The
+    /// process holds for a while so session events (connect/disconnect) can be
+    /// observed in <c>rdp-events.log</c> and via <c>qwinsta</c>.
+    /// </summary>
+    private async Task<int> MultiConnectAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        if (positional.Count < 2)
+        {
+            Console.Error.WriteLine("Usage: wsm multiconnect <id> <id> [<id>...] [--stagger] [--hold <seconds>]");
+            return 2;
+        }
+
+        var stagger = options.ContainsKey("stagger");
+        var holdSeconds = int.TryParse(options.GetValueOrDefault("hold"), out var h) ? h : 120;
+
+        var ids = positional.Select(Guid.Parse).ToArray();
+        if (stagger)
+        {
+            // Sequential chains: start and connect one sandbox at a time, letting
+            // each logon settle before the next begins.
+            foreach (var id in ids)
+            {
+                try
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] starting {id}");
+                    var dto = await _manager.StartAsync(id, SandboxConnectionMode.FullDesktop);
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] started {dto.Name} (state={dto.State}); auto-connecting");
+                    var connect = _manager.ConnectAsync(id, SandboxConnectionMode.FullDesktop);
+                    _ = connect.ContinueWith(
+                        t => Console.Error.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] session for {dto.Name} ended: {(t.IsFaulted ? t.Exception!.GetBaseException().Message : "window closed")}"),
+                        TaskContinuationOptions.ExecuteSynchronously);
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] letting the logon settle for 45s");
+                    await Task.Delay(TimeSpan.FromSeconds(45));
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] chain for {id} failed: {ex.GetBaseException().Message}");
+                }
+            }
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] holding {holdSeconds}s");
+            await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] closing all sessions");
+            _sessionLauncher.CloseAll();
+            return 0;
+        }
+
+        var chains = ids
+            .Select(id => Task.Run(async () =>
+            {
+                try
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] starting {id}");
+                    var dto = await _manager.StartAsync(id, SandboxConnectionMode.FullDesktop);
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] started {dto.Name} (state={dto.State}); auto-connecting");
+                    await _manager.ConnectAsync(id, SandboxConnectionMode.FullDesktop);
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] session window for {dto.Name} closed");
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] chain for {id} failed: {ex.GetBaseException().Message}");
+                }
+            }))
+            .ToArray();
+
+        // Hold while the session windows live, like the GUI does.
+        await Task.Delay(TimeSpan.FromSeconds(holdSeconds));
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] closing all sessions");
+        _sessionLauncher.CloseAll();
+        await Task.WhenAll(chains);
+        return 0;
+    }
+
     private async Task<int> ExecAsync(List<string> positional, Dictionary<string, string?> options)
     {
         if (positional.Count < 2)
@@ -343,7 +423,10 @@ public sealed class CliApplication
         }
 
         var id = Guid.Parse(positional[0]);
-        var command = string.Join(' ', positional.Skip(1));
+        // The guest receives the joined text as a raw command line, so tokens
+        // containing spaces (e.g. "HKLM\...\Terminal Server") must be re-quoted:
+        // argv parsing consumed the original quotes before they reached us.
+        var command = string.Join(' ', positional.Skip(1).Select(QuoteIfNeeded));
 
         return await WithServiceAsync(
             options,
@@ -360,6 +443,8 @@ public sealed class CliApplication
                 return exitCode;
             });
     }
+
+    private static string QuoteIfNeeded(string arg) => arg.Contains(' ') ? $"\"{arg}\"" : arg;
 
     private async Task<int> ShareAsync(List<string> positional, Dictionary<string, string?> options)
     {

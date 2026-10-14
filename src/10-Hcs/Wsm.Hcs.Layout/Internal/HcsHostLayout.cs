@@ -88,6 +88,7 @@ internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
                     ParentId = Guid.TryParse(sub?.GetValue("ParentId") as string, out var parent) ? parent : Guid.Empty,
                     SequenceNumber = ToInt(sub?.GetValue("SequenceNumber")),
                     State = ToInt(sub?.GetValue("State")),
+                    StorageId = Guid.TryParse(sub?.GetValue("StorageId") as string, out var storageId) ? storageId : null,
                 });
             }
         }

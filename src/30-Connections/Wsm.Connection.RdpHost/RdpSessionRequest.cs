@@ -18,6 +18,18 @@ public sealed record RdpSessionRequest
     public required string PipeName { get; init; }
 
     /// <summary>
+    /// The guest's TCP address (IPv4) to connect to instead of the named pipe.
+    /// When set, the control connects over ordinary TCP RDP and the RDPBASE
+    /// endpoint is never acquired. TCP is the multi-session-safe transport:
+    /// the named pipe arbitrates a single interactive session across all
+    /// sandboxes on the host.
+    /// </summary>
+    public string? ServerAddress { get; init; }
+
+    /// <summary>The TCP port to use with <see cref="ServerAddress"/>.</summary>
+    public int ServerPort { get; init; } = 3389;
+
+    /// <summary>
     /// The compute system / VM id. Drives the named-pipe transport's
     /// <c>HiDefRemoteAppContainerGUID</c> routing on the control.
     /// </summary>

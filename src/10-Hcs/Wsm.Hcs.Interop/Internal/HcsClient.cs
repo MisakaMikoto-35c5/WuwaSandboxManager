@@ -1,26 +1,31 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.Exceptions;
 
 namespace Wsm.Hcs.Interop.Internal;
 
-/// <summary>RAII wrapper around an <c>HCS_SYSTEM</c> handle.</summary>
-internal sealed class HcsComputeSystem : IDisposable
+/// <summary>
+/// RAII wrapper around an <c>HCS_SYSTEM</c> handle. Implemented as a
+/// <see cref="SafeHandle"/> so the critical finalizer closes the handle even
+/// when <see cref="IDisposable.Dispose"/> is never called, and so a double
+/// dispose can never close an already-recycled handle value.
+/// </summary>
+internal sealed class HcsComputeSystem : SafeHandleZeroOrMinusOneIsInvalid
 {
-    internal HcsComputeSystem(IntPtr handle) => Handle = handle;
+    internal HcsComputeSystem(IntPtr handle)
+        : base(ownsHandle: true)
+        => SetHandle(handle);
 
-    internal IntPtr Handle { get; }
+    /// <summary>The raw <c>HCS_SYSTEM</c> handle value.</summary>
+    internal IntPtr Handle => DangerousGetHandle();
 
-    public bool IsInvalid => Handle == IntPtr.Zero;
-
-    public void Dispose()
+    protected override bool ReleaseHandle()
     {
-        if (Handle != IntPtr.Zero)
-        {
-            HcsNative.HcsCloseComputeSystem(Handle);
-        }
+        HcsNative.HcsCloseComputeSystem(handle);
+        return true;
     }
 }
 
@@ -139,12 +144,12 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         operation.Complete(hr, nameof(HcsNative.HcsStartComputeSystem));
     }
 
-    public void Shutdown(string id)
+    public void Shutdown(string id, uint timeoutMs = 45_000)
     {
         using var system = OpenHandle(id);
         using var operation = new HcsOperation();
         var hr = HcsNative.HcsShutDownComputeSystem(system.Handle, operation.Handle, "{}");
-        operation.Complete(hr, nameof(HcsNative.HcsShutDownComputeSystem));
+        operation.Complete(hr, nameof(HcsNative.HcsShutDownComputeSystem), timeoutMs);
     }
 
     public void Terminate(string id)

@@ -28,7 +28,13 @@ public interface IHcsClient
 
     void Start(string id);
 
-    void Shutdown(string id);
+    /// <summary>
+    /// Asks the compute system to shut down gracefully (ACPI). The wait for the
+    /// shutdown operation is bounded by <paramref name="timeoutMs"/>; on timeout
+    /// an <c>HCS_E_OPERATION_TIMEOUT</c> exception is thrown and the caller is
+    /// expected to escalate (poll, then terminate).
+    /// </summary>
+    void Shutdown(string id, uint timeoutMs = 45_000);
 
     void Terminate(string id);
 

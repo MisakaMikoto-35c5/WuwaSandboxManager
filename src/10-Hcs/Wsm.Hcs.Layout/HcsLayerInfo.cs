@@ -17,6 +17,14 @@ public sealed record HcsLayerInfo
 
     public int State { get; init; }
 
+    /// <summary>
+    /// The layer's on-disk storage id (registry <c>StorageId</c> value): the
+    /// layer's writable storage lives at
+    /// <c>ContainerStorages\&lt;StorageId&gt;\sandbox.vhdx</c>, and the platform's
+    /// prepared base image is registered as a differencing child of that disk.
+    /// </summary>
+    public Guid? StorageId { get; init; }
+
     /// <summary>The layer's OS filesystem root (<c>&lt;Path&gt;\Files</c>).</summary>
     public string FilesPath => System.IO.Path.Combine(Path, "Files");
 

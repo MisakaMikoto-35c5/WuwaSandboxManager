@@ -73,7 +73,25 @@ public sealed class SessionLauncherTests
     }
 
     [Fact]
-    public async Task Throws_when_the_transport_is_not_a_named_pipe()
+    public async Task A_tcp_runtime_with_an_address_is_presented_over_tcp()
+    {
+        var runtime = Runtime() with
+        {
+            Transport = RdpTransportKind.Tcp,
+            IpAddress = "172.21.80.101",
+            IpAddresses = ["172.21.80.101"],
+        };
+        var host = new FakeRdpHost();
+
+        await Launcher(host).LaunchAsync(runtime.SandboxId, runtime, SandboxConnectionMode.FullDesktop, SandboxEngineKind.HcsSandbox);
+
+        var request = Assert.Single(host.Requests);
+        Assert.Equal("172.21.80.101", request.ServerAddress);
+        Assert.Equal(3389, request.ServerPort);
+    }
+
+    [Fact]
+    public async Task Throws_when_a_tcp_runtime_has_no_address()
     {
         var runtime = Runtime() with { Transport = RdpTransportKind.Tcp };
         var host = new FakeRdpHost();
@@ -101,10 +119,14 @@ public sealed class SessionLauncherTests
     {
         public List<RdpSessionRequest> Requests { get; } = new();
 
+        public int CloseAllCalls { get; private set; }
+
         public Task ShowAsync(RdpSessionRequest request, CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
             return Task.CompletedTask;
         }
+
+        public void CloseAll() => CloseAllCalls++;
     }
 }

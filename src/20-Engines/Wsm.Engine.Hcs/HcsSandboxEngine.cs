@@ -10,6 +10,7 @@ using Wsm.Hcs.Checkpoint;
 using Wsm.Hcs.Interop;
 using Wsm.Hcs.Json.Sandbox;
 using Wsm.Hcs.Layout;
+using Wsm.Hcs.Network;
 using Wsm.Hcs.Storage;
 using Wsm.Host.Elevation;
 
@@ -40,6 +41,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     private readonly ISandboxVmJsonBuilder _json;
     private readonly ISandboxStorageProvisioner _storage;
     private readonly ICheckpointService _checkpoints;
+    private readonly IHnsNetworkService _network;
     private readonly IElevationService _elevation;
     private readonly ILogger<HcsSandboxEngine> _logger;
 
@@ -66,6 +68,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         ISandboxVmJsonBuilder json,
         ISandboxStorageProvisioner storage,
         ICheckpointService checkpoints,
+        IHnsNetworkService network,
         IElevationService elevation,
         ILogger<HcsSandboxEngine> logger)
     {
@@ -74,6 +77,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         _json = json;
         _storage = storage;
         _checkpoints = checkpoints;
+        _network = network;
         _elevation = elevation;
         _logger = logger;
     }
@@ -117,6 +121,16 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         var id = request.Id;
         var recipe = request.Recipe;
 
+        // TCP RDP rides the guest NIC: without networking there is nothing to
+        // connect to. Reject the contradictory configuration before anything
+        // (storage, endpoint, compute system) is created.
+        if (recipe.Transport == RdpTransportKind.Tcp && recipe.Networking == NetworkingMode.Disabled)
+        {
+            throw new SandboxValidationException(
+                "The TCP RDP transport requires networking: set Networking to Enabled/Default, " +
+                "or switch the sandbox back to the named-pipe transport.");
+        }
+
         var baseLayer = _layout.ResolveBaseLayerPath()
             ?? throw new SandboxNotSupportedException(
                 "No usable base OS image layer was found under " +
@@ -140,6 +154,15 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
                 ex);
         }
 
+        // Attach an HNS endpoint at creation time so the guest boots with a NIC:
+        // hot-adding a network adapter to a running utility VM is rejected by
+        // HCS (0x80070057). A system that is already running (to be adopted)
+        // carries its own endpoint; touching HNS for it here could detach the
+        // NIC from under the live VM, so it is left alone.
+        var endpointId = IsRunning(id) || recipe.Networking == NetworkingMode.Disabled
+            ? null
+            : CreateGuestEndpoint(id);
+
         var rdpAccessSids = ResolveRdpAccessSids();
 
         var definition = new HcsSandboxDefinition
@@ -151,8 +174,8 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             DumpFilePath = EnsureDumpPlaceholder(storageDirectory, id.ToString()),
             MemoryMb = (uint)recipe.Memory.MemoryMb,
             CpuCount = recipe.Cpu.CoreCount,
-            EnableVirtualGpu = recipe.VirtualGpu != VirtualGpuMode.Disabled,
             EnableNetworking = recipe.Networking != NetworkingMode.Disabled,
+            NetworkEndpointId = endpointId,
             MappedFolders = recipe.MappedFolders
                 .Select(f => new HcsMappedFolder(f.HostFolder, f.SandboxFolder, f.ReadOnly))
                 .ToArray(),
@@ -178,6 +201,11 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         string accountUser;
         string accountPassword;
 
+        // Set when the sandbox opted into TCP and its RDP-Tcp listener answers;
+        // the runtime then reports the TCP transport instead of the named pipe.
+        // Named-pipe sandboxes never probe, so this stays null for them.
+        string? guestIp = null;
+
         if (adopted)
         {
             // The compute system was already running (typically started by another
@@ -197,6 +225,36 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             // and RDP needs the current one or the logon is refused.
             CheckGuest(id.ToString(), $"net user {accountUser} {accountPassword}");
             CheckGuest(id.ToString(), $"net user {accountUser} /active:yes");
+
+            // The adopted system was started by another process (with its own
+            // endpoint attached at creation time), so only probe, and only when
+            // the caller asked for TCP: the guest is long past boot, DHCP has
+            // settled, and the listener must already be up — restarting
+            // TermService would kick a live session.
+            if (recipe.Transport == RdpTransportKind.Tcp)
+            {
+                guestIp = EnableTcpRdp(id, waitForDhcp: false, allowListenerRestart: false);
+                if (guestIp is null)
+                {
+                    system.Dispose();
+                    throw new SandboxBackendException(
+                        $"The TCP RDP transport was requested for sandbox {id}, but the adopted " +
+                        "compute system has no reachable guest listener on 3389 (it may have been " +
+                        "started without TCP, e.g. by another process in named-pipe mode). Stop it " +
+                        "and start the sandbox again, or switch it back to the named-pipe transport.",
+                        0);
+                }
+            }
+            else if (HasStaleTcpConfig(id.ToString()))
+            {
+                // Another process owns this system's lifecycle, so the revert
+                // (which needs a TermService restart) is not safe to run here:
+                // it would kick that process's live session. Warn instead.
+                _logger.LogWarning(
+                    "Sandbox {SandboxId} has a leftover TCP RDP configuration from a previous TCP run; " +
+                    "a named-pipe session may stall against it. Stop and start the sandbox to revert it.",
+                    id);
+            }
         }
         else
         {
@@ -234,6 +292,7 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             catch (SandboxBackendException ex)
             {
                 system.Dispose();
+                DeleteGuestEndpointQuietly(id);
                 _logger.LogError(ex, "HCS rejected or failed to start compute system {SandboxId}", id);
                 throw new SandboxBackendException(
                     $"HCS rejected the configuration or failed to start sandbox {id}: {ex.Message}",
@@ -243,24 +302,81 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             catch (SandboxDomainException)
             {
                 system.Dispose();
+                DeleteGuestEndpointQuietly(id);
                 throw;
             }
             catch
             {
                 system.Dispose();
+                DeleteGuestEndpointQuietly(id);
                 throw;
             }
 
             // Mirror the platform's own guest set-up: enable the WDAGUtilityAccount
             // with a known password so the sandbox can actually be reached over RDP.
             (accountUser, accountPassword) = ProvisionGuestAccount(id, recipe);
+
+            // Open TCP RDP on the freshly attached NIC, but only when the
+            // sandbox opted into TCP: the named-pipe (EnhancedModeVideo)
+            // transport arbitrates a single interactive session across ALL
+            // sandboxes on the host, so parallel connects kick each other off,
+            // while TCP 3389 has no such global arbitration. The pipe stays the
+            // default: it is faster (VMBus, no TCP stack or ICS NAT) and needs
+            // no guest changes. A requested TCP transport that never comes up
+            // fails the start — silently staying on the pipe would surface
+            // later as exactly the session-kicking the user switched away from.
+            if (recipe.Transport == RdpTransportKind.Tcp)
+            {
+                try
+                {
+                    guestIp = endpointId is null
+                        ? null
+                        : EnableTcpRdp(id, waitForDhcp: true, allowListenerRestart: true);
+                }
+                catch
+                {
+                    StopFailedTcpStart(id, system);
+                    throw;
+                }
+
+                if (guestIp is null)
+                {
+                    StopFailedTcpStart(id, system);
+                    throw new SandboxBackendException(
+                        $"The TCP RDP transport was requested for sandbox {id}, but the guest " +
+                        "listener on 3389 never came up (see the warnings for the failing stage: " +
+                        "endpoint, DHCP or listener). Retry, or switch the sandbox back to the " +
+                        "named-pipe transport.",
+                        0);
+                }
+            }
+            else
+            {
+                // Pipe mode on a guest that once ran TCP: the leftover
+                // container-mode flip (it persists on the user-data disk) lets
+                // a pipe session connect but stalls it at Conn. Revert it — a
+                // guest that dies mid-revert gets the same cleanup as the TCP
+                // branch (a stale config stalls pipe sessions, so failing the
+                // start beats booting into the stall).
+                try
+                {
+                    RevertStaleTcpConfig(id);
+                }
+                catch
+                {
+                    StopFailedTcpStart(id, system);
+                    throw;
+                }
+            }
         }
 
         var runtime = new SandboxRuntimeInfo
         {
             SandboxId = id,
             VmId = id.Value,
-            Transport = RdpTransportKind.NamedPipe,
+            Transport = guestIp is not null ? RdpTransportKind.Tcp : RdpTransportKind.NamedPipe,
+            IpAddress = guestIp ?? string.Empty,
+            IpAddresses = guestIp is not null ? [guestIp] : Array.Empty<string>(),
             RailMode = recipe.RailMode,
             RailProgram = recipe.ResolvedRailProgram,
             FullScreen = recipe.FullScreen,
@@ -452,6 +568,312 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     }
 
     /// <summary>
+    /// Endpoint names are deterministic, so <see cref="StopAsync"/> (and a
+    /// later process cleaning up) can find the endpoint without any state.
+    /// </summary>
+    private static string GuestEndpointName(SandboxInstanceId id) => $"wsm-{id.Value:N}";
+
+    /// <summary>Best-effort endpoint cleanup; a name that matches nothing is a no-op.</summary>
+    private void DeleteGuestEndpointQuietly(SandboxInstanceId id)
+    {
+        try
+        {
+            _network.DeleteEndpointByNameAsync(GuestEndpointName(id)).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Deleting the HNS endpoint of {SandboxId} failed (continuing).", id);
+        }
+    }
+
+    /// <summary>
+    /// Cleans up a fresh system whose requested TCP transport never came up (or
+    /// whose setup threw). The guest already booted, so dropping the handle
+    /// alone would not reliably stop it (ShouldTerminateOnLastHandleClosed is
+    /// not honoured — the same reason <see cref="StopAsync"/> does explicit
+    /// shutdown), and deleting the endpoint first would detach the NIC from
+    /// under the live VM. Runs the same deterministic stop, then releases the
+    /// handle, then removes the endpoint. Never throws: the original failure
+    /// is what the caller propagates.
+    /// </summary>
+    private void StopFailedTcpStart(SandboxInstanceId id, IDisposable system)
+    {
+        var key = id.ToString();
+        try
+        {
+            StopComputeSystem(key, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Stopping the failed TCP start of {SandboxId} failed (continuing).", key);
+        }
+
+        try
+        {
+            system.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Releasing the compute-system handle of {SandboxId} failed (continuing).", key);
+        }
+
+        DeleteGuestEndpointQuietly(id);
+    }
+
+    /// <summary>
+    /// Creates the HNS NAT endpoint the sandbox boots with and returns its id.
+    /// Prefers an existing NAT/ICS network (the Hyper-V "Default Switch"); the
+    /// <c>wsm-nat</c> network is created when the host has none. A stale
+    /// endpoint left behind by an instance that stopped uncleanly is removed
+    /// first (names are deterministic). Best effort: on failure the sandbox
+    /// boots without a NIC — acceptable for the named-pipe transport, while a
+    /// TCP-transport caller turns the null into a start failure.
+    /// </summary>
+    private string? CreateGuestEndpoint(SandboxInstanceId id)
+    {
+        var name = GuestEndpointName(id);
+        try
+        {
+            var networkId = _network.GetOrCreateNatNetworkIdAsync().GetAwaiter().GetResult();
+            _network.DeleteEndpointByNameAsync(name).GetAwaiter().GetResult();
+            var endpointId = _network.CreateNatEndpointAsync(networkId, name).GetAwaiter().GetResult();
+            _logger.LogInformation(
+                "Created HNS endpoint {EndpointName} ({EndpointId}) on network {NetworkId} for sandbox {SandboxId}.",
+                name, endpointId, networkId, id);
+            return endpointId;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to create an HNS endpoint for sandbox {SandboxId}; it will run without a NIC (pipe-only, single-session RDP).",
+                id);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Turns the guest's RDP-Tcp listener into a usable TCP endpoint: finds the
+    /// guest IPv4 address (waiting for ICS DHCP when the VM just booted),
+    /// switches the guest's RDP stack out of container mode (container mode
+    /// only ever instantiates the hvsocket listener — RDP-Tcp is silently
+    /// skipped), disables NLA (the WSM RDP client has no CredSSP support) and
+    /// opens the firewall for 3389. The container-mode flip only takes effect
+    /// on a TermService (re)start, so when the listener has not bound 3389 the
+    /// service is restarted — but only on a fresh boot
+    /// (<paramref name="allowListenerRestart"/>); on an adopted system that
+    /// would kick the live session (there the flip still applies at the next
+    /// boot; the guest registry persists on the user-data disk). Only invoked
+    /// when the sandbox opted into TCP. Returns the guest IP, or null when TCP
+    /// RDP is not reachable (the caller then fails the start).
+    /// </summary>
+    private string? EnableTcpRdp(SandboxInstanceId id, bool waitForDhcp, bool allowListenerRestart)
+    {
+        var key = id.ToString();
+        var ip = DiscoverGuestIp(key, waitForDhcp);
+        if (ip is null)
+        {
+            _logger.LogWarning(
+                "Sandbox {SandboxId} has a NIC but no guest IPv4 address could be discovered; the requested TCP transport is unavailable and the start will fail.",
+                id);
+            return null;
+        }
+
+        CheckGuest(
+            key,
+            "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v ContainerMode /t REG_DWORD /d 0 /f");
+        // Standard RDP security, not TLS: the mstscax connector is used without
+        // CredSSP, and its early TLS negotiation against this container termsrv
+        // dies before the handshake (client never reaches the username-hash
+        // step). The pipe transport negotiates the same standard security.
+        CheckGuest(
+            key,
+            "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp\" " +
+            "/v SecurityLayer /t REG_DWORD /d 0 /f");
+        CheckGuest(
+            key,
+            "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp\" " +
+            "/v UserAuthentication /t REG_DWORD /d 0 /f");
+        CheckGuest(key, "netsh advfirewall firewall delete rule name=WsmRdp3389");
+        CheckGuest(key, "netsh advfirewall firewall add rule name=WsmRdp3389 protocol=TCP dir=in localport=3389 action=allow");
+
+        if (!IsTcpListenerUp(key) && allowListenerRestart)
+        {
+            _logger.LogInformation(
+                "The guest RDP-Tcp listener in sandbox {SandboxId} has not bound 3389; restarting TermService (container-mode flip needs it).",
+                id);
+            CheckGuest(key, "net stop termservice /y");
+            Thread.Sleep(TermServiceStopSettle);
+            CheckGuest(key, "net start termservice");
+            Thread.Sleep(TermServiceStartSettle);
+        }
+
+        if (!IsTcpListenerUp(key))
+        {
+            _logger.LogWarning(
+                "The guest RDP-Tcp listener on 3389 is not up in sandbox {SandboxId}; the requested TCP transport is unavailable and the start will fail.",
+                id);
+            return null;
+        }
+
+        _logger.LogInformation("Sandbox {SandboxId} accepts TCP RDP at {GuestIp}:3389.", id, ip);
+        return ip;
+    }
+
+    /// <summary>
+    /// True when the guest still carries a TCP RDP configuration from a previous
+    /// TCP run (ContainerMode=0): the registry persists on the user-data disk.
+    /// A guest in that state lets a named-pipe session connect but never
+    /// complete its logon — the hvsocket listener and the full RDP stack
+    /// coexist and the session stalls at Conn. Read-only; a probe failure is
+    /// treated as "no leftover" so a pipe start is never blocked by a hiccup.
+    /// </summary>
+    private bool HasStaleTcpConfig(string key)
+    {
+        try
+        {
+            var query = _hcs.RunProcess(
+                key,
+                @"reg query ""HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server"" /v ContainerMode");
+            return query.ExitCode == 0 &&
+                query.StandardOutput.Contains("0x0", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Checking {SandboxId} for a leftover TCP configuration failed; assuming none.", key);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Reverts a stale guest TCP configuration (see <see cref="HasStaleTcpConfig"/>)
+    /// so the named-pipe session can initialize again: back to container mode,
+    /// the 3389 firewall rule dropped, and TermService restarted (the
+    /// container-mode flip only takes effect on a service restart). Called on
+    /// fresh starts in pipe mode; clean guests pay a single registry query.
+    /// </summary>
+    private void RevertStaleTcpConfig(SandboxInstanceId id)
+    {
+        var key = id.ToString();
+        if (!HasStaleTcpConfig(key))
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "Sandbox {SandboxId} has a leftover TCP RDP configuration from a previous TCP run; reverting it to container mode so the named-pipe session can initialize.",
+            id);
+        CheckGuest(
+            key,
+            "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v ContainerMode /t REG_DWORD /d 1 /f");
+        CheckGuest(key, "netsh advfirewall firewall delete rule name=WsmRdp3389");
+        CheckGuest(key, "net stop termservice /y");
+        Thread.Sleep(TermServiceStopSettle);
+        CheckGuest(key, "net start termservice");
+        Thread.Sleep(TermServiceStartSettle);
+    }
+
+    /// <summary>
+    /// One-shot TCP probe for systems this process did not start (a separate
+    /// <c>wsm connect</c>, the app after a restart): returns the guest IP when
+    /// its RDP-Tcp listener answers, null otherwise. Read-only — it never
+    /// touches the guest configuration.
+    /// </summary>
+    private string? ProbeTcpTransport(SandboxInstanceId id)
+    {
+        var key = id.ToString();
+        try
+        {
+            var ip = DiscoverGuestIp(key, waitForDhcp: false);
+            return ip is not null && IsTcpListenerUp(key) ? ip : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Probing the TCP transport of {SandboxId} failed; assuming named pipe.", id);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads the guest IPv4 address off <c>ipconfig</c>. An APIPA address
+    /// (169.254.*) means DHCP has not answered yet and is not accepted; with
+    /// <paramref name="waitForDhcp"/> the read is retried until
+    /// <see cref="DhcpWaitTimeout"/> elapses.
+    /// </summary>
+    private string? DiscoverGuestIp(string key, bool waitForDhcp)
+    {
+        var deadline = DateTime.UtcNow + (waitForDhcp ? DhcpWaitTimeout : TimeSpan.Zero);
+
+        while (true)
+        {
+            string output;
+            try
+            {
+                output = _hcs.RunProcess(key, "cmd.exe /c ipconfig").StandardOutput;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Reading the guest IP configuration of {SandboxId} failed.", key);
+                output = string.Empty;
+            }
+
+            var ip = ParseGuestIpv4(output);
+            if (ip is not null || DateTime.UtcNow >= deadline)
+            {
+                return ip;
+            }
+
+            Thread.Sleep(DhcpPollInterval);
+        }
+    }
+
+    private static string? ParseGuestIpv4(string ipconfigOutput)
+    {
+        foreach (var line in ipconfigOutput.Split('\n'))
+        {
+            if (!line.Contains("IPv4", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var colon = line.LastIndexOf(':');
+            if (colon < 0)
+            {
+                continue;
+            }
+
+            var candidate = line[(colon + 1)..].Trim();
+            if (candidate.StartsWith("169.254.", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (System.Net.IPAddress.TryParse(candidate, out var address) &&
+                address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private bool IsTcpListenerUp(string key)
+    {
+        try
+        {
+            var output = _hcs.RunProcess(key, "cmd.exe /c netstat -ano -p tcp").StandardOutput;
+            return output.Split('\n').Any(line =>
+                line.Contains(":3389") && line.Contains("LISTENING", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Reading the guest listeners of {SandboxId} failed.", key);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Waits until the guest accepts process creation. The compute system reports
     /// "started" before the guest OS is ready to run commands, so the platform's
     /// <c>net user</c> set-up is retried until it succeeds.
@@ -554,36 +976,167 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         }
     }
 
-    public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+    // Stop/delete timing budgets. Mutable internally so tests can shrink them;
+    // production uses the defaults.
+    internal TimeSpan ShutdownWaitTimeout { get; set; } = TimeSpan.FromSeconds(45);
+
+    internal TimeSpan StoppedPollTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    internal TimeSpan TerminatedPollTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    internal TimeSpan StoppedPollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    internal int DeleteMaxAttempts { get; set; } = 5;
+
+    internal TimeSpan DeleteRetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    // Guest DHCP discovery timing budgets. Mutable internally so tests can
+    // shrink them; production uses the defaults.
+    internal TimeSpan DhcpWaitTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    internal TimeSpan DhcpPollInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>Settle delays around a TermService stop/start (the container-mode flip needs it).</summary>
+    internal TimeSpan TermServiceStopSettle { get; set; } = TimeSpan.FromSeconds(2);
+
+    internal TimeSpan TermServiceStartSettle { get; set; } = TimeSpan.FromSeconds(3);
+
+    public async Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
     {
         EnsureElevated();
         var key = id.ToString();
 
-        // Disposing the held HCS_SYSTEM handle closes the last handle to the
-        // compute system; with ShouldTerminateOnLastHandleClosed=true that
-        // terminates it. Fall back to an explicit terminate for systems this
-        // engine did not create in this process.
-        if (_systems.TryRemove(key, out var live))
-        {
-            live.Handle.Dispose();
+        // Take the held handle out of the registry up front; it is disposed only
+        // AFTER the compute system is gone. Teardown is driven by the
+        // shutdown/terminate calls below, not by handle counting: the JSON
+        // ShouldTerminateOnLastHandleClosed flag is not honoured reliably, so
+        // dropping the handle alone used to leave the VM (and its file locks)
+        // alive indefinitely.
+        _systems.TryRemove(key, out var live);
 
-            // An adopted system is also held by whoever started it, so releasing
-            // our handle alone does not terminate it: stop it explicitly.
-            if (live.Adopted)
-            {
-                _hcs.Terminate(key);
-            }
+        try
+        {
+            await Task.Run(() => StopComputeSystem(key, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
-        else
+        finally
+        {
+            if (live is not null)
+            {
+                try
+                {
+                    live.Handle.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Releasing the compute-system handle for {SandboxId} failed.", key);
+                }
+            }
+
+            // A checkpoint-restored system holds its handle in the checkpoint
+            // service; release it so the system can terminate.
+            _checkpoints.Release(key);
+
+            // HNS endpoints outlive their compute system. The VM is gone by
+            // now (the stop sequence above only returns once it is), so the
+            // endpoint is detached and safe to remove.
+            DeleteGuestEndpointQuietly(id);
+        }
+    }
+
+    /// <summary>
+    /// Deterministically stops the compute system: graceful ACPI shutdown first,
+    /// a bounded poll for the system to disappear, then an explicit terminate
+    /// when the graceful path stalls. Returns only when the system is gone (or
+    /// every escalation has been exhausted), so a caller that deletes the
+    /// storage next does not race vmwp's file handles. Works the same for
+    /// systems this process created and for adopted/foreign ones.
+    /// </summary>
+    private void StopComputeSystem(string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            _hcs.Shutdown(key, (uint)ShutdownWaitTimeout.TotalMilliseconds);
+        }
+        catch (SandboxNotFoundException)
+        {
+            return; // Already gone.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Graceful shutdown of {SandboxId} could not be requested; escalating.", key);
+        }
+
+        if (WaitUntilGone(key, StoppedPollTimeout, cancellationToken))
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "Sandbox {SandboxId} did not stop within {TimeoutSeconds}s of the shutdown request; terminating it.",
+            key, StoppedPollTimeout.TotalSeconds);
+
+        try
         {
             _hcs.Terminate(key);
         }
+        catch (SandboxNotFoundException)
+        {
+            // The system vanished between the last poll and the terminate call.
+            return;
+        }
 
-        // A checkpoint-restored system holds its handle in the checkpoint
-        // service; release it so the system can terminate.
-        _checkpoints.Release(key);
+        if (!WaitUntilGone(key, TerminatedPollTimeout, cancellationToken))
+        {
+            _logger.LogWarning(
+                "Sandbox {SandboxId} is still present {TimeoutSeconds}s after Terminate; its storage files may still be locked.",
+                key, TerminatedPollTimeout.TotalSeconds);
+        }
+    }
 
-        return Task.CompletedTask;
+    /// <summary>
+    /// Polls until the compute system is gone (or reports <c>Stopped</c>), the
+    /// timeout elapses, or the caller cancels. A query failure is treated as
+    /// "still there" so a transient HCS hiccup does not skip the terminate
+    /// escalation.
+    /// </summary>
+    private bool WaitUntilGone(string key, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            HcsComputeSystemInfo? info;
+            var queryFailed = false;
+            try
+            {
+                info = _hcs.Get(key);
+            }
+            catch (SandboxNotFoundException)
+            {
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Querying the state of {SandboxId} failed; assuming it is still present.", key);
+                info = null;
+                queryFailed = true;
+            }
+
+            if (!queryFailed &&
+                (info is null || string.Equals(info.State, "Stopped", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                return false;
+            }
+
+            Thread.Sleep(StoppedPollInterval);
+        }
     }
 
     public Task<SandboxRuntimeInfo?> GetRuntimeAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
@@ -604,11 +1157,19 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             return Task.FromResult<SandboxRuntimeInfo?>(null);
         }
 
+        // `connect` reaches the runtime only through here (it never calls
+        // StartAsync in this process), so the TCP transport the starting
+        // process set up must be re-probed: when the guest's RDP-Tcp listener
+        // answers, prefer it over the globally arbitrated named pipe.
+        var guestIp = ProbeTcpTransport(id);
+
         return Task.FromResult<SandboxRuntimeInfo?>(new SandboxRuntimeInfo
         {
             SandboxId = id,
             VmId = id.Value,
-            Transport = RdpTransportKind.NamedPipe,
+            Transport = guestIp is not null ? RdpTransportKind.Tcp : RdpTransportKind.NamedPipe,
+            IpAddress = guestIp ?? string.Empty,
+            IpAddresses = guestIp is not null ? [guestIp] : Array.Empty<string>(),
 
             // A connecting process that did not start the sandbox (a separate CLI
             // `connect`, the app after a restart) still needs the credential, or the
@@ -621,17 +1182,65 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
 
     /// <summary>
     /// Reclaims the instance's on-disk footprint: the storage directory (the
-    /// ~874 MB base copy, the differencing child, the VMGS and the crash-dump
-    /// placeholder) and its snapshots directory. Both are best-effort: a partial
-    /// failure is logged, never thrown, so the caller's delete still completes.
-    /// The instance is expected to be stopped (the storage is in use otherwise).
+    /// differencing child, the VMGS and the crash-dump placeholder) and its
+    /// snapshots directory. The instance is expected to be stopped (the storage
+    /// is in use otherwise); <see cref="StopAsync"/> only returns once the
+    /// compute system is gone, so by this point vmwp has released its handles.
+    /// <para>
+    /// The storage delete retries on lock/IO errors (teardown is asynchronous
+    /// and the last handle release can lag the state change) and, when the
+    /// directory still cannot be removed, throws a
+    /// <see cref="SandboxBackendException"/> so the failure reaches the caller
+    /// instead of leaving a half-deleted sandbox behind silently. The snapshots
+    /// directory under the platform tree stays best-effort.
+    /// </para>
     /// </summary>
-    public Task DeleteDataAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+    public async Task DeleteDataAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
     {
         var key = id.ToString();
-        DeleteDirectoryQuietly(_layout.GetStorageDirectory(key), key, "storage");
+
+        await Task.Run(
+            () => DeleteStorageWithRetry(_layout.GetStorageDirectory(key), key, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+
         DeleteDirectoryQuietly(Path.Combine(_layout.SnapshotsFolder, key), key, "snapshots");
-        return Task.CompletedTask;
+    }
+
+    private void DeleteStorageWithRetry(string directory, string id, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!Directory.Exists(directory))
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+                _logger.LogInformation("Deleted storage directory '{Directory}' for sandbox {SandboxId}.", directory, id);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= DeleteMaxAttempts)
+                {
+                    throw new SandboxBackendException(
+                        $"Failed to delete the storage directory '{directory}' for sandbox {id} " +
+                        $"after {attempt} attempts; a file in it is still in use. {ex.Message}",
+                        ex.HResult,
+                        ex);
+                }
+
+                _logger.LogDebug(
+                    ex,
+                    "Deleting storage directory '{Directory}' for sandbox {SandboxId} failed (attempt {Attempt}/{MaxAttempts}); retrying.",
+                    directory, id, attempt, DeleteMaxAttempts);
+                Thread.Sleep(DeleteRetryDelay);
+            }
+        }
     }
 
     private void DeleteDirectoryQuietly(string directory, string id, string kind)

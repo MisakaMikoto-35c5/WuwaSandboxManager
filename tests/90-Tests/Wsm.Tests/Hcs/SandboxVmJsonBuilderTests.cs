@@ -22,7 +22,6 @@ public sealed class SandboxVmJsonBuilderTests
         GuestStatePath = @"E:\userdata\sandbox.vmgs",
         MemoryMb = 8192,
         CpuCount = 12,
-        EnableVirtualGpu = true,
         MappedFolders = new[] { new HcsMappedFolder(@"C:\data", @"C:\share", ReadOnly: true) },
     };
 
@@ -91,12 +90,19 @@ public sealed class SandboxVmJsonBuilderTests
     });
 
     [Fact]
-    public Task Virtual_gpu_can_be_disabled() => WithBuilderAsync(builder =>
+    public Task Disabling_virtual_gpu_keeps_the_rdp_display_pipe() => WithBuilderAsync(builder =>
     {
-        var json = builder.Build(Definition() with { EnableVirtualGpu = false });
+        // The EnhancedModeVideo device is the console's RDP-over-named-pipe
+        // transport, not the GPU: the official sandbox still presents a desktop
+        // with <vGPU>Disable</vGPU>, so the pipe must survive a vGPU-disabled
+        // recipe or every connect fails with ERROR_FILE_NOT_FOUND (0x80070002).
+        var json = builder.Build(Definition());
         using var doc = JsonDocument.Parse(json);
-        Assert.False(doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
-            .TryGetProperty("EnhancedModeVideo", out _));
+        var video = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
+            .GetProperty("EnhancedModeVideo");
+        Assert.Equal(
+            $@"\\.\pipe\{Definition().Id}",
+            video.GetProperty("ConnectionOptions").GetProperty("NamedPipe").GetString());
         return true;
     });
 
@@ -166,7 +172,9 @@ public sealed class SandboxVmJsonBuilderTests
         var licensing = doc.RootElement.GetProperty("VirtualMachine").GetProperty("Devices")
             .GetProperty("Licensing");
 
-        Assert.Equal(Guid.Empty.ToString(), licensing.GetProperty("ContainerID").GetString());
+        // The container identity is the sandbox's own id (Guid.Empty would make
+        // every sandbox share one licensing identity and collide at connect).
+        Assert.Equal(Definition().Id, licensing.GetProperty("ContainerID").GetString(), ignoreCase: true);
         Assert.Equal(0, licensing.GetProperty("PackageFamilyNames").GetArrayLength());
         return true;
     });

@@ -237,7 +237,7 @@ public sealed class SandboxManagerTests
     }
 
     [Fact]
-    public async Task Delete_succeeds_when_data_cleanup_fails()
+    public async Task Delete_surfaces_a_data_cleanup_failure_and_keeps_the_record()
     {
         var repository = new InMemoryRepository();
         var engine = new StubEngine { ThrowOnDeleteData = true };
@@ -245,9 +245,12 @@ public sealed class SandboxManagerTests
 
         var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
 
-        await manager.DeleteAsync(created.Id);
+        // A genuine cleanup failure (e.g. the storage is still locked) must
+        // reach the caller instead of silently leaving the data behind; the
+        // record is kept so the delete can be retried.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => manager.DeleteAsync(created.Id));
 
-        Assert.Empty(await manager.ListAsync());
+        Assert.NotEmpty(await manager.ListAsync());
     }
 
     [Fact]
@@ -316,9 +319,109 @@ public sealed class SandboxManagerTests
         var engine = new StubEngine();
         var launcher = new StubSessionLauncher();
         var manager = Manager(repository, engine, launcher);
+        manager.SessionReclaimPollInterval = TimeSpan.FromMilliseconds(10);
 
         // The session query reports a disconnected ("Disc") leftover session (id
         // 2); the reclaim must log it off before the session launcher is invoked.
+        // The second table (session gone) answers the post-logoff poll.
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            "                                                     2  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.Contains("logoff 2", engine.GuestCommands);
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+    }
+
+    [Fact]
+    public async Task Connect_waits_until_the_orphaned_session_is_gone_before_launching()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+        manager.SessionReclaimPollInterval = TimeSpan.FromMilliseconds(10);
+
+        // The orphan lingers through the first post-logoff poll and disappears by
+        // the second; the launcher must only run after the table is clear.
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            "                                                     2  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            "                                                     2  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.Contains("logoff 2", engine.GuestCommands);
+        Assert.Equal(3, engine.QwinstaQueryCount);
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+    }
+
+    [Fact]
+    public async Task RemoteApp_connect_logs_off_the_still_connected_session()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+        manager.SessionReclaimPollInterval = TimeSpan.FromMilliseconds(10);
+
+        // A full-desktop session is still Active; the single-session guest refuses
+        // a RAIL logon while it exists, so a RemoteApp connect must replace it.
+        // The second table (session gone) answers the post-logoff poll.
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4#0   WDAGUtilityAccount         1  Active\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.RemoteApp, @"C:\Windows\regedit.exe");
+
+        Assert.Contains("logoff 1", engine.GuestCommands);
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+    }
+
+    [Fact]
+    public async Task Connect_proceeds_when_the_reclaim_wait_times_out()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+        manager.SessionReclaimPollInterval = TimeSpan.FromMilliseconds(10);
+        manager.SessionReclaimTimeout = TimeSpan.FromMilliseconds(50);
+
+        // The orphan never disappears (the stub repeats the last table): the wait
+        // is best effort and the connect must still proceed after the timeout.
         engine.QwinstaTables.Enqueue(
             " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
             ">services                                            0  Disc\n" +
@@ -381,13 +484,77 @@ public sealed class SandboxManagerTests
         Assert.Equal(created.Id, launcher.LastId!.Value.Value);
     }
 
-    private static ISandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
+    [Fact]
+    public async Task Connect_enforces_the_pipe_transport_even_when_the_engine_probes_tcp()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        // A cross-process connect (nothing cached) probes the engine; a guest
+        // that once ran TCP still listens on 3389 (the registry persists on the
+        // user-data disk), so the probe reports Tcp. The recipe says pipe, and
+        // the recipe is authoritative: the launch must use the pipe.
+        engine.RuntimeToReport = new SandboxRuntimeInfo
+        {
+            SandboxId = SandboxInstanceId.From(created.Id),
+            VmId = created.Id,
+            Transport = RdpTransportKind.Tcp,
+            IpAddress = "172.21.95.199",
+            IpAddresses = ["172.21.95.199"],
+        };
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        Assert.NotNull(launcher.LastRuntime);
+        Assert.Equal(RdpTransportKind.NamedPipe, launcher.LastRuntime!.Transport);
+        Assert.Equal(string.Empty, launcher.LastRuntime.IpAddress);
+        Assert.Empty(launcher.LastRuntime.IpAddresses);
+    }
+
+    [Fact]
+    public async Task Connect_with_tcp_transport_fails_when_the_guest_listener_is_unreachable()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        var created = await manager.CreateAsync(
+            "Box", SandboxRecipe.Default with { Transport = RdpTransportKind.Tcp });
+
+        // The cross-process probe finds no 3389 listener: TCP was explicitly
+        // requested, so the connect must fail loudly instead of silently
+        // landing on the arbitrated pipe (which would re-introduce the
+        // host-wide session kicking the user switched away from).
+        engine.RuntimeToReport = new SandboxRuntimeInfo
+        {
+            SandboxId = SandboxInstanceId.From(created.Id),
+            VmId = created.Id,
+            Transport = RdpTransportKind.NamedPipe,
+        };
+
+        await Assert.ThrowsAsync<SandboxBackendException>(
+            () => manager.ConnectAsync(created.Id, SandboxConnectionMode.FullDesktop));
+
+        Assert.Null(launcher.LastId);
+    }
+
+    private static SandboxManager Manager(ISandboxInstanceRepository repository, ISandboxEngine engine)
     {
         var selector = new EngineSelector(new SandboxEngineRegistry(new ISandboxEngine[] { engine }));
         return new SandboxManager(repository, selector, new StubSessionLauncher(), NullLogger<SandboxManager>.Instance);
     }
 
-    private static ISandboxManager Manager(
+    private static SandboxManager Manager(
         ISandboxInstanceRepository repository,
         ISandboxEngine engine,
         ISessionLauncher sessionLauncher)
@@ -406,6 +573,9 @@ public sealed class SandboxManagerTests
 
         public string? LastRemoteAppProgram { get; private set; }
 
+        /// <summary>The runtime the connect flow resolved and handed to the launch.</summary>
+        public SandboxRuntimeInfo? LastRuntime { get; private set; }
+
         public Task LaunchAsync(
             SandboxInstanceId id,
             SandboxRuntimeInfo runtime,
@@ -418,7 +588,12 @@ public sealed class SandboxManagerTests
             LastMode = mode;
             LastEngineKind = engineKind;
             LastRemoteAppProgram = remoteAppProgram;
+            LastRuntime = runtime;
             return Task.CompletedTask;
+        }
+
+        public void CloseAll()
+        {
         }
     }
 
@@ -471,6 +646,9 @@ public sealed class SandboxManagerTests
         /// <summary>Guest commands the reclaim executed (e.g. <c>logoff 1</c>).</summary>
         public List<string> GuestCommands { get; } = new();
 
+        /// <summary>How many times the guest session table was queried.</summary>
+        public int QwinstaQueryCount { get; private set; }
+
         /// <summary>
         /// Scripted <c>qwinsta</c> outputs. One entry is returned per query; the
         /// last entry repeats. An empty queue yields an empty table.
@@ -502,8 +680,11 @@ public sealed class SandboxManagerTests
         public Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
+        /// <summary>What the cross-process probe (<see cref="GetRuntimeAsync"/>) reports.</summary>
+        public SandboxRuntimeInfo? RuntimeToReport { get; set; }
+
         public Task<SandboxRuntimeInfo?> GetRuntimeAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
-            => Task.FromResult<SandboxRuntimeInfo?>(null);
+            => Task.FromResult(RuntimeToReport);
 
         public Task<SandboxCheckpoint> SaveCheckpointAsync(
             SandboxInstanceId id,
@@ -549,6 +730,7 @@ public sealed class SandboxManagerTests
         {
             if (command.Command == "qwinsta")
             {
+                QwinstaQueryCount++;
                 var table = QwinstaTables.Count == 0
                     ? string.Empty
                     : QwinstaTables.Count == 1 ? QwinstaTables.Peek() : QwinstaTables.Dequeue();

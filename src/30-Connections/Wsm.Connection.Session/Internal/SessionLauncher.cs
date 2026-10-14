@@ -38,11 +38,14 @@ internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
         string? remoteAppProgram = null,
         CancellationToken cancellationToken = default)
     {
-        if (runtime.Transport != RdpTransportKind.NamedPipe || runtime.VmId == Guid.Empty)
+        var useTcp = runtime.Transport == RdpTransportKind.Tcp &&
+                     !string.IsNullOrWhiteSpace(runtime.IpAddress);
+        if (!useTcp && (runtime.Transport != RdpTransportKind.NamedPipe || runtime.VmId == Guid.Empty))
         {
             throw new InvalidOperationException(
-                $"The RDP connector requires a named-pipe transport with a VM id, but sandbox {id} " +
-                $"(engine {engineKind}) reports transport={runtime.Transport} and vmId={runtime.VmId:D}.");
+                $"The RDP connector requires a TCP address or a named-pipe transport with a VM id, " +
+                $"but sandbox {id} (engine {engineKind}) reports transport={runtime.Transport}, " +
+                $"vmId={runtime.VmId:D}, ip='{runtime.IpAddress}'.");
         }
 
         var remoteApp = runtime.RailMode || mode == SandboxConnectionMode.RemoteApp;
@@ -54,15 +57,17 @@ internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
             ? FirstNonEmpty(remoteAppProgram, runtime.RailProgram, SandboxRecipe.DefaultRailProgram)
             : null;
 
+        var endpoint = useTcp ? $"{runtime.IpAddress}:3389" : runtime.NamedPipeEndpoint;
         _logger.LogInformation(
             "Presenting sandbox {SandboxId} (engine={EngineKind}) over {Endpoint} as {Presentation}{Program} through mstscax.",
-            id, engineKind, runtime.NamedPipeEndpoint, remoteApp ? "RAIL" : "full desktop",
+            id, engineKind, endpoint, remoteApp ? "RAIL" : "full desktop",
             remoteApp ? $" (program={program})" : string.Empty);
 
         return _rdpHost.ShowAsync(
             new RdpSessionRequest
             {
                 PipeName = runtime.NamedPipeEndpoint,
+                ServerAddress = useTcp ? runtime.IpAddress : null,
                 VmId = runtime.VmId,
                 RemoteApp = remoteApp,
                 RemoteAppProgram = program,
@@ -74,6 +79,8 @@ internal sealed class SessionLauncher : ISessionLauncher, ISingletonDependency
             },
             cancellationToken);
     }
+
+    public void CloseAll() => _rdpHost.CloseAll();
 
     private static string? FirstNonEmpty(params string?[] values)
         => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));

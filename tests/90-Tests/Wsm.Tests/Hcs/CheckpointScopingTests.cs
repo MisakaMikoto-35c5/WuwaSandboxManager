@@ -100,7 +100,7 @@ public sealed class CheckpointScopingTests
         {
         }
 
-        public void Shutdown(string id)
+        public void Shutdown(string id, uint timeoutMs = 45_000)
         {
         }
 

@@ -152,6 +152,10 @@
   <data name="Networking.Default.Text" xml:space="preserve"><value>默认</value></data>
   <data name="Networking.Enabled.Text" xml:space="preserve"><value>启用</value></data>
   <data name="Networking.Disabled.Text" xml:space="preserve"><value>禁用</value></data>
+  <data name="TransportBox.Header" xml:space="preserve"><value>传输</value></data>
+  <data name="Transport.NamedPipe.Text" xml:space="preserve"><value>命名管道（默认，最快）</value></data>
+  <data name="Transport.Tcp.Text" xml:space="preserve"><value>TCP（多沙箱并发）</value></data>
+  <data name="TransportHint.Text" xml:space="preserve"><value>管道最快但全机仅允许一个会话；要同时连接多个沙箱请改用 TCP。TCP 需要「网络」设为启用。</value></data>
   <data name="Vgpu.Default.Text" xml:space="preserve"><value>默认</value></data>
   <data name="Vgpu.Enabled.Text" xml:space="preserve"><value>启用</value></data>
   <data name="Vgpu.Disabled.Text" xml:space="preserve"><value>禁用</value></data>
@@ -194,4 +198,5 @@
   <data name="CreateRailProgramBox.Header" xml:space="preserve"><value>默认 RAIL 程序</value></data>
   <data name="RailProgramHint.Text" xml:space="preserve"><value>RAIL 会话启动的程序。WDAG 客户机没有桌面，因此显示的就是该程序。</value></data>
   <data name="Status.LaunchedProgram.Text" xml:space="preserve"><value>正在启动 {0}。</value></data>
+  <data name="Status.CliMissing.Text" xml:space="preserve"><value>找不到配套 CLI（wsm.exe）。请先构建 src/50-App/Wsm.Cli，或将 wsm.exe 放到本应用旁边。</value></data>
 </root>

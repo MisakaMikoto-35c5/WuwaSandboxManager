@@ -260,6 +260,7 @@ net start TermService
 | 4 | `94e32f2` | CLI：`wsm image desktop <layerPath>`、`wsm image import … --desktop`（已提权实测通过） | **可用** works |
 | 5 | `aad2c43` | `WindowsContainerEngine` 桌面选项（Shell / 自动登录 / 可选 RDP 尝试）+ 17 个单测 | Shell 与自动登录可用；**RDP 部分已知无效，仅作记录** |
 | 6 | (本步 / this step) | README 章节 + 文档回填 / README section + doc backfill | 记录 record |
+| 7 | (本步 / this step) | §10 桌面可达性实测（借 token / 自动登录 / ~121 秒注销 / pipe 与 3389 / 可截屏的容器桌面）+ `tools/container-desktop-agent` | 记录 + 可用 |
 
 > 说明：按用户要求，**"无论是否可用"都放进本分支**——RDP 相关代码保留但明确标注
 > `Experimental`/已知无效，避免误用。
@@ -300,3 +301,89 @@ net start TermService
   `\Device\Video4 → …\Services\BasicDisplay`、`\Device\Disc → …\Services\TSDDD\Device0`；
   `TSDDD\Device0` → `InstalledDisplayDrivers=TSDDD`。
 - `UmRdpService` 无法启动（`net start` → "did not report an error"）；`RdpVideoMiniport` STOPPED (1077)。
+
+---
+
+## 10. 桌面可达性实测 / Desktop reachability, measured
+
+> §3 的结论（改 `NumberOfInitialSessions=2` 后 console 会话 / `winlogon` / `LogonUI` 会起来）
+> 依旧成立。本节补的是**外面到底能不能进得去这个桌面**，以及**哪一路真的能用**。
+
+### 10.1 结论速览 / Summary
+
+| 通道 Channel | 结果 Result |
+|---|---|
+| RDP（3389/TCP） | **不可用**（见 10.4） |
+| RDP（命名管道 pipe） | 容器里只有 RDS **控制面**管道（`TermSrv_API_service`、`Ctx_WinStation_API_service`、`SessEnvPublicRpc`），**没有 RDP 传输管道**；3389 依旧不监听 |
+| 借 token 在 console 会话里建进程 | **被容器 silo 拒绝**：即使以 SYSTEM 运行、`SeAssignPrimaryToken`/`SeTcb` 已启用、复制出的 token 确为 SYSTEM@session 5，`CreateProcessAsUser` 仍返回 `ACCESS_DENIED`；`CreateProcessWithTokenW` 只在**调用者自己的会话**里建进程 |
+| 交互式登录（自动登录） | winlogon **确实**为 `WSMPROBE\Administrator` 在 console 会话发起了登录（LocalSessionManager 会话仲裁），但登录**不完成**（`LogonUI` 一直在），且 **console 会话在开机后 ~121 秒被注销**，shell 从未运行 |
+| 容器**自己**会话的桌面 | **可用**：可绘制、可截屏（见 10.5） |
+
+### 10.2 关键测量 / Measurements
+
+- 借 token 的 4 条路径（`session-run.ps1` 全部试过）：impersonation/primary × `CreateProcessAsUser` / `CreateProcessWithTokenW`。以 **SYSTEM** 身份运行时：
+  - `CreateProcessAsUser`（两种 token）→ `err 5 (Access is denied)`，`lpDesktop` 为 `null` 或 `winsta0\default` 都一样；
+  - `CreateProcessWithTokenW` → 成功，但 `childSession=4`（调用者会话），**进不了 5**。
+- 复制 token 本身没问题：`DuplicateTokenEx` 得到的 token 是 `session=5 user=S-1-5-18`（SYSTEM）✓ —— 卡住的是「跨会话建进程」这一步。
+- 容器里 `ContainerAdministrator` = `S-1-5-93-2-1`（User Manager 合成账户，**不是 SAM 账户**：`net user` 只列 `Administrator/DefaultAccount/Guest/WDAGUtilityAccount`）；其 token 有 `SeDebugPrivilege`/`SeImpersonatePrivilege`（Enabled），**没有** `SeAssignPrimaryTokenPrivilege`/`SeTcbPrivilege`（`ERROR_NOT_ALL_ASSIGNED`）。
+- 容器**可以**给 SAM 账户设口令：`net user Administrator <pw>` 成功，`LogonUser(Administrator, <pw>)` = OK。此改动**只在容器层**（镜像 `SAM` 的 SHA256 与时间不变）。
+- 容器里的注册表写入（Winlogon 自动登录值、`StartRCM`、`TermService` 启动类型…）**不写进镜像的 `Files\...\config\*` hive**，但**在同一 scratch 层内跨重启保留**。
+- `taskkill LogonUI.exe` 会让 **console 会话直接消失**（不要用它来「重启登录界面」）。
+
+### 10.3 为什么会话 2 分钟后就没了 / The ~121 s teardown
+
+每次开机完全一致：
+
+```
+boot+0s     winlogon 起，console 会话建立，LogonUI 运行
+boot+1s     LocalSessionManager #41/#42  Begin/End session arbitration:  WSMPROBE\Administrator  Session ID: 5
+boot+121s   Winlogon/Operational  #811/#812  <TermSrv> notification event (1)  = 注销
+            LocalSessionManager   #39/#40  Session 5 has been disconnected by session 5 (reason 11)
+            → session 5 消失（qwinsta 只剩 services）
+```
+
+即：自动登录**被仲裁过但没完成**（`LogonUI` 始终在），121 秒后会话被注销。容器里没有 120 秒不活动策略（`Policies\System` 无 `InactivityTimeoutSecs`），因此这更像是容器会话模型对「非容器用户登录」的处理结果。
+
+### 10.4 RDP：pipe 与 3389 的实测 / RDP over pipe and 3389
+
+本会话新增的测量：
+
+- `sc config TermService start= auto` + `sc start TermService` → `TermService` **RUNNING**，开机时的
+  `Remote Desktop Service start failed. 0x80070422`（服务被禁用）**消失**；
+- 现在容器里出现的管道：`TermSrv_API_service`、`Ctx_WinStation_API_service`、`SessEnvPublicRpc`
+  —— 这些是 RDS 的**控制面 RPC**，**不是** RDP 传输；**没有** 任何 RDP 传输管道；
+- 服务状态：`SessionEnv` RUNNING、`RDPDR` RUNNING（尽管镜像里没有 `rdpdr.sys`）、`UmRdpService` **STOPPED**。
+
+逐个开关（全部**无效**，3389 始终不监听）：
+
+| 开关 Knob | 结果 |
+|---|---|
+| `Terminal Server\StartRCM 0 → 1`（**本次新试**） | 无效果 |
+| `AllowListenersInsideArgonContainer=1` 三处（`Terminal Server`、`RDP-Tcp`、`SOFTWARE\Microsoft\Windows NT\CurrentVersion`） | 无效果 |
+| `EditionID = ContainerOSPlus` | 无效果 |
+| `SecurityLayer=0`、`UserAuthentication=0`、`fEnableWinStation=1`、`fDenyTSConnections=0` | 无效果 |
+| 启动 `UmRdpService` | 失败（`did not report an error`） |
+
+- 验证方式：宿主 `Test-NetConnection <容器IP> -Port 3389` = **False**；`rprobe`（最小 RDP 握手）= **超时**；容器内 `netstat`/`Get-NetTCPConnection` 不可信（§6）。
+- RCM Operational 日志：`#20524 Supplemental Kerberos credentials are not configured`、**`#1136 RD Session Host Server role is not installed.`** —— 「角色未安装」是新的线索。
+
+### 10.5 真正可用的一路：容器自己会话的桌面 + 截屏 / The desktop that does work
+
+容器**自己**会话（services 会话）的桌面是真实可绘制、可截屏的：
+
+1. 借 token 把 `regedt32.exe` 与 `cmd.exe` 放到该会话的**活动桌面**（`winsta0\Winlogon`，容器会话的 input desktop）上；
+2. 在同一桌面运行 `deskcap.ps1 -Once C:\wsm\shot.png`；
+3. 宿主用 base64 把 PNG 取出来（`pull`）。
+
+**结果：17 053 字节 PNG，内容是一个真实的「注册表编辑器」窗口**（`Computer` 下
+`HKEY_CLASSES_ROOT` / `HKEY_CURRENT_USER` / `HKEY_LOCAL_MACHINE` / `HKEY_USERS` /
+`HKEY_CURRENT_CONFIG`，左侧树 + 右侧 `Name/Type/Data` 列）。这证明容器里**有**可用的桌面与 GDI 绘制。
+
+> 重要细节：`Graphics.CopyFromScreen` **只能截活动桌面**。截非活动的 `Default` 桌面会得到
+> `The handle is invalid`；且因为容器里没有 shell/任务栏，画面右侧与底部会有未绘制的黑区。
+
+### 10.6 本次用到的工具 / Tooling used
+
+`tools/container-desktop-agent/`：`session-run.ps1`、`session-run-as-system.ps1`、
+`deskcap.ps1`、`agent.cmd`、`agent.ps1`（+ README 说明每条测量的由来）。
+

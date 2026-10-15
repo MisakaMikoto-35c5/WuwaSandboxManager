@@ -238,6 +238,12 @@ wsm exec $id cmd.exe /c qwinsta     # 应能看到  console  <id>  Conn
 > （5 个位置 + 环境变量）、`EditionID=ContainerOSPlus`、RDP 策略项等。想看画面需要自建
 > **会话内截屏/输入代理**，或改用 Hyper-V 隔离。完整证据见
 > [docs/investigation/13-container-desktop-and-rdp.md](docs/investigation/13-container-desktop-and-rdp.md)。
+>
+> 后续实测（同文档 §10）把「外面能不能进去」测到底：console 会话**确实会建立**
+> （winlogon + LogonUI + TSDDD 1024×768），但**外部进不去**——跨会话建进程被容器 silo
+> 拒绝（即使以 SYSTEM 运行），自动登录虽被仲裁但没有完成，且会话在**开机后约 121 秒**
+> 被注销。**真正能用的是容器自己会话的桌面**：可绘制、可截屏（同文档 §10.5 有一张
+> 真实「注册表编辑器」的截图），工具见 `tools/container-desktop-agent/`。
 
 容器桌面的引擎选项（默认关闭）：`WindowsContainer:Desktop`
 （`Enabled` / `UserName` / `Password` / `Shell` / `AttemptTcpRdp`），也可用环境变量

@@ -34,6 +34,22 @@
   <data name="EngineAvailable.Text" xml:space="preserve"><value>可用</value></data>
   <data name="EngineReserved.Text" xml:space="preserve"><value>预留</value></data>
   <data name="EngineUnavailable.Text" xml:space="preserve"><value>不可用</value></data>
+  <data name="Engine.Container.Text" xml:space="preserve"><value>Windows 容器（进程隔离）</value></data>
+
+  <!-- 进程隔离镜像（Windows Server） -->
+  <data name="ContainerImageSection.Text" xml:space="preserve"><value>进程隔离镜像</value></data>
+  <data name="ContainerImageCaption.Text" xml:space="preserve"><value>进程隔离（HCS 容器）需要镜像；下载一个 Windows Server 镜像即可启用。VM 隔离始终可用。</value></data>
+  <data name="ContainerImageDownloadButton.Content" xml:space="preserve"><value>下载镜像</value></data>
+  <data name="ContainerImageElevationHint.Text" xml:space="preserve"><value>下载需要管理员权限（请先“以管理员身份重启”）。</value></data>
+  <data name="ContainerImageStarting.Text" xml:space="preserve"><value>正在开始…</value></data>
+  <data name="Container.Available.Text" xml:space="preserve"><value>进程隔离：可用</value></data>
+  <data name="Container.Unavailable.Text" xml:space="preserve"><value>进程隔离：不可用</value></data>
+  <data name="Container.Versions.Text" xml:space="preserve"><value>宿主 build {0}，镜像 build {1}。</value></data>
+  <data name="Container.Reason.NoImage" xml:space="preserve"><value>尚未配置镜像。请在下方下载一个 Windows Server 镜像。</value></data>
+  <data name="Container.Reason.UnknownImage" xml:space="preserve"><value>无法读取镜像的 build，请重新导入。</value></data>
+  <data name="Container.Reason.SupportedExact" xml:space="preserve"><value>镜像 build 与宿主一致。</value></data>
+  <data name="Container.Reason.SupportedServer" xml:space="preserve"><value>Windows 11 宿主运行 Windows Server 镜像（允许 build 不一致）。</value></data>
+  <data name="Container.Reason.BuildMismatch" xml:space="preserve"><value>镜像 build 与宿主不一致，且不是 Windows Server 镜像。</value></data>
   <data name="EngineAutoOption.Text" xml:space="preserve"><value>自动（推荐）</value></data>
   <data name="Engine.Auto.Text" xml:space="preserve"><value>自动（推荐）</value></data>
   <data name="Cap.Multi.Text" xml:space="preserve"><value>多实例</value></data>
@@ -199,4 +215,7 @@
   <data name="RailProgramHint.Text" xml:space="preserve"><value>RAIL 会话启动的程序。WDAG 客户机没有桌面，因此显示的就是该程序。</value></data>
   <data name="Status.LaunchedProgram.Text" xml:space="preserve"><value>正在启动 {0}。</value></data>
   <data name="Status.CliMissing.Text" xml:space="preserve"><value>找不到配套 CLI（wsm.exe）。请先构建 src/50-App/Wsm.Cli，或将 wsm.exe 放到本应用旁边。</value></data>
+  <data name="Status.ImageImporting.Text" xml:space="preserve"><value>正在下载容器镜像…</value></data>
+  <data name="Status.ImageImported.Text" xml:space="preserve"><value>容器镜像已就绪：{0}</value></data>
+  <data name="Status.SessionAlreadyOpen.Text" xml:space="preserve"><value>该沙箱的会话窗口已打开。</value></data>
 </root>

@@ -9,6 +9,7 @@ using Wsm.Application;
 using Wsm.Connection.Session;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Elevation;
+using Wsm.Hcs.Storage;
 using Wsm.Host.Policy;
 using Wsm.Localization;
 using Wsm.Persistence;
@@ -33,6 +34,7 @@ public sealed class CliApplication
     private readonly IElevationService _elevation;
     private readonly IStringLocalizer<WindowsSandboxManagerResource> _localizer;
     private readonly IWsmServiceClient? _serviceClient;
+    private readonly IContainerImageImporter? _imageImporter;
 
     /// <summary>
     /// The client-side RDP entry point. <c>connect</c> presents the session in
@@ -57,6 +59,7 @@ public sealed class CliApplication
         // The agent client is optional at runtime: when the WsmAgent service is
         // not installed the CLI keeps using the in-process application layer.
         _serviceClient = provider.GetService<IWsmServiceClient>();
+        _imageImporter = provider.GetService<IContainerImageImporter>();
     }
 
     public async Task<int> RunAsync(string[] args)
@@ -121,6 +124,9 @@ public sealed class CliApplication
                 case "service":
                     return await ServiceAsync(positional, options);
 
+                case "image":
+                    return await ImageAsync(positional);
+
                 case "multi":
                     return Multi(options);
 
@@ -145,8 +151,8 @@ public sealed class CliApplication
             // lacks (the auto-detect path degrades to in-process instead).
             Console.Error.WriteLine($"Error: {ex.Message}");
             Console.Error.WriteLine(
-                "WsmAgent is not available; check 'wsm service status' or start it, " +
-                "or drop --service to run in-process.");
+                "WsmAgent is not available; check 'wsm service status', start it " +
+                "('wsm service start' or 'wsm service run'), or drop --service to run in-process.");
             return 1;
         }
         catch (Exception ex)
@@ -174,6 +180,14 @@ public sealed class CliApplication
         Console.WriteLine($"Elevated    : {_elevation.IsElevated}");
         Console.WriteLine($"BuildBranch : {_multiInstancePolicy.CurrentBuildBranch ?? "<unknown>"}");
         Console.WriteLine($"Multi-instance allowed : {_multiInstancePolicy.AllowsMultipleInstances}");
+
+        Console.WriteLine("Engines     :");
+        foreach (var candidate in _registry.Engines.OrderBy(candidate => (int)candidate.Kind))
+        {
+            Console.WriteLine(
+                $"  {candidate.Kind,-18} {candidate.Name}  [{(candidate.IsAvailable ? "available" : "unavailable")}]");
+        }
+
         return 0;
     }
 
@@ -572,9 +586,10 @@ public sealed class CliApplication
     /// <summary>
     /// Decides whether a routable command should run through the agent service.
     /// <c>--service</c> forces the service; by default the agent pipe is probed
-    /// once per invocation and the in-process path is used when it is absent, so
-    /// behavior is unchanged on machines without the service. Returns
-    /// <c>null</c> to select the in-process <see cref="ISandboxManager"/> path.
+    /// once per invocation — and a standalone console agent is spawned on demand
+    /// when none answers — and the in-process path is used when no agent can be
+    /// reached. Returns <c>null</c> to select the in-process
+    /// <see cref="ISandboxManager"/> path.
     /// </summary>
     private async Task<IWsmServiceClient?> TryGetServiceAsync(Dictionary<string, string?> options)
     {
@@ -590,7 +605,7 @@ public sealed class CliApplication
 
         if (!_serviceResolved)
         {
-            _service = await _serviceClient.IsAvailableAsync() ? _serviceClient : null;
+            _service = await _serviceClient.EnsureAvailableAsync() ? _serviceClient : null;
             _serviceResolved = true;
         }
 
@@ -701,6 +716,39 @@ public sealed class CliApplication
         }
     }
 
+    /// <summary>
+    /// Imports the base OS layer of a container image (default
+    /// <c>mcr.microsoft.com/windows/servercore:ltsc2022</c>) so the process
+    /// isolation engine can build containers from it. A Windows Server image is
+    /// exempt from HCS's host/image build-match rule on Windows 11, which the
+    /// Windows Sandbox client image is not.
+    /// </summary>
+    private async Task<int> ImageAsync(List<string> positional)
+    {
+        if (positional.Count < 3 || !positional[0].Equals("import", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine("Usage: wsm image import <reference> <layerPath>");
+            Console.Error.WriteLine("  e.g. wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 C:\\wsm-images\\servercore-ltsc2022");
+            return 2;
+        }
+
+        if (_imageImporter is null)
+        {
+            Console.Error.WriteLine("The image importer is not available in this build.");
+            return 1;
+        }
+
+        var reference = positional[1];
+        var layerPath = positional[2];
+        Console.WriteLine($"Importing the base layer of {reference} into {layerPath} ...");
+
+        var result = await _imageImporter.ImportBaseLayerAsync(reference, layerPath);
+        Console.WriteLine($"Imported base layer: {result}");
+        Console.WriteLine("Point the engine at it with the WSM_CONTAINER_BASE_IMAGE environment variable");
+        Console.WriteLine("(or WindowsContainer:BaseImageLayerPath), then create a 'container' sandbox.");
+        return 0;
+    }
+
     private async Task<int> ServiceAsync(List<string> positional, Dictionary<string, string?> options)
     {
         var subcommand = positional.Count > 0 ? positional[0].ToLowerInvariant() : "status";
@@ -709,6 +757,10 @@ public sealed class CliApplication
             "status" => await ServiceStatusAsync(),
             "install" => await ServiceInstallAsync(),
             "uninstall" => await ServiceUninstallAsync(),
+            "run" => await ServiceRunAsync(),
+            "start" => await ServiceStartAsync(),
+            "stop" => await ServiceStopAsync(),
+            "restart" => await ServiceRestartAsync(),
             _ => UnknownServiceSubcommand(subcommand),
         };
     }
@@ -716,8 +768,121 @@ public sealed class CliApplication
     private static int UnknownServiceSubcommand(string subcommand)
     {
         Console.Error.WriteLine($"Unknown service subcommand '{subcommand}'.");
-        Console.Error.WriteLine("Usage: wsm service status|install|uninstall");
+        Console.Error.WriteLine("Usage: wsm service status|install|uninstall|run|start|stop|restart");
         return 2;
+    }
+
+    /// <summary>
+    /// Runs the agent in the foreground (standalone console mode) for machines
+    /// where the WsmAgent Windows service is not installed. The agent holds its
+    /// sandbox VMs for as long as this process lives; Ctrl+C stops it.
+    /// </summary>
+    private async Task<int> ServiceRunAsync()
+    {
+        var exe = ServiceHostExeLocator.Find();
+        if (exe is null)
+        {
+            Console.Error.WriteLine("Could not locate Wsm.Service.Host.exe.");
+            Console.Error.WriteLine("Build the host first, e.g. dotnet build src/40-Host/Wsm.Service.Host/Wsm.Service.Host.csproj");
+            return 1;
+        }
+
+        // Attached to this console (no redirection) so the agent's log output is
+        // visible and Ctrl+C reaches it.
+        var startInfo = new ProcessStartInfo(exe)
+        {
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--console");
+        startInfo.ArgumentList.Add("--data");
+        startInfo.ArgumentList.Add(SandboxPersistenceOptions.DefaultConfigDataFolder);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start Wsm.Service.Host.exe.");
+
+        Console.WriteLine($"Running the WSM agent in the foreground ({exe}); Ctrl+C to stop.");
+        await process.WaitForExitAsync();
+        return process.ExitCode;
+    }
+
+    /// <summary>Starts the SCM-installed WsmAgent service.</summary>
+    private async Task<int> ServiceStartAsync()
+    {
+        var result = await RunScAsync("start", "WsmAgent");
+        ReportSc(result);
+        if (result.ExitCode != 0)
+        {
+            ReportScFailure(result);
+            return 1;
+        }
+
+        Console.WriteLine("Service 'WsmAgent' started.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Stops the agent: through the Service Control Manager when the WsmAgent
+    /// service is installed and running, otherwise through the Shutdown RPC when
+    /// a standalone console agent is answering on the pipe.
+    /// </summary>
+    private async Task<int> ServiceStopAsync()
+    {
+        var query = await RunScAsync("query", "WsmAgent");
+        var serviceRunning = query.ExitCode == 0
+            && query.StandardOutput.Contains("RUNNING", StringComparison.OrdinalIgnoreCase);
+
+        if (serviceRunning)
+        {
+            var stop = await RunScAsync("stop", "WsmAgent");
+            ReportSc(stop);
+            if (stop.ExitCode != 0)
+            {
+                ReportScFailure(stop);
+                return 1;
+            }
+
+            Console.WriteLine("Service 'WsmAgent' stopped.");
+            return 0;
+        }
+
+        if (_serviceClient is not null && await _serviceClient.IsAvailableAsync())
+        {
+            await _serviceClient.ShutdownAsync();
+            Console.WriteLine("Standalone agent stopped.");
+            return 0;
+        }
+
+        Console.Error.WriteLine("The WSM agent is not running (no WsmAgent service, no agent on the pipe).");
+        return 1;
+    }
+
+    /// <summary>
+    /// Restarts the SCM-installed WsmAgent service. A standalone console agent
+    /// has no SCM entry and must be stopped (<c>service stop</c>) and re-run
+    /// (<c>service run</c>) instead.
+    /// </summary>
+    private async Task<int> ServiceRestartAsync()
+    {
+        var query = await RunScAsync("query", "WsmAgent");
+        if (query.ExitCode != 0)
+        {
+            ReportScFailure(query);
+            Console.Error.WriteLine("A standalone console agent cannot be restarted; use 'wsm service stop' and 'wsm service run'.");
+            return 1;
+        }
+
+        if (query.StandardOutput.Contains("RUNNING", StringComparison.OrdinalIgnoreCase))
+        {
+            var stop = await RunScAsync("stop", "WsmAgent");
+            ReportSc(stop);
+            if (stop.ExitCode != 0)
+            {
+                ReportScFailure(stop);
+                return 1;
+            }
+        }
+
+        return await ServiceStartAsync();
     }
 
     /// <summary>
@@ -740,7 +905,7 @@ public sealed class CliApplication
 
     private async Task<int> ServiceInstallAsync()
     {
-        var exe = FindServiceHostExe();
+        var exe = ServiceHostExeLocator.Find();
         if (exe is null)
         {
             Console.Error.WriteLine("Could not locate Wsm.Service.Host.exe.");
@@ -809,7 +974,7 @@ public sealed class CliApplication
                 break;
 
             case 1060:
-                Console.Error.WriteLine("WsmAgent is not installed (run 'wsm service install').");
+                Console.Error.WriteLine("WsmAgent is not installed (run 'wsm service install', or start a standalone agent with 'wsm service run').");
                 break;
 
             case 1073:
@@ -864,50 +1029,6 @@ public sealed class CliApplication
         }
     }
 
-    /// <summary>
-    /// Locates <c>Wsm.Service.Host.exe</c>: next to the running <c>wsm</c>
-    /// executable first, then under a <c>40-Host/Wsm.Service.Host</c> project
-    /// tree found while walking up towards the repository root.
-    /// </summary>
-    private static string? FindServiceHostExe()
-    {
-        const string exeName = "Wsm.Service.Host.exe";
-
-        var direct = Path.Combine(AppContext.BaseDirectory, exeName);
-        if (File.Exists(direct))
-        {
-            return direct;
-        }
-
-        for (var current = new DirectoryInfo(AppContext.BaseDirectory); current is not null; current = current.Parent)
-        {
-            foreach (var projectDirectory in new[]
-                     {
-                         Path.Combine(current.FullName, "src", "40-Host", "Wsm.Service.Host"),
-                         Path.Combine(current.FullName, "40-Host", "Wsm.Service.Host"),
-                     })
-            {
-                var binDirectory = Path.Combine(projectDirectory, "bin");
-                if (!Directory.Exists(binDirectory))
-                {
-                    continue;
-                }
-
-                var match = Directory
-                    .EnumerateFiles(binDirectory, exeName, SearchOption.AllDirectories)
-                    .OrderByDescending(File.GetLastWriteTimeUtc)
-                    .FirstOrDefault();
-
-                if (match is not null)
-                {
-                    return match;
-                }
-            }
-        }
-
-        return null;
-    }
-
     private static SandboxRecipe BuildRecipe(Dictionary<string, string?> options)
     {
         var storage = SandboxStorageOptions.Default;
@@ -927,6 +1048,7 @@ public sealed class CliApplication
             Cpu = new SandboxCpuConfiguration(GetInt(options, "cpu", SandboxCpuConfiguration.Default().CoreCount)),
             Networking = ParseNetworking(options.GetValueOrDefault("networking")),
             VirtualGpu = ParseVgpu(options.GetValueOrDefault("vgpu")),
+            Transport = ParseTransport(options.GetValueOrDefault("transport")),
             RailMode = options.ContainsKey("rail"),
             RailProgram = options.GetValueOrDefault("rail-program"),
             FullScreen = options.ContainsKey("fullscreen"),
@@ -968,6 +1090,16 @@ public sealed class CliApplication
         "enable" or "enabled" or "on" => VirtualGpuMode.Enabled,
         "disable" or "disabled" or "off" => VirtualGpuMode.Disabled,
         _ => VirtualGpuMode.Default,
+    };
+
+    /// <summary>
+    /// <c>pipe</c> (default, fastest) or <c>tcp</c> — the latter makes the guest
+    /// listen on 3389 so an ordinary <c>mstsc</c> can connect (needs networking).
+    /// </summary>
+    private static RdpTransportKind ParseTransport(string? value) => value?.ToLowerInvariant() switch
+    {
+        "tcp" or "3389" => RdpTransportKind.Tcp,
+        _ => RdpTransportKind.NamedPipe,
     };
 
     private static int GetInt(Dictionary<string, string?> options, string key, int fallback)
@@ -1064,16 +1196,25 @@ public sealed class CliApplication
               service install                 Register the WsmAgent Windows service (needs admin);
                                               pins the agent to your current WsmContainers folder
               service uninstall               Remove the WsmAgent Windows service (needs admin)
+              service run                     Run a standalone agent in the foreground (no
+                                              service install needed); Ctrl+C to stop
+              service start                   Start the installed WsmAgent service
+              service stop                    Stop the agent (SCM service or standalone agent)
+              service restart                 Restart the installed WsmAgent service
+              image import <ref> <path>       Import the base OS layer of a Windows
+                                              container image for the process-isolation
+                                              engine (e.g. mcr.microsoft.com/windows/
+                                              servercore:ltsc2022)
               multi [--enable|--disable]      Inspect/change the multi-instance policy
               elevate                         Relaunch elevated (needed for HCS)
 
             options:
               --service                 Force commands through the resident WsmAgent service.
-                                        By default the agent pipe is probed automatically and
-                                        the CLI falls back to the in-process engine when it is
-                                        not running (behavior is unchanged when the service is
-                                        absent). Affects: running, start, stop, connect, exec,
-                                        ip, share.
+                                        By default the agent pipe is probed automatically,
+                                        a standalone agent is spawned on demand when none
+                                        answers, and the CLI falls back to the in-process
+                                        engine when no agent can be started. Affects:
+                                        running, start, stop, connect, exec, ip, share.
 
             create options:
               --name <name>
@@ -1082,6 +1223,8 @@ public sealed class CliApplication
               --cpu <cores>             (HCS engine)
               --networking enable|disable|default
               --vgpu enable|disable|default
+              --transport pipe|tcp        RDP transport (tcp lets mstsc connect on 3389;
+                                          requires networking)
               --rail                    Start in RemoteApp (RAIL) mode
               --rail-program <path>     Program a RAIL session launches
                                         (default C:\Windows\explorer.exe)

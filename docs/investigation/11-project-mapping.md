@@ -124,9 +124,13 @@
 - 裸 HCS **冷启动**需要已存在基础层与用户数据盘；`ISandboxStorageProvisioner` 从既有
   `ContainerStorages` 播种。模板（zygote）可选，只影响启动速度。
 - 运行期热映射与进程执行由 Windows Sandbox gRPC 引擎承担。
-- **进程隔离容器（第三个引擎）复用 Windows Sandbox 镜像层**；它同样需要提权。HCS 进程隔离要求
-  `Container.Storage.Path` 指向已挂载的层卷（`\\?\Volume{GUID}\`），该 scratch 卷的自动供给与容器
-  网络 attach 尚未接线（进程执行、必要服务拉起、枚举/停止/删除已实现）。
+- **进程隔离容器（第三个引擎）**：`C:\` 由只读镜像层 + 每实例可写 scratch 层经 WCIFS 叠加而成，
+  引擎执行 `CreateSandboxLayer → ActivateLayer → PrepareLayer → GetLayerMountPath` 得到 scratch 卷，
+  并通过 HNS namespace（`Container.Networking.Namespace`）+ NAT endpoint 接入网络；同样需要提权。
+  **镜像需与宿主 build 一致**，例外是 Windows 11 宿主可运行 Windows Server 2022/2025 镜像；
+  Windows Sandbox 的客户端镜像在 build 不一致时会被 `HCS_E_IMAGE_MISMATCH` 拒绝，需
+  `wsm image import` 导入服务器镜像并用 `WSM_CONTAINER_BASE_IMAGE` / `WindowsContainer:BaseImageLayerPath` 指定。
+  **容器无图形桌面/RDP 会话**，适合无头负载。
 - 旧的 `wsm hcs` / `wsm layers` 诊断命令依赖已删除的 `Infrastructure/Hcs`，**未迁移**。
 
 **English**:

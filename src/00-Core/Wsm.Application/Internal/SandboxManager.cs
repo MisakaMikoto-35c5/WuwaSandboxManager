@@ -51,6 +51,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     public async Task<IReadOnlyList<SandboxInstanceDto>> ListAsync(CancellationToken cancellationToken = default)
     {
         var instances = await _repository.ListAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcileLiveStatesAsync(instances, cancellationToken).ConfigureAwait(false);
         return instances.Select(ToDto).ToArray();
     }
 
@@ -63,6 +64,7 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     public async Task<SandboxInstanceDto> GetAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
+        await ReconcileLiveStatesAsync(new[] { instance }, cancellationToken).ConfigureAwait(false);
         return ToDto(instance);
     }
 
@@ -286,6 +288,60 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         await ReclaimGuestSessionsAsync(engine, instance.Id, replaceActiveSessions, cancellationToken).ConfigureAwait(false);
 
         return (instance.Id, runtime, engine);
+    }
+
+    /// <summary>
+    /// Reconciles freshly loaded instances with the engines' live state. The
+    /// persisted state is deliberately transient (a loaded sandbox rehydrates
+    /// as <see cref="SandboxState.Created"/>), so a sandbox that is actually
+    /// running — started by another process, or still up from before an app
+    /// restart — would otherwise be reported as not-running, which hides
+    /// Connect/Disconnect/Stop in the UI. Instances this process already knows
+    /// are live are left alone. Best effort: an engine that cannot enumerate
+    /// (not elevated, unavailable) leaves the persisted state untouched.
+    /// </summary>
+    private async Task ReconcileLiveStatesAsync(
+        IReadOnlyList<SandboxInstance> instances,
+        CancellationToken cancellationToken)
+    {
+        var stale = instances.Where(instance => !instance.State.IsLive()).ToArray();
+        if (stale.Length == 0)
+        {
+            return;
+        }
+
+        var enumerateCache = new Dictionary<ISandboxEngine, IReadOnlyList<SandboxInstanceId>>();
+        foreach (var instance in stale)
+        {
+            try
+            {
+                var engine = _selector.Select(RequestFor(instance));
+                if (!enumerateCache.TryGetValue(engine, out var running))
+                {
+                    running = await engine.EnumerateAsync(cancellationToken).ConfigureAwait(false);
+                    enumerateCache[engine] = running;
+                }
+
+                if (!running.Contains(instance.Id))
+                {
+                    continue;
+                }
+
+                var runtime = await engine.GetRuntimeAsync(instance.Id, cancellationToken).ConfigureAwait(false);
+                runtime = EnforceRecipeTransport(instance, engine, runtime);
+                if (runtime is not null)
+                {
+                    instance.MarkRunning(runtime);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Reconciling the live state of sandbox {SandboxId} failed; keeping the persisted state.",
+                    instance.Id);
+            }
+        }
     }
 
     /// <summary>

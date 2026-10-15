@@ -30,19 +30,20 @@ HCS 直连可提供：多实例、CPU 核数、自定义用户数据位置、自
 | 多实例 | ✅ 无许可门槛 | ⚠️ 受许可策略限制（`CO_E_APPSINGLEUSE`） | ✅ 无许可门槛 |
 | CPU 核数 | ✅ `Processor.Count` | ✖ | ✅ `Processor.Count` |
 | 自定义用户数据位置 | ✅ `Scsi.Attachments[].Path` | ✖（仅大小） | ✅ 每实例 scratch 目录 |
-| 基础镜像层 | ✅ `VirtualSmb.Shares` / `RunInSilo` | ✖ | 🔁 **复用 Windows Sandbox 镜像层**（只读 `Storage.Layers`） |
+| 基础镜像层 | ✅ `VirtualSmb.Shares` / `RunInSilo` | ✖ | ✅ 可配置只读镜像层（`WindowsContainer:BaseImageLayerPath`） |
 | 检查点 | ✅ `HcsSaveComputeSystem` | ✖ | ✖ |
 | 运行期热映射目录 | ✖（创建时映射） | ✅ `MapFolder` | ✖（创建时 `MappedDirectories`） |
 | in-guest 进程执行 | ✖ | ✅ `CreateProcess` | ✅ `HcsCreateProcess` |
-| 获取 IP | ✖（由 HNS 维护） | ✅ `GetIpAddress` | ⚠️ HNS 查询（endpoint attach 未接线） |
+| 获取 IP | ✖（由 HNS 维护） | ✅ `GetIpAddress` | ✅ HNS（namespace + NAT endpoint） |
 
 引擎在提权时**自动选用 HCS**（`HcsSandboxEngine.IsAvailable == _elevation.IsElevated`），否则回退
-Windows Sandbox gRPC。第三个引擎 `WindowsContainerEngine` 是 **HCS 进程隔离容器**
-（MXC `processcontainer` 对应的轻量隔离层）：它把 Windows Sandbox 的**最小化系统镜像层**作为只读
-容器层复用（`Storage.Layers`），为每个实例准备可写 scratch，并在容器启动后拉起必要服务
-（主机 `vmcompute`/`hns` + 容器内 `RpcSs`/`DcomLaunch`/`ProfSvc`/`CryptSvc`）。它同样需要提权
-（`IsAvailable == _elevation.IsElevated`），按 `SandboxEngineKind` 升序排在 HCS 之后。`wsm env` 会显示
-当前所选引擎与能力。
+Windows Sandbox gRPC。第三个引擎 `WindowsContainerEngine` 是 **HCS 进程隔离容器（Argon）**：
+它把配置的只读镜像层与每实例可写 scratch 层经 WCIFS 叠加成容器 `C:\`
+（`CreateSandboxLayer`/`ActivateLayer`/`PrepareLayer`/`GetLayerMountPath`），并通过 HNS
+**namespace** 接入 NAT 网络。镜像层默认取最新 Windows Sandbox 镜像层，但进程隔离要求镜像与宿主
+build 一致（Windows Server 2022/2025 镜像例外），故通常需先 `wsm image import` 一个服务器镜像并设
+`WSM_CONTAINER_BASE_IMAGE`。它同样需要提权（`IsAvailable == _elevation.IsElevated`），按
+`SandboxEngineKind` 升序排在 HCS 之后。`wsm env` 会显示当前所选引擎与能力。
 
 ---
 
@@ -125,6 +126,8 @@ wsm checkpoint save <id> <name> [--template]  保存 HCS 检查点
 wsm checkpoint list <id>                      列出检查点
 wsm checkpoint restore <id> <checkpointId>    恢复检查点
 wsm multi [--enable|--disable] 查看/切换多实例许可策略（gRPC 引擎用）
+wsm image import <ref> <path> 导入容器镜像的基础层，供「进程隔离」引擎使用
+                              （默认 mcr.microsoft.com/windows/servercore:ltsc2022）
 wsm elevate                    提权重启（启用 HCS 引擎）
 wsm help                       显示帮助
 
@@ -156,6 +159,60 @@ wsm checkpoint save $id snap1 --template
 wsm checkpoint list $id
 wsm stop $id
 ```
+
+### 进程隔离（Windows 容器）快速上手
+
+进程隔离要求镜像与宿主 build 一致；Windows 11 宿主可运行 **Windows Server 2022/2025** 镜像
+（允许 build 不一致）。**VM 隔离（HCS / Windows Sandbox）始终可用**；仅当镜像满足兼容规则时，
+进程隔离引擎才会被列出为可用（否则在下拉框里显示为不可用，选择器自动回退到 VM 引擎）。
+
+在图形界面里：**设置 → 进程隔离镜像**，选择 `Windows Server 2022/2025` 镜像并点击「下载镜像」
+（需管理员）。下载完成后立即生效：状态行显示「进程隔离：可用」，创建对话框的引擎下拉框随之可选。
+
+命令行等价流程：
+
+```powershell
+wsm elevate
+wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 C:\wsm-images\servercore-ltsc2022
+$env:WSM_CONTAINER_BASE_IMAGE = 'C:\wsm-images\servercore-ltsc2022'
+$id = (wsm create --name ctr --engine container --memory 4096 --cpu 2 --networking enable)
+wsm host $id                       # 启动并保持（另开一个提权窗口操作）
+wsm exec $id cmd.exe /c ver        # 在容器内执行命令
+wsm ip $id                         # 容器在 NAT 网络上的地址
+wsm stop $id
+```
+
+> 也可用 `WindowsContainer:BaseImageLayerPath` 配置项（等价于该环境变量）。
+> `wsm env` 会列出每个引擎的可用性。
+
+### 桌面与 mstsc（用 VM 隔离）
+
+**容器（进程隔离**或** Hyper-V 隔离）不支持图形界面与 RDP 交互会话**——这是 Microsoft 的设计
+（见 [Lift and shift to containers](https://learn.microsoft.com/virtualization/windowscontainers/quick-start/lift-shift-to-containers)：
+“Containers don't support GUI”、“An application using RDP can't be containerized as-is”；
+即便是 “Desktop Experience” 的 `windows/server` 镜像，官方也明确 **没有 GUI**）。
+实测：WS2022 容器内 `TermService` 能启动、`WinStations\RDP-Tcp` 配置存在，但**永远不监听 3389**，
+因此 `mstsc` 无法连入容器。
+
+**要进入桌面并用 `mstsc` 连接，必须用 VM/Hyper-V 隔离**（Windows Sandbox / HCS 引擎，不是容器）。
+该引擎默认走命名管道（应用内 `RDPBASE` + `mstscax` 呈现桌面）；要改用标准 `mstsc`，选择
+**TCP 传输**，guuest 会在 3389 上监听：
+
+```powershell
+wsm elevate
+$id = (wsm create --name desk --networking enable --transport tcp --memory 4096 --cpu 2)
+wsm host $id            # 启动并保持（另开一个提权窗口）
+wsm ip $id              # 例如 172.21.83.79
+mstsc /v:172.21.83.79   # 用户名 WDAGUtilityAccount；密码为确定性口令 Wsm!<SHA256(id) 前 10 字节>
+```
+
+- `--transport tcp` 需要 `--networking enable`（guest 通过 ICS “Default Switch” 获取 DHCP 地址）。
+- 座席口令由引擎按实例 id 确定性派生（`Wsm!` + `SHA256(id)` 前 10 字节大写十六进制），
+  `wsm start/host` 会打印 `user=…`。
+- GUI 里在**实例设置 → RDP 传输**中选择 TCP 即可。
+
+> 结论：**桌面 → VM 隔离（随时可用）；进程隔离 → 无头负载（更省资源）**。两者按同一 recipe 选择，
+> 选择器会在进程隔离不可用（镜像不兼容）时自动回退到 VM 引擎。
 
 ---
 
@@ -194,10 +251,20 @@ wsm stop $id
 - **裸 HCS 从零创建可启动的 Sandbox 属实验性**：需已存在基础层与用户数据盘
   （运行一次 Windows Sandbox 或由既有 `ContainerStorages` 播种即可）。
 - HCS 后端不支持运行期热映射目录与 in-guest 进程执行（能力矩阵已如实声明）。
-- **容器引擎（进程隔离容器）为初步实现**：已实现基础层复用 Windows Sandbox 镜像层
-  （只读 `Storage.Layers`）；但 HCS 进程隔离要求 `Container.Storage.Path` 指向**已挂载的层卷**
-  （`\\?\Volume{GUID}\`），该 scratch 卷的自动供给、以及容器网络的 HNS endpoint attach 尚未接线
-  （容器内进程执行、必要服务拉起、枚举/停止/删除均已实现）。
+- **容器引擎（进程隔离，`WindowsContainer`）**：基于 HCS *Argon* 容器；`C:\`
+  由只读镜像层 + 每实例可写 **scratch 层**经 WCIFS 叠加而成。引擎会
+  `CreateSandboxLayer → ActivateLayer → PrepareLayer → GetLayerMountPath`
+  取得 scratch 卷，并通过 HNS **namespace**（`Container.Networking.Namespace`）
+  接入 NAT 网络。已实测：用 Windows Server 2022 镜像可正常 create/start/exec/取 IP/stop。
+  - **镜像要求**：进程隔离要求镜像与宿主 **build 一致**；例外是 Windows 11 宿主可运行
+    **Windows Server 2022/2025** 镜像（允许 build 不一致）。Windows Sandbox 自带的是
+    **客户端** 镜像，功能更新后可能落后于宿主（本例宿主 26H2/26300、镜像 24H2/26100），
+    此时 HCS 会以 `HCS_E_IMAGE_MISMATCH (0x80370101)` 拒绝。请先
+    `wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 <path>`，
+    再设 `WSM_CONTAINER_BASE_IMAGE`（或 `WindowsContainer:BaseImageLayerPath`）指向该层。
+  - **无图形桌面**：进程隔离容器（含 ServerCore）没有可交互的会话与 RDP 监听
+    （`WinStations\RDP-Tcp` 缺失），因此**不能**用 `mstsc` 进入图形桌面；需要图形桌面请使用
+    Windows Sandbox/HCS 全 VM 引擎。该容器适合无头工作负载（可用 `wsm exec` 执行命令）。
 - `HCS` 的 guest IP 由 HNS 维护，未从 HCS 属性直接暴露。
 - `WindowsSandboxServer` gRPC 契约与 `RDPBASE`/`computecore`/`cmclient` 接口属**非公开**接口，可能随版本变化。
 - `ISandboxEnvironment.PackageInstallPath` 在非提权下可能为 `null`。

@@ -747,6 +747,8 @@ public sealed class StorageProvisioningTests : IDisposable
         public IReadOnlyList<HcsLayerInfo> ListLayers() => Layers;
 
         public string? ResolveBaseLayerPath() => null;
+
+        public HcsLayerInfo? ResolveBaseImageLayer() => null;
     }
 
     private sealed class FakeVirtualDiskFactory : IVirtualDiskFactory

@@ -14,6 +14,7 @@
     <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Layout\Wsm.Hcs.Layout.csproj" />
     <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Json.Container\Wsm.Hcs.Json.Container.csproj" />
     <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Process\Wsm.Hcs.Process.csproj" />
+    <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Storage\Wsm.Hcs.Storage.csproj" />
     <ProjectReference Include="..\..\10-Hcs\Wsm.Hcs.Network\Wsm.Hcs.Network.csproj" />
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
   </ItemGroup>

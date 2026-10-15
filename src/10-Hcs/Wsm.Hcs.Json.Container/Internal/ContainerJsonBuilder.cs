@@ -5,16 +5,19 @@ namespace Wsm.Hcs.Json.Container.Internal;
 
 /// <summary>
 /// Default <see cref="IContainerJsonBuilder"/>. Emits the HCS schema 2.1
-/// <c>Container</c> object observed in the platform's own container runtime
-/// (<c>hcsshim</c>/<c>dockerd</c>):
+/// <c>Container</c> object for a <b>process-isolated</b> (Argon) container, as
+/// observed in the platform's own container runtime (<c>hcsshim</c>):
 /// <list type="bullet">
 ///   <item><c>GuestOs.HostName</c> — the container host name;</item>
-///   <item><c>Storage.Path</c> — the writable scratch volume;</item>
-///   <item><c>Storage.Layers</c> — the read-only base OS image layer, which is
-///   the <b>same minimal image the Windows Sandbox uses</b>;</item>
+///   <item><c>Storage.Path</c> — the activated scratch layer's
+///   <c>\\?\Volume{GUID}\</c> mount path, which becomes the container's
+///   <c>C:\</c>;</item>
+///   <item><c>Storage.Layers[]</c> — the read-only image layers (<c>Id</c> +
+///   <c>Path</c>), base first;</item>
 ///   <item><c>Memory.SizeInMB</c> / <c>Processor.Count</c> — resource limits;</item>
 ///   <item><c>MappedDirectories</c> — host folders bound into the container;</item>
-///   <item><c>Networking.NetworkAdapters</c> — HNS endpoint ids.</item>
+///   <item><c>Networking.Namespace</c> — the HNS namespace that carries the
+///   container's NIC.</item>
 /// </list>
 /// Optional sections are omitted when they carry no data, because several HCS
 /// builds reject empty-but-present objects at construct time.
@@ -31,15 +34,12 @@ internal sealed class ContainerJsonBuilder : IContainerJsonBuilder, ITransientDe
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        // HCS expects a unique id per layer; emit it when the caller resolved it
-        // (the Windows Sandbox layer directory embeds it as `Layers\<guid>`).
-        var layer = new Dictionary<string, object?>();
-        if (!string.IsNullOrWhiteSpace(definition.BaseLayerId))
+        if (string.IsNullOrWhiteSpace(definition.ScratchMountPath))
         {
-            layer["Id"] = definition.BaseLayerId;
+            throw new ArgumentException(
+                "Container.Storage.Path (the activated scratch layer's mount path) is required.",
+                nameof(definition));
         }
-
-        layer["Path"] = definition.BaseLayerPath;
 
         var container = new Dictionary<string, object?>
         {
@@ -51,12 +51,14 @@ internal sealed class ContainerJsonBuilder : IContainerJsonBuilder, ITransientDe
             },
             ["Storage"] = new Dictionary<string, object?>
             {
-                // Storage.Path is the container's writable scratch; Layers holds
-                // the read-only image layers it is merged with. Sharing the
-                // Windows Sandbox base layer here is what lets both engine kinds
-                // run off a single provisioned image.
-                ["Path"] = definition.ScratchPath,
-                ["Layers"] = new object[] { layer },
+                // Storage.Path is the mounted scratch volume (the container's C:),
+                // and Layers are the read-only image layers unioned beneath it.
+                ["Path"] = definition.ScratchMountPath,
+                ["Layers"] = definition.Layers.Select(layer => (object)new Dictionary<string, object?>
+                {
+                    ["Id"] = layer.Id,
+                    ["Path"] = layer.Path,
+                }).ToArray(),
             },
         };
 
@@ -90,14 +92,13 @@ internal sealed class ContainerJsonBuilder : IContainerJsonBuilder, ITransientDe
                 .ToArray();
         }
 
-        // A NetworkAdapters entry must be a real HNS endpoint GUID. When the
-        // caller did not supply one (no HNS network is configured) the whole
-        // Networking object is omitted so the container simply gets no NIC.
-        if (definition.EnableNetworking && definition.NetworkAdapterIds.Count > 0)
+        // The container joins an HNS namespace; the endpoint added to it supplies
+        // the NIC. Omitting the section leaves the container with no networking.
+        if (!string.IsNullOrWhiteSpace(definition.NetworkNamespace))
         {
             container["Networking"] = new Dictionary<string, object?>
             {
-                ["NetworkAdapters"] = definition.NetworkAdapterIds.ToArray(),
+                ["Namespace"] = definition.NetworkNamespace,
             };
         }
 

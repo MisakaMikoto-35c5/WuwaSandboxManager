@@ -402,6 +402,56 @@
                         </ItemsControl>
                     </StackPanel>
 
+                    <!-- Process-isolation image (Windows Server) -->
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Uid="ContainerImageSection"
+                                   Text="Process isolation image"
+                                   Style="{StaticResource FieldLabel}" />
+                        <TextBlock x:Uid="ContainerImageCaption"
+                                   Text="Process isolation (HCS container) needs an image; download a Windows Server image to enable it."
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        <TextBlock Text="{Binding ContainerIsolationStatus}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <ComboBox HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding ContainerImageReferences}"
+                                  SelectedItem="{Binding SelectedContainerImageReference, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanDownloadContainerImage}" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding ContainerImageFolder, Mode=TwoWay}"
+                                     IsEnabled="{Binding CanDownloadContainerImage}" />
+                            <Button Grid.Column="1"
+                                    x:Uid="BrowseButton"
+                                    Content="Browse"
+                                    Click="OnBrowseContainerImageFolder"
+                                    IsEnabled="{Binding CanDownloadContainerImage}" />
+                        </Grid>
+                        <Button x:Uid="ContainerImageDownloadButton"
+                                Content="Download image"
+                                HorizontalAlignment="Left"
+                                Command="{Binding DownloadContainerImageCommand}" />
+                        <ProgressBar Maximum="100"
+                                     Value="{Binding ContainerImageProgress, Mode=OneWay}"
+                                     Visibility="{Binding IsContainerImageDownloading, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Text="{Binding ContainerImageProgressText}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        <TextBlock x:Uid="ContainerImageElevationHint"
+                                   Text="Downloading requires an elevated app (restart elevated first)."
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="{Binding IsElevated, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}" />
+                    </StackPanel>
+
                     <!-- Environment / about -->
                     <StackPanel Spacing="6">
                         <TextBlock x:Uid="EnvironmentSection"

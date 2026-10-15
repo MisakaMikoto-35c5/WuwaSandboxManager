@@ -45,4 +45,16 @@ public sealed class WindowsContainerEngineTests
 
         Assert.Equal("sandbox-1111111", host);
     }
+
+    [Fact]
+    public void EndpointName_is_deterministic_and_id_based()
+    {
+        var id = Wsm.Domain.ValueObjects.SandboxInstanceId.From(
+            Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
+
+        var name = WindowsContainerEngine.EndpointName(id);
+
+        Assert.Equal("wsm-container-aaaaaaaabbbbccccddddeeeeeeeeeeee", name);
+        Assert.Equal(name, WindowsContainerEngine.EndpointName(id));
+    }
 }

@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Wsm.Service.Contracts\Wsm.Service.Contracts.csproj" />
+    <ProjectReference Include="..\..\00-Core\Wsm.Application\Wsm.Application.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
   </ItemGroup>
 
   <ItemGroup>

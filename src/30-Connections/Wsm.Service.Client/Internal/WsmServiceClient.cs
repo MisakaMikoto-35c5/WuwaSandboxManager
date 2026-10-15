@@ -28,11 +28,16 @@ internal sealed class WsmServiceClient : IWsmServiceClient, ISingletonDependency
     private static readonly TimeSpan PrepareConnectDeadline = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan EnumerateDeadline = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan GetIpAddressesDeadline = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ShutdownDeadline = TimeSpan.FromSeconds(5);
 
     private readonly NamedPipeWsmServiceChannelFactory _channelFactory;
+    private readonly IStandaloneAgentStarter _starter;
 
-    public WsmServiceClient(NamedPipeWsmServiceChannelFactory channelFactory)
-        => _channelFactory = channelFactory;
+    public WsmServiceClient(NamedPipeWsmServiceChannelFactory channelFactory, IStandaloneAgentStarter starter)
+    {
+        _channelFactory = channelFactory;
+        _starter = starter;
+    }
 
     public async Task<IReadOnlyList<Guid>> EnumerateAsync(CancellationToken ct = default)
     {
@@ -163,6 +168,25 @@ internal sealed class WsmServiceClient : IWsmServiceClient, ISingletonDependency
         {
             // Missing pipe, refused connect, channel failure → not available.
             return false;
+        }
+    }
+
+    public Task<bool> EnsureAvailableAsync(string? dataFolder = null, CancellationToken ct = default)
+        => _starter.EnsureRunningAsync(IsAvailableAsync, dataFolder, ct);
+
+    public async Task ShutdownAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var client = new ProtoService.WsmServiceClient(_channelFactory.Channel);
+            var deadline = DateTime.UtcNow.Add(ShutdownDeadline);
+            await client.ShutdownAsync(new Empty(), deadline: deadline, cancellationToken: ct)
+                .ResponseAsync.ConfigureAwait(false);
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.Unavailable or StatusCode.Internal)
+        {
+            // The agent honoured the request and exited while the reply was in
+            // flight: a torn transport right after Shutdown means success.
         }
     }
 

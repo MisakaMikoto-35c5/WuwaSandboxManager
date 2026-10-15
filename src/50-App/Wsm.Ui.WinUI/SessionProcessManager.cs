@@ -150,7 +150,17 @@ internal static class SessionProcessManager
                 Environment.NewLine,
                 new[] { (await stderr).Trim(), (await stdout).Trim() }
                     .Where(text => !string.IsNullOrEmpty(text)));
-            exitCode = process.ExitCode;
+
+            try
+            {
+                exitCode = process.ExitCode;
+            }
+            catch (InvalidOperationException)
+            {
+                // EndAsync disposed the process while the monitor was awaiting
+                // the exit: a managed shutdown, so the exit code is moot (the
+                // SessionEnded event is suppressed below anyway).
+            }
         }
         catch (Exception ex)
         {

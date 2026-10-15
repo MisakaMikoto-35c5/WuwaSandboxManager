@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -7,10 +8,13 @@ using Windows.Graphics;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 using Wsm.Application;
+using Wsm.Engine.WindowsContainer;
 using Wsm.Engines.Abstractions;
+using Wsm.Hcs.Storage;
 using Wsm.Host.Elevation;
 using Wsm.Host.Policy;
 using Wsm.Persistence;
+using Wsm.Service.Client;
 using Wsm.Ui.WinUI.Localization;
 using Wsm.Ui.WinUI.ViewModels;
 
@@ -43,12 +47,29 @@ public sealed partial class MainWindow : Window
         _openManifestPath = openManifestPath;
         _appliedCulture = LanguageOption.Resolve(_localizer.CurrentCulture.Name).CultureName;
 
+        // Route VM-lifecycle calls through the resident WSM agent (the
+        // maintenance process) when one answers — spawning a standalone console
+        // agent on demand when none does — so running sandboxes survive this
+        // GUI process. Definition-level operations stay in-process regardless.
+        ISandboxManager manager = services.GetRequiredService<ISandboxManager>();
+        var agentClient = services.GetService<IWsmServiceClient>();
+        if (agentClient is not null)
+        {
+            manager = new ServiceBackedSandboxManager(
+                manager,
+                agentClient,
+                UiSettingsStore.Load().ResolveConfigDataFolder(),
+                services.GetRequiredService<ILogger<ServiceBackedSandboxManager>>());
+        }
+
         ViewModel = new MainViewModel(
-            services.GetRequiredService<ISandboxManager>(),
+            manager,
             services.GetRequiredService<ISandboxEngineRegistry>(),
             services.GetRequiredService<IMultiInstancePolicy>(),
             _elevation,
-            _localizer);
+            _localizer,
+            services.GetRequiredService<IContainerImageImporter>(),
+            services.GetRequiredService<IContainerIsolationPolicy>());
 
         Root.DataContext = ViewModel;
 
@@ -222,6 +243,20 @@ public sealed partial class MainWindow : Window
         // persistence and HCS layout pick it up on the next start.
         ViewModel.ConfigDataFolder = path;
         PersistAndRelaunch(configDataFolder: path);
+    }
+
+    /// <summary>
+    /// Picks where an imported container image layer is written. Unlike the data
+    /// folder this is not persisted on its own: the download button saves the
+    /// resulting image path once the import succeeds.
+    /// </summary>
+    private async void OnBrowseContainerImageFolder(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            ViewModel.ContainerImageFolder = path;
+        }
     }
 
     // ----------------------------- Settings -----------------------------

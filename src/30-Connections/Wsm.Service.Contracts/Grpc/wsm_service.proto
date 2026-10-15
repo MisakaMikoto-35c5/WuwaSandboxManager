@@ -81,4 +81,8 @@ service WsmService {
   rpc Execute(ExecuteRequest) returns (ExecuteReply);
   rpc MapFolder(MapFolderRequest) returns (google.protobuf.Empty);
   rpc GetIpAddresses(SandboxIdRequest) returns (IpAddressesReply);
+  // Asks the agent to shut down (used for a standalone console agent; an
+  // SCM-installed service is stopped through the Service Control Manager
+  // instead). The reply is sent before the process begins its exit.
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
 }

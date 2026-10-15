@@ -434,6 +434,95 @@ public sealed class HcsSandboxEngineTests
     }
 
     [Fact]
+    public async Task Stop_throws_and_keeps_the_endpoint_when_the_system_survives_terminate()
+    {
+        var hcs = new FakeHcsClient { ShutdownStopsSystem = false, TerminateStopsSystem = false };
+        var engine = CreateEngine(hcs, out _, out var network);
+        engine.ShutdownWaitTimeout = TimeSpan.FromMilliseconds(50);
+        engine.StoppedPollTimeout = TimeSpan.FromMilliseconds(100);
+        engine.StoppedPollInterval = TimeSpan.FromMilliseconds(20);
+        engine.TerminatedPollTimeout = TimeSpan.FromMilliseconds(100);
+
+        var id = SandboxInstanceId.New();
+        await engine.StartAsync(Request(id));
+
+        // A VM that survives every escalation must NOT be reported as stopped:
+        // the throw keeps the manager from marking (and persisting) a live VM
+        // as stopped, which hid Stop/Disconnect in the UI.
+        await Assert.ThrowsAsync<SandboxBackendException>(() => engine.StopAsync(id));
+
+        Assert.Contains(id.ToString(), hcs.Terminated);
+
+        // The endpoint belongs to the still-running VM; deleting it would
+        // detach the NIC of a system that is still alive. The single recorded
+        // delete is the create path's stale-endpoint cleanup.
+        Assert.Equal(1, network.DeletedEndpointNames.Count(name => name == $"wsm-{id.Value:N}"));
+    }
+
+    [Fact]
+    public async Task GetRuntime_probes_tcp_with_the_endpoint_pinned_guest_ip()
+    {
+        // Process 1 adopts the running system; process 2 (a fresh engine over
+        // the same fakes) probes it. The guest has two NICs and ipconfig order
+        // varies between processes, so the probe must pin the answer to the
+        // HNS endpoint's MAC instead of taking the first non-APIPA address.
+        var hcs = new FakeHcsClient
+        {
+            CreateThrows = true,
+            StandardOutputFor = command => command.Contains("ipconfig")
+                ? "\r\nEthernet adapter Ethernet0:\r\n\r\n" +
+                  "   Physical Address. . . . . . . . . . . : 00-15-5D-99-99-99\r\n" +
+                  "   IPv4 Address. . . . . . . . . . . . : 172.21.93.72\r\n" +
+                  "\r\nEthernet adapter Ethernet1:\r\n\r\n" +
+                  "   Physical Address. . . . . . . . . . . : 00-15-5D-01-02-03\r\n" +
+                  "   IPv4 Address. . . . . . . . . . . . : 172.21.95.238\r\n"
+                : command.Contains("netstat")
+                    ? "  TCP    0.0.0.0:3389           0.0.0.0:0              LISTENING       1234\r\n"
+                    : null,
+        };
+
+        var engine1 = CreateEngine(hcs, out _, out _);
+        var id = SandboxInstanceId.New();
+        await engine1.StartAsync(Request(id));
+
+        var engine2 = CreateEngine(hcs, out _, out var network2);
+        network2.EndpointToReturn = new HnsEndpoint(
+            "endpoint-test", $"wsm-{id.Value:N}", "00-15-5D-01-02-03", IpAddress: null);
+
+        var runtime = await engine2.GetRuntimeAsync(id);
+
+        Assert.NotNull(runtime);
+        Assert.Equal(RdpTransportKind.Tcp, runtime!.Transport);
+        Assert.Equal("172.21.95.238", runtime.IpAddress);
+    }
+
+    [Fact]
+    public async Task GetRuntime_falls_back_to_the_first_guest_ip_without_an_endpoint()
+    {
+        var hcs = new FakeHcsClient
+        {
+            CreateThrows = true,
+            StandardOutputFor = command => command.Contains("ipconfig")
+                ? "   IPv4 Address. . . . . . . . . . . . : 172.21.95.238\r\n"
+                : command.Contains("netstat")
+                    ? "  TCP    0.0.0.0:3389           0.0.0.0:0              LISTENING       1234\r\n"
+                    : null,
+        };
+
+        var engine1 = CreateEngine(hcs, out _, out _);
+        var id = SandboxInstanceId.New();
+        await engine1.StartAsync(Request(id));
+
+        var engine2 = CreateEngine(hcs, out _, out _);
+
+        var runtime = await engine2.GetRuntimeAsync(id);
+
+        Assert.NotNull(runtime);
+        Assert.Equal(RdpTransportKind.Tcp, runtime!.Transport);
+        Assert.Equal("172.21.95.238", runtime.IpAddress);
+    }
+
+    [Fact]
     public async Task DeleteData_removes_storage_and_snapshot_directories()
     {
         var engine = CreateEngine(new FakeHcsClient(), out _);
@@ -514,6 +603,7 @@ public sealed class HcsSandboxEngineTests
         // the named pipe. The TermService settle delays are zeroed too so the
         // stale-TCP revert does not stall the suite.
         engine.DhcpWaitTimeout = TimeSpan.Zero;
+        engine.ProbeDhcpWaitTimeout = TimeSpan.Zero;
         engine.TermServiceStopSettle = TimeSpan.Zero;
         engine.TermServiceStartSettle = TimeSpan.Zero;
         return engine;
@@ -552,6 +642,12 @@ public sealed class HcsSandboxEngineTests
         /// </summary>
         public bool ShutdownStopsSystem { get; set; } = true;
 
+        /// <summary>
+        /// When false, even a terminate does not make the system disappear:
+        /// the VM survives every escalation and Stop must fail loudly.
+        /// </summary>
+        public bool TerminateStopsSystem { get; set; } = true;
+
         public List<string> Granted { get; } = new();
 
         /// <summary>When set, a grant whose path matches throws.</summary>
@@ -579,7 +675,7 @@ public sealed class HcsSandboxEngineTests
 
             // Simulate the compute system being gone once it was shut down (or
             // terminated); otherwise it reports itself as running.
-            if (Terminated.Contains(id))
+            if (TerminateStopsSystem && Terminated.Contains(id))
             {
                 return null;
             }
@@ -695,6 +791,8 @@ public sealed class HcsSandboxEngineTests
         public IReadOnlyList<HcsLayerInfo> ListLayers() => Array.Empty<HcsLayerInfo>();
 
         public string? ResolveBaseLayerPath() => Path.GetTempPath();
+
+        public HcsLayerInfo? ResolveBaseImageLayer() => null;
     }
 
     private sealed class FakeStorage : ISandboxStorageProvisioner
@@ -749,6 +847,9 @@ public sealed class HcsSandboxEngineTests
         public Task<string> GetOrCreateNatNetworkIdAsync(CancellationToken ct = default)
             => Task.FromResult("network-test");
 
+        public Task<string> GetOrCreateContainerNetworkIdAsync(CancellationToken ct = default)
+            => Task.FromResult("network-test");
+
         public Task<string> CreateNatEndpointAsync(string networkId, CancellationToken ct = default)
             => CreateNatEndpointAsync(networkId, "unnamed", ct);
 
@@ -766,6 +867,21 @@ public sealed class HcsSandboxEngineTests
             DeletedEndpointNames.Add(name);
             return Task.CompletedTask;
         }
+
+        public Task<string> CreateNamespaceAsync(CancellationToken ct = default)
+            => Task.FromResult("namespace-test");
+
+        public Task AddEndpointToNamespaceAsync(string namespaceId, string endpointId, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task DeleteNamespaceAsync(string namespaceId, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        /// <summary>The endpoint <see cref="GetEndpointByNameAsync"/> returns; null when unset.</summary>
+        public HnsEndpoint? EndpointToReturn { get; set; }
+
+        public Task<HnsEndpoint?> GetEndpointByNameAsync(string name, CancellationToken ct = default)
+            => Task.FromResult(EndpointToReturn);
 
         public Task<IReadOnlyList<string>> GetIpAddressesAsync(string computeSystemId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());

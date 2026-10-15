@@ -1,5 +1,6 @@
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
+using Microsoft.Extensions.Hosting;
 using Wsm.Application;
 using Wsm.Domain.ValueObjects;
 using Wsm.Engines.Abstractions;
@@ -25,10 +26,12 @@ namespace Wsm.Service.Host.Internal;
 public partial class WsmServiceGrpc : WsmService.WsmServiceBase
 {
     private readonly ISandboxManager _sandboxManager;
+    private readonly IHostApplicationLifetime _lifetime;
 
-    public WsmServiceGrpc(ISandboxManager sandboxManager)
+    public WsmServiceGrpc(ISandboxManager sandboxManager, IHostApplicationLifetime lifetime)
     {
         _sandboxManager = sandboxManager;
+        _lifetime = lifetime;
     }
 
     /// <summary>Lists the ids of the currently running sandbox instances.</summary>
@@ -215,4 +218,24 @@ public partial class WsmServiceGrpc : WsmService.WsmServiceBase
             throw new RpcException(WsmServiceStatus.ToStatus(ex));
         }
     }
+
+    /// <summary>
+    /// Shuts the agent down. Used to stop a standalone (console) agent; an
+    /// SCM-installed service is stopped through the Service Control Manager
+    /// instead. The reply is sent first; the process exit follows after a short
+    /// delay so the client is not cut off mid-response.
+    /// </summary>
+    public override Task<Empty> Shutdown(Empty request, ServerCallContext context)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(ShutdownReplyDelay).ConfigureAwait(false);
+            _lifetime.StopApplication();
+        });
+
+        return Task.FromResult(new Empty());
+    }
+
+    /// <summary>Delay between the Shutdown reply and the process stop. Settable from tests.</summary>
+    internal TimeSpan ShutdownReplyDelay { get; set; } = TimeSpan.FromMilliseconds(500);
 }

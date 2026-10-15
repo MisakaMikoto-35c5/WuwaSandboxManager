@@ -137,6 +137,9 @@ internal sealed class HcsHostLayout : IHcsHostLayout, ISingletonDependency
         return null;
     }
 
+    public HcsLayerInfo? ResolveBaseImageLayer()
+        => ListLayers().FirstOrDefault(l => l.IsUsableBaseImage);
+
     private static int ToInt(object? value) => value switch
     {
         int i => i,

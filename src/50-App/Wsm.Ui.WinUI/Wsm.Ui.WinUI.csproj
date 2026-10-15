@@ -40,6 +40,7 @@
     <ProjectReference Include="..\..\40-Host\Wsm.Localization\Wsm.Localization.csproj" />
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Policy\Wsm.Host.Policy.csproj" />
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
+    <ProjectReference Include="..\..\30-Connections\Wsm.Service.Client\Wsm.Service.Client.csproj" />
   </ItemGroup>
 
 </Project>

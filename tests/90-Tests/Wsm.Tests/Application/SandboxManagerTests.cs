@@ -171,6 +171,47 @@ public sealed class SandboxManagerTests
     }
 
     [Fact]
+    public async Task List_reconciles_a_running_instance_the_process_did_not_start()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var manager = Manager(repository, engine);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        // Simulate an app restart: the repository rehydrates the instance as
+        // Created while the engine still hosts the VM. List must reconcile
+        // with the engine or the UI hides Connect/Disconnect/Stop.
+        engine.RunningToReport.Add(SandboxInstanceId.From(created.Id));
+        engine.RuntimeToReport = new SandboxRuntimeInfo
+        {
+            SandboxId = SandboxInstanceId.From(created.Id),
+            VmId = created.Id,
+            Transport = RdpTransportKind.NamedPipe,
+        };
+
+        var listed = Assert.Single(await manager.ListAsync());
+
+        Assert.Equal(SandboxState.Running, listed.State);
+        Assert.NotNull(listed.Runtime);
+    }
+
+    [Fact]
+    public async Task Get_keeps_the_persisted_state_when_the_engine_reports_nothing()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var manager = Manager(repository, engine);
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+
+        var fetched = await manager.GetAsync(created.Id);
+
+        Assert.Equal(SandboxState.Created, fetched.State);
+        Assert.Null(fetched.Runtime);
+    }
+
+    [Fact]
     public async Task Get_round_trips_a_created_instance()
     {
         var repository = new InMemoryRepository();
@@ -663,8 +704,11 @@ public sealed class SandboxManagerTests
 
         public bool IsAvailable => true;
 
+        /// <summary>What <see cref="EnumerateAsync"/> reports as live (other processes' VMs).</summary>
+        public List<SandboxInstanceId> RunningToReport { get; } = new();
+
         public Task<IReadOnlyList<SandboxInstanceId>> EnumerateAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<SandboxInstanceId>>(Array.Empty<SandboxInstanceId>());
+            => Task.FromResult<IReadOnlyList<SandboxInstanceId>>(RunningToReport.ToArray());
 
         public Task<SandboxRuntimeInfo> StartAsync(SandboxStartRequest request, CancellationToken cancellationToken = default)
         {

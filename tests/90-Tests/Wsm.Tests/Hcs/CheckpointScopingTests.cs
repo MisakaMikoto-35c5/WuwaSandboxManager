@@ -78,6 +78,8 @@ public sealed class CheckpointScopingTests
         public IReadOnlyList<HcsLayerInfo> ListLayers() => Array.Empty<HcsLayerInfo>();
 
         public string? ResolveBaseLayerPath() => null;
+
+        public HcsLayerInfo? ResolveBaseImageLayer() => null;
     }
 
     private sealed class StubJsonBuilder : ISandboxVmJsonBuilder

@@ -498,6 +498,39 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     }
 
     /// <summary>
+    /// Returns the sandbox's guest addresses: the address recorded at start (the
+    /// TCP transport's DHCP lease) when known, otherwise a live read of the
+    /// guest NIC, and finally the HNS endpoint records. This is what makes an
+    /// <c>mstsc</c> connect possible for a TCP sandbox.
+    /// </summary>
+    public Task<IReadOnlyList<string>> GetIpAddressesAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
+    {
+        EnsureElevated();
+        var key = id.ToString();
+
+        if (_systems.TryGetValue(key, out var live))
+        {
+            if (live.Runtime.IpAddresses.Count > 0)
+            {
+                return Task.FromResult<IReadOnlyList<string>>(live.Runtime.IpAddresses);
+            }
+
+            if (!string.IsNullOrWhiteSpace(live.Runtime.IpAddress))
+            {
+                return Task.FromResult<IReadOnlyList<string>>([live.Runtime.IpAddress]);
+            }
+        }
+
+        var discovered = DiscoverGuestIp(key, waitForDhcp: false);
+        if (discovered is not null)
+        {
+            return Task.FromResult<IReadOnlyList<string>>([discovered]);
+        }
+
+        return _network.GetIpAddressesAsync(key, cancellationToken);
+    }
+
+    /// <summary>
     /// Runs a guest command and returns its output. Unlike
     /// <see cref="ExecuteAsync"/> — which logs the streams at Information because
     /// the caller only wants the exit code — the captured output is logged at
@@ -774,18 +807,44 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     }
 
     /// <summary>
-    /// One-shot TCP probe for systems this process did not start (a separate
+    /// TCP probe for systems this process did not start (a separate
     /// <c>wsm connect</c>, the app after a restart): returns the guest IP when
     /// its RDP-Tcp listener answers, null otherwise. Read-only — it never
     /// touches the guest configuration.
+    /// <para>
+    /// The HNS endpoint created at start is the authoritative source: its name
+    /// is deterministic and its MAC pins the guest NIC, so every process finds
+    /// the same address. Scraping the first non-APIPA address off
+    /// <c>ipconfig</c> (the old behaviour) is non-deterministic — adapter
+    /// order varies between processes and a DHCP re-lease changes it — and
+    /// sent reconnects to an address the guest did not answer on.
+    /// </para>
     /// </summary>
     private string? ProbeTcpTransport(SandboxInstanceId id)
     {
         var key = id.ToString();
         try
         {
-            var ip = DiscoverGuestIp(key, waitForDhcp: false);
-            return ip is not null && IsTcpListenerUp(key) ? ip : null;
+            var endpoint = _network.GetEndpointByNameAsync(GuestEndpointName(id)).GetAwaiter().GetResult();
+            if (endpoint is not null)
+            {
+                if (IsUsableGuestIpv4(endpoint.IpAddress) && IsTcpListenerUp(key))
+                {
+                    return endpoint.IpAddress;
+                }
+
+                if (endpoint.MacAddress is not null)
+                {
+                    var ip = DiscoverGuestIpByMac(key, endpoint.MacAddress);
+                    if (ip is not null && IsTcpListenerUp(key))
+                    {
+                        return ip;
+                    }
+                }
+            }
+
+            var fallback = DiscoverGuestIp(key, waitForDhcp: false);
+            return fallback is not null && IsTcpListenerUp(key) ? fallback : null;
         }
         catch (Exception ex)
         {
@@ -794,15 +853,106 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
         }
     }
 
+    private static bool IsUsableGuestIpv4(string? address)
+        => address is not null
+           && !address.StartsWith("169.254.", StringComparison.Ordinal)
+           && System.Net.IPAddress.TryParse(address, out var parsed)
+           && parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
+
+    /// <summary>
+    /// Reads the guest IPv4 address of the NIC whose MAC matches
+    /// <paramref name="macAddress"/> off <c>ipconfig /all</c>, retrying for a
+    /// short window so a transient guest-command hiccup does not fail the
+    /// connect. Locale-independent: the MAC line is matched by its digits, not
+    /// by the "Physical Address" label.
+    /// </summary>
+    private string? DiscoverGuestIpByMac(string key, string macAddress)
+    {
+        var deadline = DateTime.UtcNow + ProbeDhcpWaitTimeout;
+        var wanted = NormalizeMac(macAddress);
+
+        while (true)
+        {
+            string output;
+            try
+            {
+                output = _hcs.RunProcess(key, "cmd.exe /c ipconfig /all").StandardOutput;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Reading the guest IP configuration of {SandboxId} failed.", key);
+                output = string.Empty;
+            }
+
+            var ip = ParseGuestIpv4ByMac(output, wanted);
+            if (ip is not null || DateTime.UtcNow >= deadline)
+            {
+                return ip;
+            }
+
+            Thread.Sleep(DhcpPollInterval);
+        }
+    }
+
+    private static string NormalizeMac(string text)
+    {
+        var chars = text.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray();
+        return new string(chars);
+    }
+
+    /// <summary>
+    /// Finds the line carrying the (normalized) MAC, then takes the first IPv4
+    /// address listed after it — within an adapter section the addresses follow
+    /// the physical address. APIPA addresses are rejected.
+    /// </summary>
+    private static string? ParseGuestIpv4ByMac(string ipconfigOutput, string normalizedMac)
+    {
+        if (normalizedMac.Length == 0)
+        {
+            return null;
+        }
+
+        var lines = ipconfigOutput.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!NormalizeMac(lines[i]).Contains(normalizedMac, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            for (var j = i + 1; j < lines.Length; j++)
+            {
+                // Adapter sections are separated by blank lines; do not leak
+                // into the next adapter when this NIC has no IPv4 address.
+                if (string.IsNullOrWhiteSpace(lines[j]))
+                {
+                    break;
+                }
+
+                var ip = ParseGuestIpv4(lines[j]);
+                if (ip is not null)
+                {
+                    return ip;
+                }
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Reads the guest IPv4 address off <c>ipconfig</c>. An APIPA address
     /// (169.254.*) means DHCP has not answered yet and is not accepted; with
     /// <paramref name="waitForDhcp"/> the read is retried until
-    /// <see cref="DhcpWaitTimeout"/> elapses.
+    /// <see cref="DhcpWaitTimeout"/> elapses, otherwise only for the short
+    /// <see cref="ProbeDhcpWaitTimeout"/> window (a one-shot read made a
+    /// transient guest-command hiccup fail the whole connect).
     /// </summary>
     private string? DiscoverGuestIp(string key, bool waitForDhcp)
     {
-        var deadline = DateTime.UtcNow + (waitForDhcp ? DhcpWaitTimeout : TimeSpan.Zero);
+        var deadline = DateTime.UtcNow + (waitForDhcp ? DhcpWaitTimeout : ProbeDhcpWaitTimeout);
 
         while (true)
         {
@@ -994,6 +1144,13 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
     // shrink them; production uses the defaults.
     internal TimeSpan DhcpWaitTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Bound for the guest-IP read on the connect path (the sandbox booted long
+    /// ago, so DHCP has answered; the window only absorbs transient
+    /// guest-command hiccups).
+    /// </summary>
+    internal TimeSpan ProbeDhcpWaitTimeout { get; set; } = TimeSpan.FromSeconds(3);
+
     internal TimeSpan DhcpPollInterval { get; set; } = TimeSpan.FromSeconds(1);
 
     /// <summary>Settle delays around a TermService stop/start (the container-mode flip needs it).</summary>
@@ -1035,21 +1192,22 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
             // A checkpoint-restored system holds its handle in the checkpoint
             // service; release it so the system can terminate.
             _checkpoints.Release(key);
-
-            // HNS endpoints outlive their compute system. The VM is gone by
-            // now (the stop sequence above only returns once it is), so the
-            // endpoint is detached and safe to remove.
-            DeleteGuestEndpointQuietly(id);
         }
+
+        // HNS endpoints outlive their compute system. Only reached once the VM
+        // is actually gone (a failed stop throws above), so the endpoint is
+        // detached and safe to remove.
+        DeleteGuestEndpointQuietly(id);
     }
 
     /// <summary>
     /// Deterministically stops the compute system: graceful ACPI shutdown first,
     /// a bounded poll for the system to disappear, then an explicit terminate
-    /// when the graceful path stalls. Returns only when the system is gone (or
-    /// every escalation has been exhausted), so a caller that deletes the
-    /// storage next does not race vmwp's file handles. Works the same for
-    /// systems this process created and for adopted/foreign ones.
+    /// when the graceful path stalls. Returns only when the system is gone, so a
+    /// caller that deletes the storage next does not race vmwp's file handles.
+    /// Works the same for systems this process created and for adopted/foreign
+    /// ones. Throws when the system survives every escalation — a survivor must
+    /// never be reported as stopped.
     /// </summary>
     private void StopComputeSystem(string key, CancellationToken cancellationToken)
     {
@@ -1087,9 +1245,14 @@ internal sealed class HcsSandboxEngine : ISandboxEngine, ISingletonDependency
 
         if (!WaitUntilGone(key, TerminatedPollTimeout, cancellationToken))
         {
-            _logger.LogWarning(
-                "Sandbox {SandboxId} is still present {TimeoutSeconds}s after Terminate; its storage files may still be locked.",
-                key, TerminatedPollTimeout.TotalSeconds);
+            // Returning normally here would let the caller mark (and persist)
+            // the sandbox as stopped while the VM keeps running: the UI would
+            // then hide Stop/Disconnect and its storage could be deleted under
+            // a live vmwp. Fail loudly instead so the state stays live.
+            throw new SandboxBackendException(
+                $"Sandbox {key} is still present {TerminatedPollTimeout.TotalSeconds}s after Terminate; " +
+                "it refuses to stop. Its state was left unchanged — try stopping it again.",
+                0);
         }
     }
 

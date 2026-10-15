@@ -352,7 +352,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             // Auto-connect after a successful start, unless the user explicitly
             // disconnected this session. The session runs in its own process, so
             // this returns as soon as it is spawned.
-            if (!_userDisconnected && LaunchSession(ConnectionMode))
+            if (!_userDisconnected && LaunchSession(ConnectionMode) == SessionLaunch.Started)
             {
                 Status = _l["Status.Connected.Text"];
             }
@@ -363,32 +363,50 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     {
         await GuardAsync(() =>
         {
-            if (LaunchSession(ConnectionMode))
+            switch (LaunchSession(ConnectionMode))
             {
-                _userDisconnected = false;
-                Status = _l["Status.Connected.Text"];
+                case SessionLaunch.Started:
+                    _userDisconnected = false;
+                    Status = _l["Status.Connected.Text"];
+                    break;
+                case SessionLaunch.AlreadyRunning:
+                    // SessionProcessManager refused the launch (a window is
+                    // already open); say so instead of leaving the status
+                    // untouched, which reads as "Connect does nothing".
+                    Status = _l["Status.SessionAlreadyOpen.Text"];
+                    break;
             }
 
             return Task.CompletedTask;
         });
     }
 
+    private enum SessionLaunch
+    {
+        Started,
+        AlreadyRunning,
+        CliMissing,
+    }
+
     /// <summary>
     /// Presents the session in a separate <c>wsm connect</c> child process (see
-    /// <see cref="SessionProcessManager"/>). Returns false — with <see cref="Status"/>
-    /// set — when the companion CLI cannot be located, or when a session window
-    /// for this sandbox is already open.
+    /// <see cref="SessionProcessManager"/>). Returns <see cref="SessionLaunch.CliMissing"/>
+    /// — with <see cref="Status"/> set — when the companion CLI cannot be located, and
+    /// <see cref="SessionLaunch.AlreadyRunning"/> when a session window for this
+    /// sandbox is already open.
     /// </summary>
-    private bool LaunchSession(SandboxConnectionMode mode, string? program = null)
+    private SessionLaunch LaunchSession(SandboxConnectionMode mode, string? program = null)
     {
         var exe = WsmCliLocator.Find();
         if (exe is null)
         {
             Status = _l["Status.CliMissing.Text"];
-            return false;
+            return SessionLaunch.CliMissing;
         }
 
-        return SessionProcessManager.Start(exe, Id, mode == SandboxConnectionMode.RemoteApp, program);
+        return SessionProcessManager.Start(exe, Id, mode == SandboxConnectionMode.RemoteApp, program)
+            ? SessionLaunch.Started
+            : SessionLaunch.AlreadyRunning;
     }
 
     /// <summary>
@@ -430,7 +448,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             // window gracefully first so it does not linger as a disconnected
             // overlay.
             await SessionProcessManager.EndAsync(Id);
-            if (LaunchSession(SandboxConnectionMode.RemoteApp, program.Path))
+            if (LaunchSession(SandboxConnectionMode.RemoteApp, program.Path) == SessionLaunch.Started)
             {
                 _userDisconnected = false;
                 Status = _l.Get("Status.LaunchedProgram.Text", program.Path);
@@ -689,7 +707,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         null => _l["Engine.Auto.Text"],
         SandboxEngineKind.HcsSandbox => "HCS",
         SandboxEngineKind.WindowsSandbox => "Windows Sandbox",
-        SandboxEngineKind.WindowsContainer => _l["EngineReserved.Text"],
+        SandboxEngineKind.WindowsContainer => _l["Engine.Container.Text"],
         _ => kind.ToString()!,
     };
 }

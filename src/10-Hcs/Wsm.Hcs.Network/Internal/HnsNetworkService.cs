@@ -16,6 +16,7 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
 {
     private const string NetworksPath = "/networks/";
     private const string EndpointsPath = "/endpoints/";
+    private const string NamespacesPath = "/namespaces/";
 
     /// <summary>
     /// The network created when the host has no NAT/ICS network of its own. An
@@ -28,14 +29,46 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
 
     public Task<string> GetOrCreateNatNetworkIdAsync(CancellationToken ct = default)
     {
-        foreach (var network in ReadNetworks())
+        var networks = ReadNetworks();
+
+        // The Hyper-V "Default Switch" (ICS) is preferred: it runs DHCP, which
+        // is what a sandbox VM's NIC needs to obtain an address. A NAT network
+        // is the fallback, and the fallback network is created when neither
+        // exists.
+        var ics = networks.FirstOrDefault(network => network.Type == NetworkTypeIcs);
+        if (ics is not null)
         {
-            if (network.Type is NetworkTypeNat or NetworkTypeIcs)
-            {
-                return Task.FromResult(network.Id);
-            }
+            return Task.FromResult(ics.Id);
         }
 
+        var nat = networks.FirstOrDefault(network => network.Type == NetworkTypeNat);
+        if (nat is not null)
+        {
+            return Task.FromResult(nat.Id);
+        }
+
+        return Task.FromResult(CreateFallbackNatNetwork());
+    }
+
+    public Task<string> GetOrCreateContainerNetworkIdAsync(CancellationToken ct = default)
+    {
+        var networks = ReadNetworks();
+
+        // A container's address is assigned by the network: a real NAT network
+        // carries it on the HNS endpoint immediately, whereas an ICS network
+        // leaves it to DHCP (and HNS reports no address). Prefer NAT, and create
+        // the fallback NAT when only ICS exists.
+        var nat = networks.FirstOrDefault(network => network.Type == NetworkTypeNat);
+        if (nat is not null)
+        {
+            return Task.FromResult(nat.Id);
+        }
+
+        return Task.FromResult(CreateFallbackNatNetwork());
+    }
+
+    private static string CreateFallbackNatNetwork()
+    {
         var request = JsonSerializer.Serialize(new Dictionary<string, object?>
         {
             ["Name"] = FallbackNetworkName,
@@ -51,10 +84,8 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
         });
 
         var output = Call("POST", NetworksPath, request);
-        var created = ReadId(output)
+        return ReadId(output)
             ?? throw new SandboxBackendException("HNS created a network but returned no id.", 0);
-
-        return Task.FromResult(created);
     }
 
     public Task<string> CreateNatEndpointAsync(string networkId, CancellationToken ct = default)
@@ -112,6 +143,85 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
             }
         }
 
+        return Task.CompletedTask;
+    }
+
+    public Task<HnsEndpoint?> GetEndpointByNameAsync(string name, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new SandboxValidationException("An endpoint name is required to query HNS endpoints.");
+        }
+
+        var output = Call("GET", EndpointsPath, string.Empty);
+        using var json = JsonDocument.Parse(output);
+        if (json.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return Task.FromResult<HnsEndpoint?>(null);
+        }
+
+        foreach (var endpoint in json.RootElement.EnumerateArray())
+        {
+            var endpointName = ReadString(endpoint, "Name");
+            if (!string.Equals(endpointName, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return Task.FromResult<HnsEndpoint?>(new HnsEndpoint(
+                ReadString(endpoint, "ID") ?? string.Empty,
+                endpointName,
+                ReadString(endpoint, "MacAddress"),
+                ReadString(endpoint, "IPAddress")));
+        }
+
+        return Task.FromResult<HnsEndpoint?>(null);
+    }
+
+    public Task<string> CreateNamespaceAsync(CancellationToken ct = default)
+    {
+        var output = Call("POST", NamespacesPath, "{\"SchemaVersion\":{\"Major\":2,\"Minor\":1}}");
+        using var json = JsonDocument.Parse(output);
+        var id = ReadString(json.RootElement, "ID");
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            throw new SandboxBackendException("HNS created a namespace but returned no id.", 0);
+        }
+
+        return Task.FromResult(id);
+    }
+
+    public Task AddEndpointToNamespaceAsync(string namespaceId, string endpointId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(namespaceId))
+        {
+            throw new SandboxValidationException("A namespace id is required to add an endpoint.");
+        }
+
+        if (string.IsNullOrWhiteSpace(endpointId))
+        {
+            throw new SandboxValidationException("An endpoint id is required to add it to a namespace.");
+        }
+
+        // The dispatcher expects the older { Type, Data: { Id } } shape.
+        var request = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["Type"] = "Endpoint",
+            ["Data"] = new Dictionary<string, object?> { ["Id"] = endpointId },
+        });
+
+        Call("POST", NamespacesPath + namespaceId + "/addresource", request);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteNamespaceAsync(string namespaceId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(namespaceId))
+        {
+            return Task.CompletedTask;
+        }
+
+        Call("DELETE", NamespacesPath + namespaceId, string.Empty, allowEmpty: true);
         return Task.CompletedTask;
     }
 

@@ -51,4 +51,19 @@ public interface IWsmServiceClient
     /// Any failure (including no service listening) returns <c>false</c>; never throws.
     /// </summary>
     Task<bool> IsAvailableAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Asks the agent to shut down (for stopping a standalone console agent; an
+    /// SCM-installed service is stopped through the Service Control Manager).
+    /// A transport failure right after the reply — the agent exiting — is
+    /// treated as success.
+    /// </summary>
+    Task ShutdownAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Probes the agent and, when it is absent, starts a standalone
+    /// (<c>--console</c>) agent process and waits for its pipe to come up.
+    /// Returns true when an agent answers afterwards. Never throws.
+    /// </summary>
+    Task<bool> EnsureAvailableAsync(string? dataFolder = null, CancellationToken ct = default);
 }

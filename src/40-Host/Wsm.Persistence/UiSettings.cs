@@ -14,6 +14,13 @@ public sealed record UiSettings
     /// </summary>
     public string? ConfigDataFolder { get; init; }
 
+    /// <summary>
+    /// The imported container base image layer the process-isolation engine is
+    /// built from (a WCOW layer folder, e.g. an imported Windows Server 2022
+    /// image), or null to fall back to the Windows Sandbox image.
+    /// </summary>
+    public string? ContainerBaseImagePath { get; init; }
+
     /// <summary>An empty settings instance (system defaults).</summary>
     public static UiSettings Default { get; } = new();
 

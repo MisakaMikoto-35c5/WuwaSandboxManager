@@ -48,4 +48,13 @@ public interface IHcsHostLayout
     /// <c>RunInSilo.SiloBaseOsPath</c>.
     /// </summary>
     string? ResolveBaseLayerPath();
+
+    /// <summary>
+    /// Resolves the most recent usable base OS image layer as a whole
+    /// <see cref="HcsLayerInfo"/>, whose <see cref="HcsLayerInfo.Path"/> is the
+    /// layer's <b>root</b> directory. A container consumes the root (the folder
+    /// holding <c>Files</c> and <c>Hives</c>), whereas the VM consumes
+    /// <see cref="HcsLayerInfo.FilesPath"/>.
+    /// </summary>
+    HcsLayerInfo? ResolveBaseImageLayer();
 }

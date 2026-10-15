@@ -1,12 +1,15 @@
 namespace Wsm.Hcs.Json.Container;
 
 /// <summary>
-/// The inputs needed to describe a Windows <b>container</b> compute system.
+/// The inputs needed to describe a Windows <b>process-isolated</b> container
+/// compute system.
 /// <para>
-/// A container is the lightweight (process-isolated) sibling of the Windows
-/// Sandbox virtual machine: it <b>shares the same minimal OS image layer</b> that
-/// the Windows Sandbox provisions (<see cref="BaseLayerPath"/>) but exposes it to
-/// HCS as a read-only container layer instead of a bootable VM disk.
+/// Unlike a virtual machine, a container does not boot a disk: HCS unions the
+/// read-only <b>image layers</b> beneath a per-container writable <b>scratch
+/// layer</b> (WCIFS). HCS requires the scratch to be an <i>activated, prepared
+/// layer</i> and therefore a mounted volume, so <see cref="ScratchMountPath"/>
+/// is a <c>\\?\Volume{GUID}\</c> path (from
+/// <c>GetLayerMountPath</c>), not a folder.
 /// </para>
 /// </summary>
 public sealed record ContainerDefinition
@@ -15,30 +18,19 @@ public sealed record ContainerDefinition
     public required string Id { get; init; }
 
     /// <summary>
-    /// The read-only base OS image layer (<c>...\Layers\&lt;id&gt;\Files</c>) that
-    /// the container shares with the Windows Sandbox. Resolved through
-    /// <c>IHcsHostLayout.ResolveBaseLayerPath()</c>.
+    /// The activated scratch layer's mount path (<c>\\?\Volume{GUID}\</c>) —
+    /// the HCS <c>Container.Storage.Path</c>. It becomes the container's
+    /// <c>C:\</c> once the read-only layers are unioned underneath it.
     /// </summary>
-    public required string BaseLayerPath { get; init; }
+    public required string ScratchMountPath { get; init; }
 
     /// <summary>
-    /// The layer id of <see cref="BaseLayerPath"/> when it is known (the layer
-    /// GUID segment of the path). HCS expects a unique id per layer, so it is
-    /// emitted alongside the path when available.
+    /// The read-only image layers, base first. Each entry maps to one
+    /// <c>Container.Storage.Layers[]</c> object: <c>Id</c> is the layer GUID
+    /// (<c>vmcompute!NameToGuid</c> of the path) and <c>Path</c> the layer's
+    /// host directory.
     /// </summary>
-    public string? BaseLayerId { get; init; }
-
-    /// <summary>
-    /// The container's writable scratch (<c>Container.Storage.Path</c>).
-    /// <para>
-    /// HCS's process-isolated (Argon) runtime expects this to be a mounted,
-    /// prepared layer volume (a <c>\\?\Volume{...}\</c> path produced by the
-    /// vmcompute layer APIs), not an arbitrary directory. Provisioning that
-    /// volume is not implemented yet; the engine passes a per-instance scratch
-    /// directory as a best-effort fallback and lets HCS report the mismatch.
-    /// </para>
-    /// </summary>
-    public required string ScratchPath { get; init; }
+    public IReadOnlyList<ContainerLayer> Layers { get; init; } = Array.Empty<ContainerLayer>();
 
     /// <summary>Container host name; defaults to <see cref="Id"/> when not supplied.</summary>
     public string? HostName { get; init; }
@@ -53,14 +45,11 @@ public sealed record ContainerDefinition
     public uint CpuCount { get; init; }
 
     /// <summary>
-    /// Whether to attach the network adapters listed in
-    /// <see cref="NetworkAdapterIds"/>. When false the container runs without a
-    /// NIC, which is the safe default while no HNS network is configured.
+    /// The HNS namespace the container joins for networking
+    /// (<c>Container.Networking.Namespace</c>). Empty means the container gets
+    /// no NIC. The endpoint is added to this namespace through HNS.
     /// </summary>
-    public bool EnableNetworking { get; init; }
-
-    /// <summary>HNS endpoint ids (GUIDs) to attach; ignored when networking is disabled.</summary>
-    public IReadOnlyList<string> NetworkAdapterIds { get; init; } = Array.Empty<string>();
+    public string? NetworkNamespace { get; init; }
 
     /// <summary>Host folders mapped into the container at creation time.</summary>
     public IReadOnlyList<ContainerMappedFolder> MappedFolders { get; init; } =
@@ -70,3 +59,11 @@ public sealed record ContainerDefinition
 
     public int SchemaMinor { get; init; } = 1;
 }
+
+/// <summary>
+/// One read-only image layer of a container. <paramref name="Id"/> is the layer
+/// GUID HCS wants (<c>vmcompute!NameToGuid</c> of <paramref name="Path"/>) and
+/// <paramref name="Path"/> is the layer's host directory (the folder that holds
+/// <c>Files</c> and <c>Hives</c>).
+/// </summary>
+public sealed record ContainerLayer(string Id, string Path);

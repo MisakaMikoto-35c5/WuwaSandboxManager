@@ -34,6 +34,22 @@
   <data name="EngineAvailable.Text" xml:space="preserve"><value>Available</value></data>
   <data name="EngineReserved.Text" xml:space="preserve"><value>Reserved</value></data>
   <data name="EngineUnavailable.Text" xml:space="preserve"><value>Unavailable</value></data>
+  <data name="Engine.Container.Text" xml:space="preserve"><value>Windows Container (process isolation)</value></data>
+
+  <!-- Process-isolation image (Windows Server) -->
+  <data name="ContainerImageSection.Text" xml:space="preserve"><value>Process isolation image</value></data>
+  <data name="ContainerImageCaption.Text" xml:space="preserve"><value>Process isolation (an HCS container) needs an image; download a Windows Server image to enable it. VM isolation is always available.</value></data>
+  <data name="ContainerImageDownloadButton.Content" xml:space="preserve"><value>Download image</value></data>
+  <data name="ContainerImageElevationHint.Text" xml:space="preserve"><value>Downloading requires an elevated app (restart elevated first).</value></data>
+  <data name="ContainerImageStarting.Text" xml:space="preserve"><value>Starting…</value></data>
+  <data name="Container.Available.Text" xml:space="preserve"><value>Process isolation: available</value></data>
+  <data name="Container.Unavailable.Text" xml:space="preserve"><value>Process isolation: unavailable</value></data>
+  <data name="Container.Versions.Text" xml:space="preserve"><value>Host build {0}, image build {1}.</value></data>
+  <data name="Container.Reason.NoImage" xml:space="preserve"><value>No image is configured. Download a Windows Server image below.</value></data>
+  <data name="Container.Reason.UnknownImage" xml:space="preserve"><value>The image's build could not be read; re-import it.</value></data>
+  <data name="Container.Reason.SupportedExact" xml:space="preserve"><value>The image build matches the host.</value></data>
+  <data name="Container.Reason.SupportedServer" xml:space="preserve"><value>A Windows Server image on a Windows 11 host (build mismatch allowed).</value></data>
+  <data name="Container.Reason.BuildMismatch" xml:space="preserve"><value>The image build does not match the host and it is not a Windows Server image.</value></data>
   <data name="EngineAutoOption.Text" xml:space="preserve"><value>Auto (recommended)</value></data>
   <data name="Engine.Auto.Text" xml:space="preserve"><value>Auto (recommended)</value></data>
   <data name="Cap.Multi.Text" xml:space="preserve"><value>Multiple instances</value></data>
@@ -198,5 +214,8 @@
   <data name="CreateRailProgramBox.Header" xml:space="preserve"><value>Default RAIL program</value></data>
   <data name="RailProgramHint.Text" xml:space="preserve"><value>The program a RAIL session launches. The WDAG guest has no desktop, so this is what appears.</value></data>
   <data name="Status.LaunchedProgram.Text" xml:space="preserve"><value>Launching {0}.</value></data>
+  <data name="Status.ImageImporting.Text" xml:space="preserve"><value>Downloading the container image…</value></data>
+  <data name="Status.ImageImported.Text" xml:space="preserve"><value>Container image ready: {0}</value></data>
   <data name="Status.CliMissing.Text" xml:space="preserve"><value>Cannot find the companion CLI (wsm.exe). Build src/50-App/Wsm.Cli first, or place wsm.exe next to this app.</value></data>
+  <data name="Status.SessionAlreadyOpen.Text" xml:space="preserve"><value>A session window for this sandbox is already open.</value></data>
 </root>

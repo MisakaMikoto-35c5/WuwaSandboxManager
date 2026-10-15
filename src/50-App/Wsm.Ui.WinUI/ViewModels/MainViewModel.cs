@@ -5,7 +5,9 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
 using Wsm.Domain.ValueObjects;
 using Wsm.Application;
+using Wsm.Engine.WindowsContainer;
 using Wsm.Engines.Abstractions;
+using Wsm.Hcs.Storage;
 using Wsm.Host.Elevation;
 using Wsm.Host.Policy;
 using Wsm.Persistence;
@@ -24,6 +26,8 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ISandboxEngineRegistry _registry;
     private readonly IMultiInstancePolicy _policy;
     private readonly IAppLocalizer _l;
+    private readonly IContainerImageImporter _imageImporter;
+    private readonly IContainerIsolationPolicy _isolation;
     private readonly DispatcherQueue _dispatcher =
         DispatcherQueue.GetForCurrentThread()
         ?? throw new InvalidOperationException("The main view model must be created on the UI thread.");
@@ -33,12 +37,16 @@ public sealed partial class MainViewModel : ObservableObject
         ISandboxEngineRegistry registry,
         IMultiInstancePolicy policy,
         IElevationService elevation,
-        IAppLocalizer localizer)
+        IAppLocalizer localizer,
+        IContainerImageImporter imageImporter,
+        IContainerIsolationPolicy isolation)
     {
         _manager = manager;
         _registry = registry;
         _policy = policy;
         _l = localizer;
+        _imageImporter = imageImporter;
+        _isolation = isolation;
 
         IsElevated = elevation.IsElevated;
         BuildBranch = _policy.CurrentBuildBranch ?? "—";
@@ -46,9 +54,14 @@ public sealed partial class MainViewModel : ObservableObject
         Status = _l["Status.Ready.Text"];
         ConfigDataFolder = UiSettingsStore.Load().ResolveConfigDataFolder();
 
+        ContainerImageReferences = new ObservableCollection<string>(_imageImporter.SuggestedImages);
+        _selectedContainerImageReference = ContainerImageReferences.FirstOrDefault();
+        _containerImageFolder = DefaultImageFolder(_selectedContainerImageReference);
+
         Instances.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasInstances));
         BuildEngines();
-        NewEngineOptions = BuildEngineOptions();
+        BuildEngineOptions();
+        UpdateContainerIsolationStatus();
         Languages = LanguageOption.CreateDefaults();
         SelectedLanguage = LanguageOption.Resolve(_l.CurrentCulture.Name);
         UpdateEnvironmentSummary();
@@ -62,7 +75,7 @@ public sealed partial class MainViewModel : ObservableObject
     public ObservableCollection<EngineOptionViewModel> Engines { get; } = [];
 
     /// <summary>Engine choices for the creation dialog ("Auto" first, then engines).</summary>
-    public IReadOnlyList<EngineSelectOption> NewEngineOptions { get; }
+    public ObservableCollection<EngineSelectOption> NewEngineOptions { get; } = [];
 
     public IReadOnlyList<LanguageOption> Languages { get; }
 
@@ -237,10 +250,13 @@ public sealed partial class MainViewModel : ObservableObject
     {
         Engines.Clear();
         var ordered = _registry.Engines.OrderBy(engine => (int)engine.Kind).ToArray();
+        var isolation = _isolation.Evaluate();
 
         foreach (var engine in ordered)
         {
-            var option = new EngineOptionViewModel(engine, _l);
+            // Explain why process isolation is (not) offered.
+            var reasonKey = engine.Kind == SandboxEngineKind.WindowsContainer ? isolation.ReasonKey : null;
+            var option = new EngineOptionViewModel(engine, _l, reasonKey);
             option.PropertyChanged += OnEnginePropertyChanged;
             Engines.Add(option);
         }
@@ -254,28 +270,32 @@ public sealed partial class MainViewModel : ObservableObject
             option.IsSelected = true;
             SelectedEngine = option;
         }
+        else
+        {
+            SelectedEngine = null;
+        }
     }
 
-    private IReadOnlyList<EngineSelectOption> BuildEngineOptions()
+    /// <summary>
+    /// Rebuilds the creation dialog's engine list. The process-isolation engine
+    /// (<c>WindowsContainer</c>) is only enabled when the isolation policy allows
+    /// it; unavailable engines are still listed (disabled) for transparency.
+    /// </summary>
+    private void BuildEngineOptions()
     {
-        var options = new List<EngineSelectOption>
-        {
-            new(null, _l["EngineAutoOption.Text"], isEnabled: true),
-        };
+        NewEngineOptions.Clear();
+        NewEngineOptions.Add(new EngineSelectOption(null, _l["EngineAutoOption.Text"], isEnabled: true));
 
         foreach (var engine in _registry.Engines.OrderBy(engine => (int)engine.Kind))
         {
-            var reserved = engine.Kind == SandboxEngineKind.WindowsContainer;
-            var display = reserved
-                ? $"{engine.Name} — {_l["EngineReserved.Text"]}"
-                : engine.IsAvailable
-                    ? engine.Name
-                    : $"{engine.Name} — {_l["EngineUnavailable.Text"]}";
+            var display = engine.IsAvailable
+                ? engine.Name
+                : $"{engine.Name} — {_l["EngineUnavailable.Text"]}";
 
-            options.Add(new EngineSelectOption(engine.Kind, display, isEnabled: engine.IsAvailable));
+            NewEngineOptions.Add(new EngineSelectOption(engine.Kind, display, isEnabled: engine.IsAvailable));
         }
 
-        return options;
+        NewEngineOption = NewEngineOptions.FirstOrDefault();
     }
 
     private void OnEnginePropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -301,6 +321,126 @@ public sealed partial class MainViewModel : ObservableObject
             $"{engine}   ·   {_l["Env.Elevated.Text"]}: {elevated}" +
             $"   ·   {_l["Env.MultiInstance.Text"]}: {multi}" +
             $"   ·   {_l["Env.Build.Text"]}: {BuildBranch}";
+    }
+
+    // --------------------- Process-isolation image ---------------------
+
+    /// <summary>Windows Server images offered for process isolation.</summary>
+    public ObservableCollection<string> ContainerImageReferences { get; }
+
+    /// <summary>The image reference the download button imports.</summary>
+    [ObservableProperty] private string? _selectedContainerImageReference;
+
+    /// <summary>Where the imported base layer is written.</summary>
+    [ObservableProperty] private string _containerImageFolder;
+
+    [ObservableProperty] private bool _isContainerImageDownloading;
+
+    /// <summary>Download progress, 0..100.</summary>
+    [ObservableProperty] private double _containerImageProgress;
+
+    [ObservableProperty] private string _containerImageProgressText = string.Empty;
+
+    /// <summary>A localized summary of whether process isolation is available and why.</summary>
+    [ObservableProperty] private string _containerIsolationStatus = string.Empty;
+
+    /// <summary>True when the current image can be used for process isolation.</summary>
+    public bool IsProcessIsolationAvailable => _isolation.Evaluate().IsSupported;
+
+    /// <summary>The download needs elevation (the layer APIs require it).</summary>
+    public bool CanDownloadContainerImage => IsElevated && !IsContainerImageDownloading;
+
+    partial void OnIsContainerImageDownloadingChanged(bool value)
+        => OnPropertyChanged(nameof(CanDownloadContainerImage));
+
+    partial void OnIsElevatedChanged(bool value)
+        => OnPropertyChanged(nameof(CanDownloadContainerImage));
+
+    partial void OnSelectedContainerImageReferenceChanged(string? value)
+        => ContainerImageFolder = DefaultImageFolder(value);
+
+    /// <summary>
+    /// Downloads and prepares the selected Windows Server base image, then makes
+    /// it the engine's image for this process and persists it for the next run.
+    /// </summary>
+    [RelayCommand]
+    private async Task DownloadContainerImageAsync()
+    {
+        if (!CanDownloadContainerImage || string.IsNullOrWhiteSpace(SelectedContainerImageReference))
+        {
+            return;
+        }
+
+        try
+        {
+            IsContainerImageDownloading = true;
+            ContainerImageProgress = 0;
+            ContainerImageProgressText = _l["ContainerImageStarting.Text"];
+            Status = _l["Status.ImageImporting.Text"];
+
+            var progress = new Progress<ContainerImageImportProgress>(report =>
+            {
+                ContainerImageProgressText = report.Stage;
+                ContainerImageProgress = report.Fraction is { } fraction ? fraction * 100 : 0;
+            });
+
+            var path = await _imageImporter.ImportBaseLayerAsync(
+                SelectedContainerImageReference!, ContainerImageFolder, progress);
+
+            // Effective immediately (the engine reads the override at start) and
+            // persisted so it survives a restart.
+            Environment.SetEnvironmentVariable(WindowsContainerEngineOptions.ImageOverrideVariable, path);
+            try
+            {
+                var current = UiSettingsStore.Load();
+                UiSettingsStore.Save(current with { ContainerBaseImagePath = path });
+            }
+            catch
+            {
+                // Persisting is best effort; the running process still uses it.
+            }
+
+            _isolation.Invalidate();
+            BuildEngines();
+            BuildEngineOptions();
+            UpdateContainerIsolationStatus();
+            Status = _l.Get("Status.ImageImported.Text", path);
+        }
+        catch (Exception ex)
+        {
+            Status = ex.Message;
+        }
+        finally
+        {
+            IsContainerImageDownloading = false;
+            ContainerImageProgressText = string.Empty;
+        }
+    }
+
+    /// <summary>Re-evaluates and localizes the process-isolation status line.</summary>
+    private void UpdateContainerIsolationStatus()
+    {
+        var support = _isolation.Evaluate();
+        var state = support.IsSupported ? _l["Container.Available.Text"] : _l["Container.Unavailable.Text"];
+        var reason = _l[support.ReasonKey];
+        var image = support.ImageBuild?.ToString() ?? "—";
+        ContainerIsolationStatus =
+            $"{state} — {reason}{Environment.NewLine}" +
+            _l.Get("Container.Versions.Text", support.HostBuild, image);
+        OnPropertyChanged(nameof(IsProcessIsolationAvailable));
+    }
+
+    /// <summary>Default target folder for an image reference under <c>%LOCALAPPDATA%</c>.</summary>
+    private static string DefaultImageFolder(string? reference)
+    {
+        var slug = string.IsNullOrWhiteSpace(reference)
+            ? "image"
+            : reference.Replace(':', '-').Replace('/', '-');
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "WindowsSandboxManager",
+            "images",
+            slug);
     }
 
     /// <summary>

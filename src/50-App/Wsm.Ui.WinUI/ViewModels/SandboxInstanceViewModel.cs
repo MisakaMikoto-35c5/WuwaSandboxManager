@@ -53,7 +53,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         TransportOptions = new[] { RdpTransportKind.NamedPipe, RdpTransportKind.Tcp }
             .Select(kind => new EnumOption<RdpTransportKind>(kind, LocalizeTransport(kind)))
             .ToArray();
-        QuickLaunchPrograms = BuildQuickLaunchPrograms();
+        RefreshQuickLaunchPrograms();
 
         Apply(dto);
     }
@@ -61,6 +61,9 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     public ObservableCollection<MappedFolderItem> MappedFolders { get; } = [];
 
     public ObservableCollection<LogonCommand> LogonCommands { get; } = [];
+
+    /// <summary>Applications added to this sandbox's launch list (saved with the definition).</summary>
+    public ObservableCollection<RailApp> RailApps { get; } = [];
 
     public ObservableCollection<SandboxCheckpoint> Checkpoints { get; } = [];
 
@@ -72,10 +75,10 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     public IReadOnlyList<EnumOption<RdpTransportKind>> TransportOptions { get; }
 
     /// <summary>
-    /// Common programs offered as one-click RAIL launches (File Explorer,
-    /// Registry Editor, Command Prompt, …).
+    /// Programs offered as one-click RAIL launches: the built-in defaults, the
+    /// global launch list and this sandbox's own applications.
     /// </summary>
-    public IReadOnlyList<QuickLaunchProgram> QuickLaunchPrograms { get; }
+    public IReadOnlyList<QuickLaunchProgram> QuickLaunchPrograms { get; private set; } = [];
 
     [ObservableProperty] private Guid _id;
 
@@ -126,6 +129,14 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     [ObservableProperty] private bool _newFolderReadOnly = true;
 
     [ObservableProperty] private string _newLogonCommand = string.Empty;
+
+    // --- Per-sandbox application launch list (settings dialog) ---
+
+    [ObservableProperty] private string _newRailAppName = string.Empty;
+
+    [ObservableProperty] private string _newRailAppProgram = string.Empty;
+
+    [ObservableProperty] private string _newRailAppArguments = string.Empty;
 
     [ObservableProperty] private string _execCommandText = string.Empty;
 
@@ -221,6 +232,14 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             LogonCommands.Add(command);
         }
 
+        RailApps.Clear();
+        foreach (var app in dto.Recipe.Apps)
+        {
+            RailApps.Add(app);
+        }
+
+        RefreshQuickLaunchPrograms();
+
         RuntimeSummary = dto.Runtime is null
             ? _l["RuntimeNotRunning.Text"]
             : $"vm={dto.Runtime.VmId}  transport={dto.Runtime.Transport}  rail={dto.Runtime.RailMode}  pipe={dto.Runtime.NamedPipeEndpoint}";
@@ -276,6 +295,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         Storage = BuildStorage(),
         MappedFolders = MappedFolders.Select(f => f.Folder).ToArray(),
         LogonCommands = LogonCommands.ToArray(),
+        Apps = RailApps.ToArray(),
     };
 
     private SandboxStorageOptions BuildStorage()
@@ -395,7 +415,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     /// <see cref="SessionLaunch.AlreadyRunning"/> when a session window for this
     /// sandbox is already open.
     /// </summary>
-    private SessionLaunch LaunchSession(SandboxConnectionMode mode, string? program = null)
+    private SessionLaunch LaunchSession(SandboxConnectionMode mode, string? program = null, string? programArguments = null)
     {
         var exe = WsmCliLocator.Find();
         if (exe is null)
@@ -404,7 +424,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             return SessionLaunch.CliMissing;
         }
 
-        return SessionProcessManager.Start(exe, Id, mode == SandboxConnectionMode.RemoteApp, program)
+        return SessionProcessManager.Start(exe, Id, mode == SandboxConnectionMode.RemoteApp, program, programArguments)
             ? SessionLaunch.Started
             : SessionLaunch.AlreadyRunning;
     }
@@ -448,7 +468,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             // window gracefully first so it does not linger as a disconnected
             // overlay.
             await SessionProcessManager.EndAsync(Id);
-            if (LaunchSession(SandboxConnectionMode.RemoteApp, program.Path) == SessionLaunch.Started)
+            if (LaunchSession(SandboxConnectionMode.RemoteApp, program.Path, program.Arguments) == SessionLaunch.Started)
             {
                 _userDisconnected = false;
                 Status = _l.Get("Status.LaunchedProgram.Text", program.Path);
@@ -456,15 +476,44 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         });
     }
 
-    private IReadOnlyList<QuickLaunchProgram> BuildQuickLaunchPrograms() =>
-    [
-        new(_l["QuickLaunch.Explorer.Text"], @"C:\Windows\explorer.exe", "\uE8B7"),
-        new(_l["QuickLaunch.Registry.Text"], @"C:\Windows\regedit.exe", "\uE713"),
-        new(_l["QuickLaunch.CommandPrompt.Text"], @"C:\Windows\System32\cmd.exe", "\uE756"),
-        new(_l["QuickLaunch.PowerShell.Text"], @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "\uE756"),
-        new(_l["QuickLaunch.Notepad.Text"], @"C:\Windows\notepad.exe", "\uE70B"),
-        new(_l["QuickLaunch.TaskManager.Text"], @"C:\Windows\System32\taskmgr.exe", "\uE9D9"),
-    ];
+    internal void RefreshQuickLaunchPrograms()
+    {
+        QuickLaunchPrograms = BuildQuickLaunchPrograms();
+        OnPropertyChanged(nameof(QuickLaunchPrograms));
+    }
+
+    /// <summary>
+    /// The launch list: the built-in defaults plus every user application (the
+    /// global list and this sandbox's own), deduplicated by program/arguments.
+    /// </summary>
+    private IReadOnlyList<QuickLaunchProgram> BuildQuickLaunchPrograms()
+    {
+        var programs = new List<QuickLaunchProgram>
+        {
+            new(_l["QuickLaunch.Explorer.Text"], @"C:\Windows\explorer.exe", "\uE8B7", IsBuiltIn: true),
+            new(_l["QuickLaunch.Registry.Text"], @"C:\Windows\regedit.exe", "\uE713", IsBuiltIn: true),
+            new(_l["QuickLaunch.CommandPrompt.Text"], @"C:\Windows\System32\cmd.exe", "\uE756", IsBuiltIn: true),
+            new(_l["QuickLaunch.PowerShell.Text"], @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "\uE756", IsBuiltIn: true),
+            new(_l["QuickLaunch.Notepad.Text"], @"C:\Windows\notepad.exe", "\uE70B", IsBuiltIn: true),
+            new(_l["QuickLaunch.TaskManager.Text"], @"C:\Windows\System32\taskmgr.exe", "\uE9D9", IsBuiltIn: true),
+        };
+
+        var seen = programs
+            .Select(p => (p.Path.ToLowerInvariant(), p.Arguments ?? string.Empty))
+            .ToHashSet();
+
+        foreach (var app in _owner.GlobalRailApps.Concat(RailApps))
+        {
+            if (!seen.Add((app.Program.ToLowerInvariant(), app.Arguments ?? string.Empty)))
+            {
+                continue;
+            }
+
+            programs.Add(new QuickLaunchProgram(app.Name, app.Program, "\uECAA", app.Arguments));
+        }
+
+        return programs;
+    }
 
     /// <summary>
     /// Persists the edited definition. <see cref="ISandboxManager"/> has no
@@ -626,6 +675,43 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
         LogonCommands.Remove(command);
         Status = _l["Status.LogonRemoved.Text"];
+    }
+
+    // --------------------------- Launch list ---------------------------
+
+    /// <summary>
+    /// Adds an application to this sandbox's launch list. The list is part of the
+    /// definition, so it is persisted when the settings dialog is saved.
+    /// </summary>
+    [RelayCommand]
+    private void AddRailApp()
+    {
+        try
+        {
+            RailApps.Add(new RailApp(NewRailAppName, NewRailAppProgram, NewRailAppArguments));
+            NewRailAppName = string.Empty;
+            NewRailAppProgram = string.Empty;
+            NewRailAppArguments = string.Empty;
+            RefreshQuickLaunchPrograms();
+            Status = _l["Status.AppAdded.Text"];
+        }
+        catch (Exception ex)
+        {
+            Status = ex.Message;
+        }
+    }
+
+    [RelayCommand]
+    private void RemoveRailApp(RailApp? app)
+    {
+        if (app is null)
+        {
+            return;
+        }
+
+        RailApps.Remove(app);
+        RefreshQuickLaunchPrograms();
+        Status = _l["Status.AppRemoved.Text"];
     }
 
     // --------------------------- Runtime ---------------------------

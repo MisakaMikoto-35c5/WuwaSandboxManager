@@ -2,7 +2,10 @@
 
 用 **.NET 10** 编写的 Windows Sandbox 管理工具集：WinUI3 GUI + CLI + 可复用的分层引擎。
 支持**配置、启动、停止、连接**多个 Windows Sandbox 实例，提供
-**RemoteApp（RAIL）** 与**常规全桌面**两种连接方式。
+**RemoteApp（RAIL）** 与**常规全桌面**两种连接方式：
+RAIL 由 **WDAG 式独立客户端**（`Wsm.Connection.RailClient`：mstscax + RDPBASE 命名管道，
+应用窗口像本机应用一样自由拖动、层叠）呈现；全桌面走窗口连接器（`mstscax`）。
+`Wsm.Connection.RemoteApp`（mstsc + `.rdp` + 命名管道桥）保留为 remoteapptool 风格的备选连接套件。
 
 **控制面以 HCS（Host Compute Service）为主、`WindowsSandboxServer` gRPC 为回退。**
 HCS 直连可提供：多实例、CPU 核数、自定义用户数据位置、自定义基础镜像层、检查点（checkpoint）。
@@ -50,9 +53,10 @@ build 一致（Windows Server 2022/2025 镜像例外），故通常需先 `wsm i
 ## 架构（ABP 模块化 · 一模块一程序集）
 
 仓库为 **Volo.Abp.Core 模块化单体**：每个程序集恰好一个 `AbpModule` 派生类，公共契约 `public`、
-实现 `internal`；`.slnx` 用**解决方案文件夹**按职责分层（组织用途）。共 **32 个程序集**
-（全部已实现；P5 的 4 个预留空壳已在第三个引擎落地时补齐）。命名空间根 **== 程序集名**（`Wsm.*`）；旧的
-`WindowsSandboxManager.*` 命名空间已全部消除。
+实现 `internal`；`.slnx` 是**解决方案文件**按职责分层（组织用途）。共 **34 个程序集**
+（全部已实现；含可选连接器 `Wsm.Connection.RdpHost.{Ax,Wpf,WinUi}`、RAIL 客户端
+`Wsm.Connection.RailClient` 与备选套件 `Wsm.Connection.RemoteApp`）。命名空间根 **== 程序集名**
+（`Wsm.*`）；旧的 `WindowsSandboxManager.*` 命名空间已全部消除。
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -78,9 +82,10 @@ build 一致（Windows Server 2022/2025 镜像例外），故通常需先 `wsm i
 │                      Json.Container / Storage / Checkpoint /            │
 │                      Process / Network                                  │
 │ /src/30-Connections/ Wsm.SandboxServer.Client / Wsm.Recipe.Serialization│
-│                      Wsm.Connection.RdpBase / Session / Legacy          │
-│                      Wsm.Connection.RdpHost (契约) / .Ax (mstscax) /    │
-│                      .Wpf / .WinUi (可选择的连接器模块 / selectable)     │
+│                      Wsm.Connection.RdpBase / RdpHost（契约+选择） /    │
+│                      .Ax（mstscax） / .Wpf / .WinUi（可选连接器） /     │
+│                      RailClient（WDAG 式 RAIL 客户端） / RemoteApp      │
+│                      （mstsc+rdp 备选套件） / Session / Legacy          │
 │ /src/40-Host/        Wsm.Persistence / Wsm.Host.Environment / Elevation │
 │                      / Policy / Wsm.Localization                        │
 └──────────────┬──────────────────────────────────────────────────────────┘
@@ -120,6 +125,41 @@ build 一致（Windows Server 2022/2025 镜像例外），故通常需先 `wsm i
 
 ---
 
+## 连接：RemoteApp (RAIL) 与全桌面
+
+**RAIL（RemoteApp）** 由独立模块 `Wsm.Connection.RailClient` 以 **WDAG 式客户端**呈现
+（对应低层的 `hvsirdpclient.exe` / 平台 `WindowsSandboxRemoteSession` 的做法）：
+
+1. 每个会话一个**独立客户端进程**（GUI 通过 `wsm connect` 子进程启动，一个沙箱一个客户端）；
+2. 在该进程的 STA 线程上，`mstscax` ActiveX 控件经 **RDPBASE 命名管道**
+   （`ConnectWithEndpoint`，`\\.\pipe\<VMId>`；TCP 传输时直连）承载，并启用
+   `RemoteProgram3.RemoteProgramMode`；
+3. **远程应用窗口是顶层窗口**：可像本机应用一样**自由拖动、层叠、最小化**，不局限在任何宿主窗口内。
+   客户端的宿主窗口只是一个"启动中"状态框：程序首窗显示后即用**空窗口区域**
+   （`SetWindowRgn`，与官方客户端相同的手法）隐藏；会话断开时重新显现并给出原因。
+   RAIL 启动契约与已发布应用的 `.rdp` 完全一致：预连接设置
+   `RemoteApplicationProgram`/`RemoteApplicationName`/`RemoteApplicationArgs`（+ 可选
+   登录后 `ServerStartProgram`），并请求会话壳 `alternate shell:s:rdpinit.exe`
+   （`SecuredSettings3.StartProgram`）；RAIL 事件（`OnRemoteProgramResult` /
+   `OnRemoteProgramDisplayed` / `OnRemoteWindowDisplayed`）驱动界面状态并写入 `rdp-events.log`。
+   诊断开关（环境变量，默认即标准契约）：`WSM_RAIL_APP=connect|start|both|none`、
+   `WSM_RAIL_SHELL=<壳|none>`。
+
+`Wsm.Connection.RemoteApp` 保留为 **remoteapptool 风格备选套件**：生成 `.rdp`
+（`remoteapplicationmode:i:1`、`remoteapplicationprogram`、`password 51:b:<DPAPI>` 等）并由
+**`mstsc.exe`** 打开；命名管道端点由模块内的 **loopback TCP ↔ 管道桥**透明转发。
+连接前，RAIL 应用会在 guest 侧开放 RemoteApp 允许列表
+（`TSAppAllowList\fDisabledAllowList=1`、`fAllowUnlistedRemotePrograms=1`，幂等、尽力而为）。
+
+**全桌面**由上一节的可选连接器呈现（WPF 默认 / WinUI 3；命名管道或 TCP 均可）。
+
+**启动列表与快捷方式（GUI）**：快速启动行 = 内置默认项 + **全局启动列表**
+（`ui-settings.json`）+ **每沙箱启动列表**（随 `.wsm` 携带，在沙箱设置中编辑）。
+「创建快捷方式」写出指向 `wsm connect <id> --remoteapp --program <程序> --quiet` 的 `.lnk`：
+每次点击动态解析 guest 地址与凭据，沙箱重启后依然有效（沙箱需处于运行状态）。
+
+---
+
 ## 构建与运行
 
 需要 **.NET 10 SDK**、Windows 11（已启用 Windows Sandbox 可选功能）。
@@ -147,7 +187,8 @@ wsm create [options]           创建实例定义
 wsm show <id>                  查看实例
 wsm start <id> [--remoteapp]   启动
 wsm stop <id>                  停止
-wsm connect <id> [--remoteapp] 连接 RDP 会话
+wsm connect <id> [--remoteapp] [--program <path>] [--program-args <args>] [--quiet]
+                               连接会话（RAIL 走 mstsc + 生成的 .rdp；--quiet 供桌面快捷方式使用）
 wsm ip <id>                    获取 guest IP（Windows Sandbox gRPC 引擎）
 wsm exec <id> <command>        在沙箱内执行命令（gRPC 引擎）
 wsm share <id> <host> [sbx] [--rw]   运行期热映射目录（gRPC 引擎）
@@ -280,6 +321,13 @@ mstsc /v:172.21.83.79   # 用户名 WDAGUtilityAccount；密码为确定性口�
 - **裸 HCS 从零创建可启动的 Sandbox 属实验性**：需已存在基础层与用户数据盘
   （运行一次 Windows Sandbox 或由既有 `ContainerStorages` 播种即可）。
 - HCS 后端不支持运行期热映射目录与 in-guest 进程执行（能力矩阵已如实声明）。
+- **RAIL 连接**：由 WDAG 式客户端呈现（独立进程 + mstscax + RDPBASE；应用窗口为自由浮动的顶层窗口）。
+  实测（2026-10-15，HCS）：**TCP 传输**下会话连接、登录、RAIL 通道与稳定性均已验证（mstsc 与
+  本客户端一致）；**命名管道**下请求 `rdpinit.exe` 会话壳会 ~5s 掉线、不请求则 ~30s 被 rdpinit
+  空会话超时登出。两种传输下 **guest 均未启动会话 shell / 应用进程**（应用窗口不出现）——
+  guest 侧 RAIL 引导疑似由平台容器编排驱动，为后续真机定位项（详见
+  `docs/investigation/08-connection-rdp-hvsi.md` §10）。另：`wsm-nat` 无 DHCP，TCP 沙箱应使用
+  ICS/Default Switch（引擎已优先选择 ICS）；需要并发 RAIL 的沙箱应把传输切换为 TCP。
 - **容器引擎（进程隔离，`WindowsContainer`）**：基于 HCS *Argon* 容器；`C:\`
   由只读镜像层 + 每实例可写 **scratch 层**经 WCIFS 叠加而成。引擎会
   `CreateSandboxLayer → ActivateLayer → PrepareLayer → GetLayerMountPath`

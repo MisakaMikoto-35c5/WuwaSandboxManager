@@ -16,7 +16,7 @@
 | 现代控制面 | **`WindowsSandboxServer.exe` 暴露 gRPC 服务 `sandboxserver.SandboxCore`，通过命名管道 `\\.\pipe\wsandbox\<MD5(SID)>` 通信**。这是 `wsb.exe` 与新版 WinUI「Windows Sandbox」应用使用的接口。 |
 | 传统控制面 | `WindowsSandbox.exe <file.wsb>`，单实例、全桌面。 |
 | 配置模型 | `.wsb` XML（根 `<Configuration>`），对应内部类型 `WsbRecipe`。**CPU 核数不在 .wsb 中**。 |
-| 连接方式 | 默认 **RDP over Named Pipe**（`\\.\pipe\<VMId>`），由 `RDPBASE.dll` 的 `IRDPENCNamedPipeDirectConnector` 提供传输，经 `mstscax` 呈现。支持 **RAIL / RemoteApp**（`RailMode`）与全桌面两种形态。 |
+| 连接方式 | 默认 **RDP over Named Pipe**（`\\.\pipe\<VMId>`），由 `RDPBASE.dll` 的 `IRDPENCNamedPipeDirectConnector` 提供传输。**RAIL / RemoteApp** 由 **WDAG 式独立客户端**（`Wsm.Connection.RailClient`：mstscax + RDPBASE，应用窗口为自由浮动的顶层窗口）呈现；**全桌面**经 `mstscax` 窗口连接器；remoteapptool 风格的 `mstsc` + `.rdp` 套件为备选。 |
 | 多实例 | 官方**默认禁止**（`CO_E_APPSINGLEUSE`），由许可策略 `SandboxContracts.AreMultipleInstancesAllowed` 控制；AVD/WVD 主机或内部 `rs_*` 分支才允许多实例。WDAG 当年正是靠底层 HCS 同时跑 Edge 与 Office。 |
 | GPU 直通 | `<vGPU>` → `VMOptions.VirtualGpuOptions.MirroringKind = AllGpus`。 |
 | 网络 | `<Networking>` → `VMOptions.NetworkingMode = Nat`（Hyper-V 默认交换机）。 |
@@ -137,7 +137,15 @@ service SandboxCore {
   - 得到的 endpoint 交给 `mstscax`（`IMsRdpClient10`）的 `AdvancedSettings.ConnectWithEndpoint` 后 `Connect()`。
 - **TCP**：`GetIpAddress` 拿到 guest IP，走经典 3389（需 `<Networking>`）。
 - **RAIL / RemoteApp**：`config.RailModeEnabled == true` 时设置 `RemoteProgram3.RemoteProgramMode = true`，以「独立窗口」呈现应用——这正是 WDAG 当年「远程应用」体验的机制（`HvsiRdpClient`）。
-- **全桌面**：`RailModeEnabled == false`，即普通 Remote Desktop 会话。
+  - 现实现（`Wsm.Connection.RailClient`，默认）为 **WDAG 式独立客户端**：独立客户端进程经 RDPBASE
+    承载 `mstscax`，登录后 `ServerStartProgram` 显式启动程序；**远程应用窗口是自由浮动的顶层窗口**
+    （可拖动、层叠、最小化），宿主只是"启动中"状态框（应用显示后以 `SetWindowRgn` 空区域隐藏），
+    RAIL 事件驱动状态。官方客户端取证与实测见 [08 连接](investigation/08-connection-rdp-hvsi.md) §10。
+  - 备选（`Wsm.Connection.RemoteApp`）：生成 `.rdp`（`remoteapplicationmode:i:1`、
+    `remoteapplicationprogram`、`alternate shell:s:rdpinit.exe`、`password 51:b:<DPAPI>`）由系统
+    `mstsc` 打开；命名管道由 loopback TCP ↔ 管道桥转发。连接前开放 guest 端 RemoteApp 允许列表
+    （`TSAppAllowList\fDisabledAllowList`、`fAllowUnlistedRemotePrograms`）。
+- **全桌面**：`RailModeEnabled == false`，即普通 Remote Desktop 会话（窗口连接器 `mstscax`）。
 
 > 注意：`RailMode` 是**创建时**写入 recipe 的标志（`GetRdpClientConfigAsync` 读取 `_recipe.RailMode`），
 > 运行期不可切换；要 RemoteApp 就必须以 `RailMode` 启动。

@@ -52,7 +52,13 @@ public sealed partial class MainViewModel : ObservableObject
         BuildBranch = _policy.CurrentBuildBranch ?? "—";
         MultiInstanceAllowed = _policy.AllowsMultipleInstances;
         Status = _l["Status.Ready.Text"];
-        ConfigDataFolder = UiSettingsStore.Load().ResolveConfigDataFolder();
+
+        var settings = UiSettingsStore.Load();
+        ConfigDataFolder = settings.ResolveConfigDataFolder();
+        foreach (var app in settings.QuickLaunchApps)
+        {
+            GlobalRailApps.Add(app);
+        }
 
         ContainerImageReferences = new ObservableCollection<string>(_imageImporter.SuggestedImages);
         _selectedContainerImageReference = ContainerImageReferences.FirstOrDefault();
@@ -73,6 +79,13 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public ObservableCollection<SandboxInstanceViewModel> Instances { get; } = [];
+
+    /// <summary>
+    /// Applications added by the user to the launch list, shared by every
+    /// sandbox (persisted in <c>ui-settings.json</c>). Each sandbox may add its
+    /// own entries on top.
+    /// </summary>
+    public ObservableCollection<RailApp> GlobalRailApps { get; } = [];
 
     public ObservableCollection<EngineOptionViewModel> Engines { get; } = [];
 
@@ -113,6 +126,14 @@ public sealed partial class MainViewModel : ObservableObject
     // --- New sandbox (creation dialog) ---
 
     [ObservableProperty] private string _newName = string.Empty;
+
+    // --- Add application (global launch list) ---
+
+    [ObservableProperty] private string _newGlobalAppName = string.Empty;
+
+    [ObservableProperty] private string _newGlobalAppProgram = string.Empty;
+
+    [ObservableProperty] private string _newGlobalAppArguments = string.Empty;
 
     /// <summary>0 = RemoteApp (RAIL), 1 = full desktop.</summary>
     [ObservableProperty] private int _newTypeIndex = 1;
@@ -226,6 +247,49 @@ public sealed partial class MainViewModel : ObservableObject
 
     [RelayCommand]
     private async Task RefreshAsync() => await ReloadAsync(Selected?.Id);
+
+    // --------------------------- Global launch list ---------------------------
+
+    /// <summary>
+    /// Adds an application to the global launch list, persists it and refreshes
+    /// the visible quick-launch row.
+    /// </summary>
+    public void AddGlobalRailApp(RailApp app)
+    {
+        GlobalRailApps.Add(app);
+        PersistGlobalRailApps();
+        RefreshQuickLaunchRows();
+    }
+
+    public void RemoveGlobalRailApp(RailApp app)
+    {
+        if (GlobalRailApps.Remove(app))
+        {
+            PersistGlobalRailApps();
+            RefreshQuickLaunchRows();
+        }
+    }
+
+    private void RefreshQuickLaunchRows()
+    {
+        foreach (var instance in Instances)
+        {
+            instance.RefreshQuickLaunchPrograms();
+        }
+    }
+
+    private void PersistGlobalRailApps()
+    {
+        try
+        {
+            var settings = UiSettingsStore.Load();
+            UiSettingsStore.Save(settings with { QuickLaunchApps = GlobalRailApps.ToArray() });
+        }
+        catch (Exception ex)
+        {
+            Status = ex.Message;
+        }
+    }
 
     public async Task ReloadAsync(Guid? selectId)
     {

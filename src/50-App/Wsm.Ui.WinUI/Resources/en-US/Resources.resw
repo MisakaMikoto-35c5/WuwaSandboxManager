@@ -205,13 +205,40 @@
   <data name="Status.ManifestMissing.Text" xml:space="preserve"><value>No manifest is available yet.</value></data>
   <!-- Quick launch (RAIL) -->
   <data name="QuickLaunchSection.Text" xml:space="preserve"><value>Quick launch</value></data>
-  <data name="QuickLaunchCaption.Text" xml:space="preserve"><value>Open a common program as a RemoteApp window.</value></data>
+  <data name="QuickLaunchCaption.Text" xml:space="preserve"><value>Open a program as a RemoteApp window (floating like a local app).</value></data>
   <data name="QuickLaunch.Explorer.Text" xml:space="preserve"><value>File Explorer</value></data>
   <data name="QuickLaunch.Registry.Text" xml:space="preserve"><value>Registry Editor</value></data>
   <data name="QuickLaunch.CommandPrompt.Text" xml:space="preserve"><value>Command Prompt</value></data>
   <data name="QuickLaunch.PowerShell.Text" xml:space="preserve"><value>PowerShell</value></data>
   <data name="QuickLaunch.Notepad.Text" xml:space="preserve"><value>Notepad</value></data>
   <data name="QuickLaunch.TaskManager.Text" xml:space="preserve"><value>Task Manager</value></data>
+  <data name="AddAppButton.Content" xml:space="preserve"><value>Add application...</value></data>
+  <data name="CreateShortcutButton.Content" xml:space="preserve"><value>Create shortcut...</value></data>
+  <data name="AddAppDialog.Title" xml:space="preserve"><value>Add application</value></data>
+  <data name="AddAppDialog.PrimaryButtonText" xml:space="preserve"><value>Add</value></data>
+  <data name="AddAppDialog.CloseButtonText" xml:space="preserve"><value>Cancel</value></data>
+  <data name="AddAppNameBox.Header" xml:space="preserve"><value>Name</value></data>
+  <data name="AddAppNameBox.PlaceholderText" xml:space="preserve"><value>My tool</value></data>
+  <data name="AddAppProgramBox.Header" xml:space="preserve"><value>Program (path in the sandbox)</value></data>
+  <data name="AddAppProgramBox.PlaceholderText" xml:space="preserve"><value>C:\tools\app.exe</value></data>
+  <data name="AddAppArgumentsBox.Header" xml:space="preserve"><value>Arguments (optional)</value></data>
+  <data name="AddAppScopeHint.Text" xml:space="preserve"><value>The application is added to the launch list for every sandbox. Sandbox-specific applications are managed in a sandbox's settings.</value></data>
+  <data name="AppsSection.Text" xml:space="preserve"><value>Applications</value></data>
+  <data name="AppsHint.Text" xml:space="preserve"><value>Open these applications as RemoteApp windows. They are offered next to the built-in defaults and the global launch list.</value></data>
+  <data name="NewRailAppNameBox.PlaceholderText" xml:space="preserve"><value>Name</value></data>
+  <data name="NewRailAppProgramBox.PlaceholderText" xml:space="preserve"><value>C:\path\to\app.exe</value></data>
+  <data name="NewRailAppArgsBox.PlaceholderText" xml:space="preserve"><value>Arguments</value></data>
+  <data name="ShortcutDialog.Title" xml:space="preserve"><value>Create shortcut</value></data>
+  <data name="ShortcutDialog.PrimaryButtonText" xml:space="preserve"><value>Create</value></data>
+  <data name="ShortcutDialog.CloseButtonText" xml:space="preserve"><value>Cancel</value></data>
+  <data name="ShortcutAppBox.Header" xml:space="preserve"><value>Application</value></data>
+  <data name="ShortcutNameBox.Header" xml:space="preserve"><value>Shortcut name</value></data>
+  <data name="ShortcutFolderBox.Header" xml:space="preserve"><value>Folder</value></data>
+  <data name="ShortcutBrowseButton.Content" xml:space="preserve"><value>Browse...</value></data>
+  <data name="ShortcutHint.Text" xml:space="preserve"><value>The shortcut connects to the sandbox and opens the application as a RemoteApp window. The sandbox must be running.</value></data>
+  <data name="Status.AppAdded.Text" xml:space="preserve"><value>Application added.</value></data>
+  <data name="Status.AppRemoved.Text" xml:space="preserve"><value>Application removed.</value></data>
+  <data name="Status.ShortcutCreated.Text" xml:space="preserve"><value>Shortcut created: {0}</value></data>
   <data name="RailProgramBox.Header" xml:space="preserve"><value>Default RAIL program</value></data>
   <data name="CreateRailProgramBox.Header" xml:space="preserve"><value>Default RAIL program</value></data>
   <data name="RailProgramHint.Text" xml:space="preserve"><value>The program a RAIL session launches. The WDAG guest has no desktop, so this is what appears.</value></data>

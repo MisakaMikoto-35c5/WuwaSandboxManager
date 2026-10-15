@@ -77,6 +77,23 @@ implemented.
 | `Wsm.Ui.WinUI` | `WinUiModule` | WinUI3 宿主 + MVVM + `.resw`/`x:Uid` / WinUI3 host | 已交付 Delivered（P7b） |
 | `Wsm.Tests` | `TestModule` | 测试装配 / test composition | 核心 Core |
 
+### 2a. 修订（2026-10）：第 29、30 个程序集 / Amendment: the 29th and 30th assemblies
+
+**中文**：上表是 ABP 迁移（P1–P8）的**历史终态**。2026-10 的连接改造新增两个连接套件：
+`Wsm.Connection.RemoteApp`（`RemoteAppModule`：remoteapptool 风格的 `mstsc` + `.rdp` + 命名管道桥，
+备选）与 `Wsm.Connection.RailClient`（`RailClientModule`：**WDAG 式 RAIL 客户端**——独立客户端进程经
+RDPBASE 承载 `mstscax`，远程应用窗口为自由浮动的顶层窗口；RAIL 的默认呈现）。因此程序集总数为 **30**；
+`ISessionLauncher`（`Wsm.Connection.Session`）按模式路由到 RAIL 客户端、窗口连接器或备选套件。
+
+**English**: The table above is the **historical end state** of the ABP migration (P1–P8). The
+2026-10 connection rework added two connection kits: `Wsm.Connection.RemoteApp` (`RemoteAppModule`:
+the remoteapptool-style `mstsc` + `.rdp` + named-pipe bridge, the alternative) and
+`Wsm.Connection.RailClient` (`RailClientModule`: the **WDAG-style RAIL client** — a dedicated client
+process hosting `mstscax` over RDPBASE with free-floating application windows; the default RAIL
+presentation). The inventory therefore holds **30** assemblies; `ISessionLauncher`
+(`Wsm.Connection.Session`) routes by mode to the RAIL client, the windowed connector or the
+alternative kit.
+
 ## 3. ABP 约定 / ABP conventions
 
 **中文**：模块装配完全依赖 ABP 的**约定式 DI**，不写手写 `DependencyInjection.cs` 扩展。

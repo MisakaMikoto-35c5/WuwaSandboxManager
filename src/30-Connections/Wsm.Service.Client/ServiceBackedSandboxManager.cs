@@ -125,8 +125,8 @@ public sealed class ServiceBackedSandboxManager : ISandboxManager
 
     // Sessions are presented by the caller's own process (the GUI spawns a
     // per-session 'wsm connect' child, which routes through the agent itself).
-    public Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default)
-        => _inner.ConnectAsync(id, mode, remoteAppProgram, cancellationToken);
+    public Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, string? remoteAppArguments = null, CancellationToken cancellationToken = default)
+        => _inner.ConnectAsync(id, mode, remoteAppProgram, remoteAppArguments, cancellationToken);
 
     public Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken cancellationToken = default)
         => RouteAsync(

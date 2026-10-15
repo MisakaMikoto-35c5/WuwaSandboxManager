@@ -4,19 +4,18 @@ using System.Diagnostics;
 namespace Wsm.Ui.WinUI;
 
 /// <summary>
-/// Owns the RDP session windows the GUI presents. Every session runs in its own
-/// <c>wsm connect</c> child process — never in this process: the in-process
-/// mstscax runtime keeps only the first session of a process alive and tears
-/// every later one down 10-40s after connect, so hosting several sessions in the
-/// GUI process breaks all but the first. One child process per session sidesteps
-/// that process-global limit (and matches the platform's own one-session-per-
-/// process client).
+/// Owns the session processes the GUI presents. Every session runs in its own
+/// <c>wsm connect</c> child process. For full desktops this is essential — the
+/// in-process mstscax runtime keeps only the first session of a process alive
+/// and tears every later one down 10-40s after connect — and RAIL sessions run
+/// through <c>mstsc</c> with the same one-child-per-session discipline.
 /// <para>
 /// Tracked per sandbox id so Stop/Disconnect/app-exit can end the session even
-/// though it lives outside this process. The child disconnects the mstscax
-/// client gracefully when its window closes (<c>RdpHostForm.OnFormClosed</c>),
-/// so ending a session asks the window to close first and kills only as a
-/// fallback.
+/// though it lives outside this process. The child disconnects its client
+/// gracefully when its window closes (the mstscax host form, or the
+/// <c>mstsc</c> window); ending a session asks the window to close first and
+/// kills only as a fallback (a RAIL child has no window of its own, so the
+/// kill path reaches the job-bound <c>mstsc</c> client instead).
 /// </para>
 /// </summary>
 internal static class SessionProcessManager
@@ -50,7 +49,7 @@ internal static class SessionProcessManager
     /// Returns true when a new process was spawned; false when the sandbox
     /// already has a live session window.
     /// </summary>
-    public static bool Start(string cliExePath, Guid id, bool remoteApp, string? program)
+    public static bool Start(string cliExePath, Guid id, bool remoteApp, string? program, string? programArguments = null)
     {
         if (IsConnected(id))
         {
@@ -75,6 +74,11 @@ internal static class SessionProcessManager
         {
             startInfo.ArgumentList.Add("--program");
             startInfo.ArgumentList.Add(program);
+        }
+        if (!string.IsNullOrWhiteSpace(programArguments))
+        {
+            startInfo.ArgumentList.Add("--program-args");
+            startInfo.ArgumentList.Add(programArguments);
         }
 
         var process = Process.Start(startInfo)

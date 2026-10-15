@@ -35,12 +35,14 @@
 | 容器引擎 / Container engine | `Wsm.Engine.WindowsContainer`（**进程隔离容器**，HCS `Container`，提权时可用） | （新拆 / new） |
 | gRPC 客户端 / gRPC client | `Wsm.SandboxServer.Client`（`ISandboxServerClient`，`sandbox_core.proto` + 命名管道通道） | `Infrastructure/Grpc/*` |
 | 序列化 / Serialization | `Wsm.Recipe.Serialization`（`ISandboxRecipeSerializer`，`.wsb` XML） | `Infrastructure/Serialization/WsbRecipeXmlSerializer` |
-| RDPBASE 连接器 / connector | `Wsm.Connection.RdpBase`（`IRdpBaseConnectorFactory`、`IRdpBaseConnector`） | `Infrastructure/Connectors/RdpBaseNamedPipeConnector` |
-| RDP 呈现契约与选择 / connector contract & selection | `Wsm.Connection.RdpHost`（`IRdpSessionHost`/`IRdpConnectorHost`/`IRdpSandboxControl`/`IRdpConnectorPreference`、`SelectingRdpSessionHost`） | `Infrastructure/Connectors/*` |
+| RDPBASE 连接器 / connector | `Wsm.Connection.RdpBase`（`IRdpBaseConnectorFactory`、`IRdpBaseConnector`、`ConnectionEventLog`） | `Infrastructure/Connectors/RdpBaseNamedPipeConnector` |
+| RDP 呈现契约与选择 / connector contract & selection | `Wsm.Connection.RdpHost`（`IRdpSessionHost`/`IRdpConnectorHost`/`IRdpSandboxControl`/`IRdpConnectorPreference`、`SelectingRdpSessionHost`；全桌面） | `Infrastructure/Connectors/*` |
 | mstscax 宿主 / ActiveX host | `Wsm.Connection.RdpHost.Ax`（`RdpClientControl`，TlbImp/AxImp） | `Infrastructure/Connectors/*` |
 | WPF 连接器 / WPF connector | `Wsm.Connection.RdpHost.Wpf`（`WpfRdpConnectorHost`） | （新 / new） |
 | WinUI 3 连接器 / WinUI 3 connector | `Wsm.Connection.RdpHost.WinUi` + `Wsm.Rdp.WinUI`（`WinUiRdpConnectorHost`，独立进程） | （新 / new） |
-| 会话启动 / session launch | `Wsm.Connection.Session`（`ISessionLauncher`） | `Infrastructure/Connectors/WindowsSandboxSessionConnector` |
+| RAIL 客户端 / RAIL client | `Wsm.Connection.RailClient`（`IRailClientSessionHost`，WDAG 式：RDPBASE + mstscax + 自由窗口；RAIL 默认） | （新拆 / new，2026-10） |
+| RemoteApp 备选套件 / RemoteApp kit | `Wsm.Connection.RemoteApp`（`IRemoteAppSessionHost`，`mstsc` + `.rdp` + 管道桥） | （新拆 / new，2026-10） |
+| 会话启动 / session launch | `Wsm.Connection.Session`（`ISessionLauncher`，按模式路由：RAIL → RailClient，全桌面 → 可选连接器） | `Infrastructure/Connectors/WindowsSandboxSessionConnector` |
 | 传统启动器 / legacy launcher | `Wsm.Connection.Legacy`（`ILegacySandboxLauncher`） | （新拆 / new） |
 | 持久化 / Persistence | `Wsm.Persistence`（`ISandboxInstanceRepository`，JSON + `.wsb`） | `Infrastructure/Repositories/*` |
 | 环境探测 / Environment | `Wsm.Host.Environment`（`ISandboxEnvironment`） | `Infrastructure/Environment/WindowsSandboxEnvironment` |
@@ -48,7 +50,7 @@
 | 多实例策略 / Multi-instance policy | `Wsm.Host.Policy`（`IMultiInstancePolicy`） | `Infrastructure/Environment/SandboxMultiInstancePolicy` |
 | 本地化 / Localization | `Wsm.Localization`（`WindowsSandboxManagerResource`，ABP JSON `en`/`zh-Hans`） | （新拆 / new） |
 | 表现层 / Presentation | `Wsm.Cli`（`wsm`，`CliModule`）、`Wsm.Ui.WinUI`（WinUI3，`WinUiModule`，`.resw`/`x:Uid`）、`Wsm.Rdp.WinUI`（WinUI3 RDP 连接器进程） | `Cli/*`、`App/*` |
-| 测试 / Tests | `Wsm.Tests`（`TestModule`，49 个测试） | `tests/WindowsSandboxManager.Tests` |
+| 测试 / Tests | `Wsm.Tests`（`TestModule`，284 个测试） | `tests/WindowsSandboxManager.Tests` |
 
 > 旧 `Infrastructure/DependencyInjection.cs` 与 `Application/DependencyInjection.cs`（手写 DI 扩展）
 > 已被 **ABP 约定式 DI**（`ITransientDependency`/`ISingletonDependency` + `[ExposeServices]`）取代，
@@ -164,11 +166,13 @@ wsm help                # 显示帮助 / show help
 
 ## 证据 / Evidence
 
-- 解决方案 `WindowsSandboxManager.slnx`：**32 个程序集**，分层文件夹
+- 解决方案 `WindowsSandboxManager.slnx`：**34 个程序集**（2026-10 起含可选连接器
+  `Wsm.Connection.RdpHost.{Ax,Wpf,WinUi}`，以及 RAIL 客户端 `Wsm.Connection.RailClient` 与备选套件
+  `Wsm.Connection.RemoteApp`），分层文件夹
   `/src/00-Core/`、`/src/10-Hcs/`、`/src/20-Engines/`、`/src/30-Connections/`、`/src/40-Host/`、
   `/src/50-App/`、`/tests/90-Tests/`。
 - 旧栈（`src/WindowsSandboxManager.*` 与 `tests/WindowsSandboxManager.Tests`）已由提交 `92c2a08`
   整体删除；命名空间根归一为 `Wsm.*`，`WindowsSandboxManager.*` 命名空间全部消除。
-- 单元测试 `tests/90-Tests/Wsm.Tests/`（49 个测试：bootstrap、引擎/选择、HCS JSON、序列化、领域、本地化、组合）。
+- 单元测试 `tests/90-Tests/Wsm.Tests/`（284 个测试：bootstrap、引擎/选择、HCS JSON、序列化、领域、本地化、组合）。
 - 相关模块：[02 镜像](02-sandbox-image.md)、[04 HCS](04-hcs.md)、[07 存储与检查点](07-storage-and-checkpoints.md)、
   [10 Schema](10-hcs-schema-and-native-api.md)、[12 模块化架构](12-modular-architecture.md)。

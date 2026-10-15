@@ -35,6 +35,7 @@ public sealed class CliApplication
     private readonly IStringLocalizer<WindowsSandboxManagerResource> _localizer;
     private readonly IWsmServiceClient? _serviceClient;
     private readonly IContainerImageImporter? _imageImporter;
+    private readonly IContainerImageCustomizer? _imageCustomizer;
 
     /// <summary>
     /// The client-side RDP entry point. <c>connect</c> presents the session in
@@ -60,6 +61,7 @@ public sealed class CliApplication
         // not installed the CLI keeps using the in-process application layer.
         _serviceClient = provider.GetService<IWsmServiceClient>();
         _imageImporter = provider.GetService<IContainerImageImporter>();
+        _imageCustomizer = provider.GetService<IContainerImageCustomizer>();
     }
 
     public async Task<int> RunAsync(string[] args)
@@ -125,7 +127,7 @@ public sealed class CliApplication
                     return await ServiceAsync(positional, options);
 
                 case "image":
-                    return await ImageAsync(positional);
+                    return await ImageAsync(positional, options);
 
                 case "multi":
                     return Multi(options);
@@ -717,18 +719,39 @@ public sealed class CliApplication
     }
 
     /// <summary>
-    /// Imports the base OS layer of a container image (default
-    /// <c>mcr.microsoft.com/windows/servercore:ltsc2022</c>) so the process
-    /// isolation engine can build containers from it. A Windows Server image is
-    /// exempt from HCS's host/image build-match rule on Windows 11, which the
-    /// Windows Sandbox client image is not.
+    /// <c>wsm image …</c>: imports the base OS layer of a container image so the
+    /// process isolation engine can build containers from it, and optionally
+    /// patches an imported image so its containers boot a console session. A
+    /// Windows Server image is exempt from HCS's host/image build-match rule on
+    /// Windows 11, which the Windows Sandbox client image is not.
     /// </summary>
-    private async Task<int> ImageAsync(List<string> positional)
+    private async Task<int> ImageAsync(List<string> positional, Dictionary<string, string?> options)
     {
-        if (positional.Count < 3 || !positional[0].Equals("import", StringComparison.OrdinalIgnoreCase))
+        var subcommand = positional.Count > 0 ? positional[0].ToLowerInvariant() : string.Empty;
+        return subcommand switch
         {
-            Console.Error.WriteLine("Usage: wsm image import <reference> <layerPath>");
-            Console.Error.WriteLine("  e.g. wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 C:\\wsm-images\\servercore-ltsc2022");
+            "import" => await ImageImportAsync(positional, options),
+            "desktop" => ImageDesktop(positional),
+            _ => UnknownImageSubcommand(subcommand),
+        };
+    }
+
+    private static int UnknownImageSubcommand(string subcommand)
+    {
+        Console.Error.WriteLine($"Unknown 'wsm image' subcommand '{subcommand}'.");
+        Console.Error.WriteLine("Usage: wsm image import <reference> <layerPath> [--desktop]");
+        Console.Error.WriteLine("       wsm image desktop <layerPath>");
+        return 2;
+    }
+
+    private async Task<int> ImageImportAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        if (positional.Count < 3)
+        {
+            Console.Error.WriteLine("Usage: wsm image import <reference> <layerPath> [--desktop]");
+            Console.Error.WriteLine(
+                "  e.g. wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 " +
+                @"C:\wsm-images\servercore-ltsc2022 --desktop");
             return 2;
         }
 
@@ -744,10 +767,62 @@ public sealed class CliApplication
 
         var result = await _imageImporter.ImportBaseLayerAsync(reference, layerPath);
         Console.WriteLine($"Imported base layer: {result}");
+
+        // The flag must be trailing: ParseOptions/Positional let a '--flag' swallow
+        // the next non-'--' argument as its value.
+        if (IsEnabled(options, "desktop") && PrepareDesktopSession(result) != 0)
+        {
+            return 1;
+        }
+
         Console.WriteLine("Point the engine at it with the WSM_CONTAINER_BASE_IMAGE environment variable");
         Console.WriteLine("(or WindowsContainer:BaseImageLayerPath), then create a 'container' sandbox.");
         return 0;
     }
+
+    /// <summary>
+    /// <c>wsm image desktop &lt;layerPath&gt;</c>: patches an already-imported image
+    /// layer so containers built from it boot an interactive console session
+    /// (<c>smss</c> then creates the console session, so <c>winlogon</c> and
+    /// <c>LogonUI</c> start). This is <b>not</b> sufficient for a remote desktop:
+    /// RDP stays unavailable inside a process-isolated container.
+    /// </summary>
+    private int ImageDesktop(List<string> positional)
+    {
+        if (positional.Count < 2)
+        {
+            Console.Error.WriteLine("Usage: wsm image desktop <layerPath>");
+            return 2;
+        }
+
+        return PrepareDesktopSession(positional[1]);
+    }
+
+    /// <summary>Patches one image layer for a console session; 0 on success.</summary>
+    private int PrepareDesktopSession(string layerPath)
+    {
+        if (_imageCustomizer is null)
+        {
+            Console.Error.WriteLine("The image customizer is not available in this build.");
+            return 1;
+        }
+
+        var prep = _imageCustomizer.EnableInteractiveSession(layerPath);
+        Console.WriteLine($"Patched hive : {prep.HiveFile}");
+        Console.WriteLine($"Control sets : {string.Join(", ", prep.ControlSets)}");
+        Console.WriteLine("Containers from this image now boot an interactive console session");
+        Console.WriteLine("(winlogon and LogonUI start; the image may still have no shell binary).");
+        Console.WriteLine("This does NOT enable RDP: termsrv refuses a listener inside a container.");
+        return 0;
+    }
+
+    /// <summary>True for a bare flag (<c>--name</c>) or an explicit truthy value.</summary>
+    private static bool IsEnabled(Dictionary<string, string?> options, string name)
+        => options.TryGetValue(name, out var value)
+           && (value is null
+               || value.Equals("1", StringComparison.OrdinalIgnoreCase)
+               || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+               || value.Equals("yes", StringComparison.OrdinalIgnoreCase));
 
     private async Task<int> ServiceAsync(List<string> positional, Dictionary<string, string?> options)
     {
@@ -1204,7 +1279,14 @@ public sealed class CliApplication
               image import <ref> <path>       Import the base OS layer of a Windows
                                               container image for the process-isolation
                                               engine (e.g. mcr.microsoft.com/windows/
-                                              servercore:ltsc2022)
+                                              servercore:ltsc2022). Add a trailing
+                                              --desktop to also patch it for a console
+                                              session
+              image desktop <path>            Patch an imported image so its containers
+                                              boot an interactive console session
+                                              (winlogon / LogonUI). Does NOT enable
+                                              RDP: termsrv refuses a listener inside a
+                                              process-isolated container
               multi [--enable|--disable]      Inspect/change the multi-instance policy
               elevate                         Relaunch elevated (needed for HCS)
 

@@ -1,0 +1,22 @@
+﻿[probe] own pid=95968 ownSession=0 user=SYSTEM
+[probe] ownWinSta=Service-0x0-3e7$ ownDesktop=Default
+[ns] \Sessions
+[ns]   0  (Directory)
+[ns] \Sessions\4
+[ns] NtOpenDirectoryObject("\Sessions\4") -> 0xC0000034
+[ns] \Sessions\4\Windows
+[ns] NtOpenDirectoryObject("\Sessions\4\Windows") -> 0xC000003A
+[ns] \Sessions\4\Windows\WindowStations
+[ns] NtOpenDirectoryObject("\Sessions\4\Windows\WindowStations") -> 0xC000003A
+[ns] \Sessions\5\Windows\WindowStations
+[ns] NtOpenDirectoryObject("\Sessions\5\Windows\WindowStations") -> 0xC000003A
+[ns] \Windows\WindowStations
+[ns]   Service-0x0-3e4$  (WindowStation)
+[open] OpenWindowStation("\Sessions\0") -> 0x0 err=161
+[open] OpenWindowStation("\Windows\WindowStations\Service-0x0-3e4$") -> 0x0 err=161
+[open] OpenWindowStation("\Sessions\4\Windows\WindowStations\WinSta0") -> 0x0 err=161
+[open] OpenWindowStation("\Sessions\4\Windows\WindowStations\Service-0x0-3e7$") -> 0x0 err=161
+[open] OpenWindowStation("\Sessions\5\Windows\WindowStations\WinSta0") -> 0x0 err=161
+[open] FAILED: the host cannot open any window station of session 4
+
+[done] 18:38:46

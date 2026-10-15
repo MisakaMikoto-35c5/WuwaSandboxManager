@@ -828,3 +828,66 @@ Windows 涓婂敮涓€**涓嶇粡杩?鍐呭瓨 鈫?鑺?鏂囦欢"鎼繍**鐨
 ### 15.6 涓嬩竴姝?/ Next
 
 鎸?15.3 鐨勯『搴忚惤鍦帮細**鑴忕煩褰?鈫?DIB section 鐩村啓 鈫?鏌ョ湅鍣?BitBlt**锛堥兘鏄函浠ｇ爜鏀瑰姩锛?瀹瑰櫒鏍堝浣嶏紙`vmcompute`/`hns` 閲嶇疆锛夊悗鍗冲彲瀹炴祴锛涜 搂14.4锛夈€?
+---
+
+## 16. 瀹夸富鑳戒笉鑳界洿鎺ユ懜鍒板鍣ㄧ獥鍙ｏ紵锛堝叡浜唴鏍?鈮?鍏变韩 User 瀵硅薄锛?/ Can the host touch container windows?
+
+> 璧峰洜锛氭湁浜猴紙姝ｇ‘鍦帮級鎸囧嚭"container 涓?host 鍏变韩鍐呮牳锛屾墍浠ュ涓诲彲浠ュ緢鏂逛究鍦拌闂鍣ㄨ繘绋嬬殑鍐呭瓨"锛?> 鍥犳绐楀彛"娉ㄥ叆"鍦ㄦ妧鏈笂搴旇鍙銆傛湰鑺傜粰鍑?*瀹炴祴**缁撹锛氫竴鍗婂銆佷竴鍗婁笉瀵?鈥斺€?鑰屼笖涓嶅鐨勯偅涓€鍗婏紝
+> 鎭版伆鏄?绐楀彛"杩欎竴姝ャ€?
+### 16.1 瀵圭殑閭ｄ竴鍗婏細瀹瑰櫒杩涚▼鍦ㄥ涓诲唴鏍搁噷瀹屽叏鍙 / Processes are visible
+
+瀹夸富 `Get-Process` 鐩存帴鍒楀嚭锛堝疄娴嬶紝鏈満锛夛細
+
+| 浼氳瘽 | 杩涚▼ |
+|---|---|
+| **4** | `csrss`銆乣wininit`銆乣lsass`銆乣services`銆乣msdtc`銆乣sppsvc`銆乣SppExtComObj`銆?1脳`svchost`銆乣cmd`銆乣conhost`銆乣powershell`銆?*`regedit`**銆?*4脳`notepad`** |
+| **5** | `csrss`锛堝鍣ㄨ嚜宸辩殑 console 浼氳瘽锛?|
+
+鍗筹細**杩涚▼闅旂鐨勫鍣ㄦ嫢鏈夌湡瀹炵殑瀹夸富浼氳瘽锛? = 瀹瑰櫒鑷韩锛? = 瀹瑰櫒 console锛夛紝鍏舵暣妫佃繘绋嬫爲瀵瑰涓诲彲瑙?*锛?鑰屼笖瀹夸富鍙互 `OpenProcess` + `DuplicateHandle`锛埪?3.6 瀹炴祴锛氭彁鏉冨悗 `OpenProcess(PROCESS_DUP_HANDLE)` 鎴愬姛銆?`DuplicateHandle` 鎴愬姛锛涢潪鎻愭潈 `err=5`锛夈€傛墍浠?鍏变韩鍐呮牳 鈫?鑳借闂鍣ㄨ繘绋嬪唴瀛?鏄鐨?锛堟湁 SeDebug 鐨勬彁鏉冧护鐗屾寜鍚屼竴鏈哄埗鎷垮埌 `PROCESS_VM_READ`锛夈€?
+### 16.2 涓嶅鐨勯偅涓€鍗婏細User/win32k 鍛藉悕绌洪棿鎸?session 铏氭嫙鍖?/ Windows are not
+
+浠?**SYSTEM** 韬唤鎺㈡祴锛坄tools/container-desktop-agent/host/winsta-probe*.ps1`锛夛細
+
+```
+[probe] own pid=95968 ownSession=0 user=SYSTEM
+[probe] ownWinSta=Service-0x0-3e7$ ownDesktop=Default
+[ns] \Sessions                                  -> 鍙湁 "0 (Directory)"
+[ns] NtOpenDirectoryObject("\Sessions\4")                        -> 0xC0000034 OBJECT_NAME_NOT_FOUND
+[ns] NtOpenDirectoryObject("\Sessions\4\Windows")                -> 0xC000003A OBJECT_PATH_NOT_FOUND
+[ns] NtOpenDirectoryObject("\Sessions\4\Windows\WindowStations") -> 0xC000003A
+[ns] NtOpenDirectoryObject("\Sessions\5\Windows\WindowStations") -> 0xC000003A
+[ns] \Windows\WindowStations                    -> Service-0x0-3e4$ (WindowStation)   <- 鍙湁鑷繁浼氳瘽鐨?[open] OpenWindowStation("\Sessions\4\Windows\WindowStations\WinSta0")        -> 0x0 err=161 ERROR_BAD_PATHNAME
+[open] OpenWindowStation("\Sessions\5\Windows\WindowStations\WinSta0")        -> 0x0 err=161
+[open] FAILED: the host cannot open any window station of session 4
+```
+
+缁撹锛?*杩?SYSTEM 閮芥嬁涓嶅埌鍒殑 session 鐨?window station** 鈥斺€?`\Sessions` 鍦ㄦ瘡涓細璇濋噷鍙毚闇插畠**鑷繁**
+閭ｄ竴涓瓙鐩綍锛岃法浼氳瘽璺緞涓€寰?`OBJECT_PATH_NOT_FOUND` / `ERROR_BAD_PATHNAME`銆傛嬁涓嶅埌 window station
+鈬?鎷夸笉鍒?HWND 鈬?`EnumWindows` / `GetWindowDC` / `BitBlt` / `PrintWindow` / `PostMessage` **鍏ㄩ儴鏃犱粠涓嬫墜**銆?杩欐潯杈圭晫鏄?*瀵圭О**鐨勶紙瀹瑰櫒涔熺湅涓嶅埌瀹夸富鐨勭獥鍙ｏ紝搂13.6 瀹炴祴锛夈€?
+### 16.3 涓轰粈涔?璇昏繘绋嬪唴瀛?鏁戜笉浜嗙獥鍙?/ Why reading memory does not help
+
+- 绐楀彛鐨?*鍙鍍忕礌涓嶅湪搴旂敤杩涚▼鐨勭敤鎴锋€佸唴瀛橀噷**锛氬鍣ㄦ病鏈?DWM锛岀獥鍙ｇ敱 GDI 鐩存帴缁樺埗鍒拌 session 鐨?  **TSDDD 铏氭嫙鏄剧ず琛ㄩ潰**锛岃€岄偅灞炰簬 **win32k 鐨勫唴鏍镐晶**瀵硅薄 鈥斺€?鐢ㄦ埛鎬佽涓嶅埌銆?- 搴旂敤鑷繁鍙兘鏈夌紦鍐诧紙娴忚鍣ㄥ悎鎴愬櫒绾圭悊銆乄PF render target鈥︼級锛屼絾閭ｆ槸**閫愬簲鐢ㄣ€佹棤鏂囨。**鐨勫竷灞€锛?  涓嶈兘浣滀负閫氱敤鏉ユ簮锛涜€屼笖璇诲畠鏈韩鍚屾牱鏄竴娆℃嫹璐濄€?- 鍥犳"瀹夸富璇诲鍣ㄨ繘绋嬪唴瀛?鑳藉緱鍒扮殑鏄?*鏁版嵁**锛屼笉鏄?*鐢婚潰**銆?
+### 16.4 涓轰粈涔?鏇挎崲 DWM"涔熶笉鑳藉湪瀹夸富渚у仛 / Why not replace DWM from the host
+
+DWM/鍚堟垚鍣ㄦ槸 **per-session** 鐨勩€佹寕鍦?win32k 涓婄殑锛涘涓绘棤娉曟妸鑷繁鐨勫悎鎴愬櫒娉ㄥ叆鍒殑 session 鈥斺€?杩欐鏄?16.2 閭ｆ潯杈圭晫銆?*瑕?鎴戜滑鑷繁鐨?DWM"锛屽畠鍙兘璺戝湪瀹瑰櫒 session 閲?* 鈥斺€?涔熷氨鏄垜浠幇鍦ㄧ殑 agent
+锛堝畠宸茬粡琚瘉鏄庤兘鍦ㄥ鍣ㄥ唴 `CopyFromScreen` 鎷垮埌鐪熷疄绐楀彛鐢婚潰锛屄?3锛夈€?
+### 16.5 浣嗚繖涓€濊矾缁欏嚭浜嗘纭殑浼樺寲鏂瑰悜 / Where the idea *does* pay off
+
+鎶?鑷繁鐨?DWM"鎷嗘垚涓ゅ崐锛屾嫹璐濆氨涓嬫潵浜嗭細
+
+| 渚?| 鍋氫粈涔?| 鎷疯礉 |
+|---|---|---|
+| **璇讳晶锛堝繀椤诲湪瀹瑰櫒鍐?= agent锛?* | 涓嶅啀鏁村睆 `CopyFromScreen`锛氬湪瀹瑰櫒鍐?`EnumWindows`锛?*瀹冩湁鏉?*锛屽氨鍦ㄨ session 閲岋級鈫?閫愮獥鍙?`GetWindowDC`+`BitBlt` / `PrintWindow(PW_RENDERFULLCONTENT)`锛屽苟鐢ㄥ奖瀛愬抚姣旇緝锛圧FB 寮忥級**鍙彂鍙樺寲鍧?琛?* | 鍙鍙涓斿彉鍖栫殑绐楀彛鍖哄煙锛堥€氬父鍑?KB鈥撳嚑鍗?KB锛夛紝鑰屼笉鏄?3 MB 鍏ㄥ睆锛涘苟涓旂敤 `CreateDIBSection(hSection)` **鐩村啓鍏变韩鍐呭瓨**锛埪?5.2锛夆啋 瀹瑰櫒鍐?0 娆￠澶?memcpy |
+| **鏄剧ず渚э紙瀹夸富锛?* | 鎶婃敹鍒扮殑绐楀彛鐭╁舰/鍖哄煙**鍚堟垚**鍒版垜浠殑绐楀彛閲岋紙杩欐墠鏄?鎴戜滑鑷繁鐨?DWM"锛夛紝杈撳叆鎸?*绐楀彛**璺敱鍥炲鍣?| 鍙创鍙樺寲鍖哄煙 |
+
+鍗筹細**0 娆″叏灞忔嫹璐?+ 灏戦噺鍖哄煙鎷疯礉**锛屽ぉ鐒舵敮鎸佽剰鐭╁舰銆佸绐楀彛 z-order銆侀€愮獥鍙ｈ緭鍏ャ€?
+### 16.6 鍓╀笅鐨勪袱鏉?杈圭晫涔嬪"璺嚎锛堝垪鍑轰互鍏嶆紡锛? Routes outside the boundary
+
+1. **`tscon`/浼氳瘽閲嶅畾鍚?*鎶婂鍣?session 鎺ュ埌鐗╃悊 Console锛氶渶瑕?WTS/termsrv 璁ゅ彲璇ヤ細璇濓紙瀹瑰櫒鍐?termsrv
+   涓嶅缓鐩戝惉锛屄?1锛夛紝鑰屼笖浼?*澶鸿蛋鐢ㄦ埛鑷繁鐨?Console** 鈫?涓嶅彲琛屻€佷笉鍙帴鍙椼€?2. **缁欏鍣ㄨ櫄鎷熸樉绀洪€傞厤鍣?+ D3D 鍏变韩绾圭悊**锛堢湡姝ｉ浂鎷疯礉锛夛細瀹瑰櫒鍐呭疄娴?`D3D11CreateDevice`锛堢‖浠朵笌 WARP锛?   閮藉け璐ャ€? 涓樉绀洪€傞厤鍣ㄣ€佹棤 DWM锛圵GC 涔熶笉鍙敤锛屄?3.3锛夈€傝璧拌繖鏉¤矾灏卞緱鎹㈡垚 **Hyper-V 闅旂 + 澧炲己浼氳瘽**
+   锛圴MBus 浼犺緭鐨勫畼鏂归浂鎷疯礉璺緞锛夆€斺€?閭ｆ槸 VM 闅旂锛屼笌"杩涚▼闅旂瑕佹洿杞?鐨勭洰鏍囧啿绐併€?
+### 16.7 闄勫甫鍙戠幇 / Side finding
+
+鏈満瀹瑰櫒鏍堜粛澶勫潖鎬侊紙搂14.4锛夛細`HcsCreateProcess` 鈫?`0x80370105`锛屼絾**瀹瑰櫒鍘熸湁鐨勮繘绋嬩笌绐楀彛杩樻椿鐫€**
+锛堜細璇?4 鐨?`regedit`/`notepad` 绛夛級銆備篃灏辨槸璇?閫愮獥鍙ｆ姄鍙?杩欐潯浼樺寲涓€鏃﹀疄鐜帮紝鐢ㄨ繖浜?*瀛樻椿绐楀彛**
+鍗冲彲楠岃瘉锛屾棤闇€绛夊鍣ㄦ爤鎭㈠锛涗絾瑕佸湪浼氳瘽 4 閲?*璧锋柊杩涚▼**锛堝悎娉曡矾寰勶級浠嶉渶鍏堥噸缃?`vmcompute`/`hns`銆?

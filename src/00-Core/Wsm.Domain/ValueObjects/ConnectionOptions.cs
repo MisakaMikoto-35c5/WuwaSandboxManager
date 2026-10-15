@@ -23,6 +23,26 @@ public enum RdpTransportKind
 }
 
 /// <summary>
+/// The presentation technology used to show an RDP session. The sandbox host can
+/// present every session through more than one connector; this selects which one
+/// is used.
+/// </summary>
+public enum RdpConnectorKind
+{
+    /// <summary>
+    /// The default WPF desktop window. Hosts the <c>mstscax</c> ActiveX control
+    /// through a <c>WindowsFormsHost</c>; runs in the connecting process.
+    /// </summary>
+    Wpf = 0,
+
+    /// <summary>
+    /// A WinUI 3 window that embeds the <c>mstscax</c> ActiveX control as a child
+    /// HWND. Runs in a dedicated connector process.
+    /// </summary>
+    WinUi = 1,
+}
+
+/// <summary>
 /// How the user wants to consume the sandbox.
 /// <see cref="RemoteApp"/> corresponds to RAIL mode (individual windows, the
 /// same technique Windows Defender Application Guard used), while

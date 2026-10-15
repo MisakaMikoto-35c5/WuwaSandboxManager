@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>Wsm.Rdp.WinUI</RootNamespace>
+    <AssemblyName>Wsm.Rdp.WinUI</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Description>WinUI 3 RDP connector: a XAML window with quick lifecycle controls, full screen and live resize, embedding the mstscax ActiveX control as a child window.</Description>
+  </PropertyGroup>
+
+  <!--
+    WinForms is required only to construct the shared ActiveX host control. It is
+    pulled in as a framework reference (not via UseWindowsForms) so the WPF XAML
+    tooling does not take over this project's .xaml files.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="Volo.Abp.Core" />
+    <PackageReference Include="Volo.Abp.Autofac" />
+    <PackageReference Include="Volo.Abp.Localization" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Application\Wsm.Application.csproj" />
+    <ProjectReference Include="..\..\00-Core\Wsm.Application.EngineSelection\Wsm.Application.EngineSelection.csproj" />
+    <ProjectReference Include="..\..\20-Engines\Wsm.Engine.Hcs\Wsm.Engine.Hcs.csproj" />
+    <ProjectReference Include="..\..\20-Engines\Wsm.Engine.WindowsSandbox\Wsm.Engine.WindowsSandbox.csproj" />
+    <ProjectReference Include="..\..\20-Engines\Wsm.Engine.WindowsContainer\Wsm.Engine.WindowsContainer.csproj" />
+    <ProjectReference Include="..\..\30-Connections\Wsm.Connection.RdpHost\Wsm.Connection.RdpHost.csproj" />
+    <ProjectReference Include="..\..\30-Connections\Wsm.Connection.RdpHost.Ax\Wsm.Connection.RdpHost.Ax.csproj" />
+    <ProjectReference Include="..\..\30-Connections\Wsm.Connection.RdpBase\Wsm.Connection.RdpBase.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Localization\Wsm.Localization.csproj" />
+  </ItemGroup>
+
+</Project>

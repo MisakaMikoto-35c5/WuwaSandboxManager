@@ -26,6 +26,8 @@
   <data name="AppSettingsDialog.Title" xml:space="preserve"><value>Settings</value></data>
   <data name="AppSettingsDialog.CloseButtonText" xml:space="preserve"><value>Close</value></data>
   <data name="LanguageLabel.Text" xml:space="preserve"><value>Language</value></data>
+  <data name="RdpConnectorLabel.Text" xml:space="preserve"><value>RDP connector</value></data>
+  <data name="RdpConnectorHint.Text" xml:space="preserve"><value>Which presentation shows RDP sessions: the WPF window, or the WinUI 3 connector (its own process). Changing it restarts the app.</value></data>
   <data name="ConfigDataFolderLabel.Text" xml:space="preserve"><value>Config &amp; data folder</value></data>
   <data name="ConfigDataFolderHint.Text" xml:space="preserve"><value>One subfolder per sandbox; each holds its manifest, recipe and data. Changing it restarts the app.</value></data>
   <data name="EnginesSection.Text" xml:space="preserve"><value>Engine</value></data>

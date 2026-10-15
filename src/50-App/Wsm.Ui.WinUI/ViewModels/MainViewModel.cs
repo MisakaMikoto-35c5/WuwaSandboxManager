@@ -51,6 +51,8 @@ public sealed partial class MainViewModel : ObservableObject
         NewEngineOptions = BuildEngineOptions();
         Languages = LanguageOption.CreateDefaults();
         SelectedLanguage = LanguageOption.Resolve(_l.CurrentCulture.Name);
+        RdpConnectors = RdpConnectorOption.CreateDefaults();
+        SelectedRdpConnector = RdpConnectorOption.Resolve(UiSettingsStore.Load().RdpConnector);
         UpdateEnvironmentSummary();
         ResetNewInstance();
 
@@ -66,6 +68,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     public IReadOnlyList<LanguageOption> Languages { get; }
 
+    /// <summary>The selectable RDP connector presentations (WPF, WinUI 3).</summary>
+    public IReadOnlyList<RdpConnectorOption> RdpConnectors { get; }
+
     /// <summary>
     /// The user-selectable config &amp; data folder. Resolved once at startup from
     /// the persisted settings; changing it relaunches the app.
@@ -77,6 +82,8 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private EngineOptionViewModel? _selectedEngine;
 
     [ObservableProperty] private LanguageOption? _selectedLanguage;
+
+    [ObservableProperty] private RdpConnectorOption? _selectedRdpConnector;
 
     [ObservableProperty] private string _status;
 

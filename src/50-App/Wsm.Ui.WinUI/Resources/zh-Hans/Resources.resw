@@ -26,6 +26,8 @@
   <data name="AppSettingsDialog.Title" xml:space="preserve"><value>设置</value></data>
   <data name="AppSettingsDialog.CloseButtonText" xml:space="preserve"><value>关闭</value></data>
   <data name="LanguageLabel.Text" xml:space="preserve"><value>语言</value></data>
+  <data name="RdpConnectorLabel.Text" xml:space="preserve"><value>RDP 连接器</value></data>
+  <data name="RdpConnectorHint.Text" xml:space="preserve"><value>选择呈现 RDP 会话的方式：WPF 窗口，或 WinUI 3 连接器（独立进程）。更改后会重启应用。</value></data>
   <data name="ConfigDataFolderLabel.Text" xml:space="preserve"><value>配置+数据文件夹</value></data>
   <data name="ConfigDataFolderHint.Text" xml:space="preserve"><value>每个沙箱一个子文件夹，包含其清单、recipe 与数据。更改后应用会重启。</value></data>
   <data name="EnginesSection.Text" xml:space="preserve"><value>引擎</value></data>

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Wsm.Rdp.WinUI.ConnectorWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Quick controls -->
+        <Border Grid.Row="0" Background="#1B1B20" Padding="8,6">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button x:Name="CtrlAltDelButton" Click="OnCtrlAltDelClick" Content="Ctrl+Alt+Del" />
+                    <Button x:Name="RestartButton" Click="OnRestartClick" Content="Restart" />
+                    <Button x:Name="ShutdownButton" Click="OnShutdownClick" Content="Shut down" />
+                    <Button x:Name="ForceShutdownButton" Click="OnForceShutdownClick" Content="Force shut down" />
+                    <Button x:Name="PowerOnButton" Click="OnPowerOnClick" Content="Power on" />
+                    <Button x:Name="FullScreenButton" Click="OnToggleFullScreenClick" Content="Full screen" />
+                </StackPanel>
+
+                <TextBlock x:Name="StatusText"
+                           Grid.Column="1"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="#B9B9C4" />
+            </Grid>
+        </Border>
+
+        <!-- RDP surface. The mstscax ActiveX HWND is parented over this region. -->
+        <Grid Grid.Row="1" x:Name="Surface">
+            <StackPanel x:Name="Overlay"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        MaxWidth="560"
+                        Visibility="Collapsed">
+                <TextBlock x:Name="OverlayTitle"
+                           HorizontalAlignment="Center"
+                           FontSize="20"
+                           FontWeight="Bold"
+                           Foreground="White"
+                           Text="Connection disconnected" />
+                <TextBlock x:Name="OverlayBody"
+                           Margin="0,8,0,0"
+                           FontSize="13"
+                           Foreground="#DCDCE4"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center" />
+                <TextBlock x:Name="OverlayDetail"
+                           Margin="0,6,0,0"
+                           FontSize="11"
+                           Foreground="#A0A0AC"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center" />
+                <Button x:Name="OverlayCloseButton"
+                        Margin="0,18,0,0"
+                        HorizontalAlignment="Center"
+                        Content="Close"
+                        Click="OnOverlayCloseClick" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

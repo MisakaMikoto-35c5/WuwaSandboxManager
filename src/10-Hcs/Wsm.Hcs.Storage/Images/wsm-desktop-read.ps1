@@ -194,7 +194,6 @@ public static class WsmMirrorWindows {
     [DllImport("user32.dll", SetLastError = true)] static extern IntPtr GetWindowDC(IntPtr h);
     [DllImport("user32.dll", SetLastError = true)] static extern int ReleaseDC(IntPtr h, IntPtr dc);
     [DllImport("user32.dll", SetLastError = true)] static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
-    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("gdi32.dll", SetLastError = true)] static extern int SaveDC(IntPtr dc);
     [DllImport("gdi32.dll", SetLastError = true)] static extern bool RestoreDC(IntPtr dc, int saved);
     [DllImport("gdi32.dll", SetLastError = true)] static extern bool SetViewportOrgEx(IntPtr dc, int x, int y, IntPtr previous);

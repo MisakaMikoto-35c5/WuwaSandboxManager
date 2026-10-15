@@ -251,6 +251,39 @@ wsm exec $id cmd.exe /c qwinsta     # 应能看到  console  <id>  Conn
 `cmd.exe`；配了 `Password` 才会写自动登录，否则会话停在 `LogonUI` 登录界面（也是桌面）。
 `AttemptTcpRdp` 是**实验性且已知无效**的 RDP 尝试，保留原因见上面的文档。
 
+### 容器桌面通道（进程隔离；可替换的 provider，由清单选择）
+
+进程隔离的容器没有 RDP，容器窗口也不能跨 silo 搬进你的会话（实测见同文档 §16/§17）。所以桌面是一条
+**像素通道**，由 **provider** 实现，而**用哪一个由沙箱清单决定**：
+
+* `frame-buffer`（默认）：容器内 agent 抓整屏写进共享文件，宿主用一个窗口显示；不需要改镜像。
+* `window-mirror`：宿主通过 **HCS** 在容器会话里启动读侧；读侧**逐窗口** `PrintWindow` 直接画进共享内存
+  （`CreateDIBSection(hSection=共享映射)`，零拷贝，且不需要屏幕 DC），宿主为**每个容器窗口开一个真实窗口**
+  （同矩形/标题/z-order，会出现在任务栏与 Alt-Tab），**拖动宿主窗口就是真的移动容器里的窗口**
+  （`movewindow` → 读侧 `SetWindowPos`）。
+
+清单里选（`SandboxRecipe.Desktop` → `SandboxDesktopPlan`）：
+
+```jsonc
+{ "desktop": { "kind": "WindowMirror",   // 或 "FrameBuffer" / "None"
+               "provider": null,         // 也可直接写 provider id（优先于 kind）
+               "presentToInteractiveSession": true } }
+```
+
+```powershell
+wsm desktop <id> [--provider <id>] [--mode <Kind>] [--present|--no-present] [--input "keys F3"]
+wsm desktop --list-providers                     # 本宿主注册了哪些 provider
+wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --provider window-mirror
+wsm image mirror <layerPath> [--shell cmd.exe] [--logon-user <u>] [--logon-password <p>]
+wsm desktop-view --mode windows --frame <mirror.shm> [--offset-x N --offset-y N]
+```
+
+> `wsm image mirror` 把读侧与登录钩子（`Winlogon\Userinit`）烘进镜像，供"GUI 跑在交互会话"的容器使用；
+> 默认路径不需要它——HCS 会把读侧直接启动到容器会话里。
+
+实测（同文档 §20）：宿主上出现镜像窗口 `rect=(500,320 480x300)`；拖动 (+90,+60) 后被镜像的窗口变成
+`rect=(170,140)`，读侧日志 `movewindow 0x15198C -> (170,140) ok=True`。
+
 ### 桌面与 mstsc（用 VM 隔离）
 
 **容器（进程隔离**或** Hyper-V 隔离）不支持图形界面与 RDP 交互会话**——这是 Microsoft 的设计

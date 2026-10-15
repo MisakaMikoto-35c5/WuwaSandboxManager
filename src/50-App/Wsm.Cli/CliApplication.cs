@@ -692,6 +692,14 @@ public sealed class CliApplication
             return 1;
         }
 
+        if (options.ContainsKey("list-providers"))
+        {
+            Console.WriteLine($"Providers : {string.Join(", ", _containerDesktop.ProviderIds)}");
+            Console.WriteLine("A sandbox's recipe picks one: Desktop.Provider (explicit id) wins over Desktop.Kind,");
+            Console.WriteLine("and Desktop.Kind = None means the sandbox has no desktop at all.");
+            return 0;
+        }
+
         var computeSystem = options.GetValueOrDefault("compute-system");
         var containerRoot = options.GetValueOrDefault("container-root");
         var byComputeSystem = !string.IsNullOrWhiteSpace(computeSystem) && !string.IsNullOrWhiteSpace(containerRoot);
@@ -814,6 +822,13 @@ public sealed class CliApplication
         var mode = options.GetValueOrDefault("mode") ?? "frame";
         var offsetX = int.TryParse(options.GetValueOrDefault("offset-x"), out var ox) ? ox : 0;
         var offsetY = int.TryParse(options.GetValueOrDefault("offset-y"), out var oy) ? oy : 0;
+
+        if (options.ContainsKey("print-table"))
+        {
+            // Reading the published buffer needs no elevation, so this is the cheap way to
+            // check a container's desktop channel from outside it.
+            return DesktopMirrorViewCommand.PrintTable(frame!, seconds);
+        }
 
         // "windows" mirrors one host window per container window (doc section 18/19);
         // anything else shows the whole desktop in a single window.
@@ -1499,6 +1514,18 @@ public sealed class CliApplication
                                               (winlogon / LogonUI). Does NOT enable
                                               RDP: termsrv refuses a listener inside a
                                               process-isolated container
+              image mirror <path>             Install the window-mirror payload into an
+                                              image: the logon hook plus the read side
+                                              that runs inside the container's session
+                                              (--shell / --logon-user / --logon-password)
+              desktop <id>                    Start the container desktop channel the
+                                              sandbox recipe asks for (Desktop.Kind or
+                                              Desktop.Provider) and present it.
+                                              Options: --provider, --mode, --present /
+                                              --no-present, --input, --list-providers
+              desktop-view                    Show a published buffer: --frame <path>
+                                              --mode frame|windows [--seconds N]
+                                              [--offset-x N --offset-y N]
               multi [--enable|--disable]      Inspect/change the multi-instance policy
               elevate                         Relaunch elevated (needed for HCS)
 

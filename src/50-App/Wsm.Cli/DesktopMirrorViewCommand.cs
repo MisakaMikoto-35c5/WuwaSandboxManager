@@ -29,6 +29,42 @@ internal static class DesktopMirrorViewCommand
     /// <summary>Height of the band that acts as the window's title bar.</summary>
     private const int TitleBand = 28;
 
+    /// <summary>
+    /// <c>--print-table</c>: prints what the read side published (desktop geometry, frame
+    /// sequence, every window with its rectangle) and exits. This is how a caller checks
+    /// the channel - and a window's position after moving it - without showing anything
+    /// and <b>without elevation</b>.
+    /// </summary>
+    public static int PrintTable(string mirrorPath, int waitSeconds)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(Math.Max(0, waitSeconds));
+        do
+        {
+            if (ContainerDesktopMirror.TryReadHeader(mirrorPath, out var count, out var sequence) is { } geometry)
+            {
+                var windows = ContainerDesktopMirror.ReadWindows(mirrorPath, geometry, count);
+                Console.WriteLine($"Mirror   : {mirrorPath}");
+                Console.WriteLine($"Geometry : {geometry.Width}x{geometry.Height} stride={geometry.Stride} fps={geometry.Fps}");
+                Console.WriteLine($"Sequence : {sequence}");
+                Console.WriteLine($"Windows  : {windows.Count}");
+                foreach (var window in windows)
+                {
+                    Console.WriteLine(
+                        $"  - id=0x{window.Id:X} rect=({window.X},{window.Y} {window.Width}x{window.Height}) " +
+                        $"seq={window.Sequence} \"{window.Title}\"");
+                }
+
+                return 0;
+            }
+
+            Thread.Sleep(500);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        Console.Error.WriteLine($"No window mirror has been published at '{mirrorPath}'.");
+        return 1;
+    }
+
     public static int Run(string mirrorPath, int seconds, string inputPrefix, int offsetX = 0, int offsetY = 0)
     {
         if (!File.Exists(mirrorPath))

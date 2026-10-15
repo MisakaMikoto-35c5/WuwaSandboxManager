@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Volo.Abp;
 using Volo.Abp.Modularity;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Domain.ValueObjects;
 using Wsm.Recipe.Serialization;
 using Xunit;
@@ -110,6 +111,59 @@ public class WsbRecipeSerializerTests
         var xml = "<Configuration><MappedFolders><MappedFolder><HostFolder>C:\\x</HostFolder><ReadOnly>true</ReadOnly></MappedFolder></MappedFolders></Configuration>";
         var recipe = serializer.Deserialize(xml);
         Assert.True(recipe.MappedFolders[0].ReadOnly);
+
+        return Task.CompletedTask;
+    });
+
+    [Fact]
+    public Task The_container_desktop_plan_round_trips() => WithSerializerAsync(serializer =>
+    {
+        // The recipe is how a sandbox selects its desktop provider, so the plan has to
+        // survive persistence - otherwise the manifest-driven choice would be lost.
+        var original = SandboxRecipe.Default with
+        {
+            Desktop = new SandboxDesktopPlan
+            {
+                Kind = ContainerDesktopKind.WindowMirror,
+                Provider = ContainerDesktopProviderIds.WindowMirror,
+                PresentToInteractiveSession = false,
+                DirtyRegions = false,
+                Width = 1280,
+                Height = 720,
+                Fps = 8,
+            },
+        };
+
+        var xml = serializer.Serialize(original);
+        Assert.Contains("<ContainerDesktop>", xml);
+        Assert.Contains("<Kind>WindowMirror</Kind>", xml);
+        Assert.Contains("<Provider>window-mirror</Provider>", xml);
+
+        var restored = serializer.Deserialize(xml);
+        Assert.Equal(original.Desktop, restored.Desktop);
+
+        return Task.CompletedTask;
+    });
+
+    [Fact]
+    public Task A_default_plan_writes_no_extension_element() => WithSerializerAsync(serializer =>
+    {
+        // The payload goes to WindowsSandbox.exe for VM-isolated sandboxes, so a recipe
+        // that does not ask for a container desktop must stay byte-for-byte Microsoft's shape.
+        var xml = serializer.Serialize(SandboxRecipe.Default);
+
+        Assert.DoesNotContain("ContainerDesktop", xml);
+        Assert.Equal(SandboxDesktopPlan.Default, serializer.Deserialize(xml).Desktop);
+
+        return Task.CompletedTask;
+    });
+
+    [Fact]
+    public Task A_plan_without_a_provider_element_keeps_the_kind() => WithSerializerAsync(serializer =>
+    {
+        var xml = "<Configuration><ContainerDesktop><Kind>None</Kind></ContainerDesktop></Configuration>";
+
+        Assert.Equal(ContainerDesktopKind.None, serializer.Deserialize(xml).Desktop.Kind);
 
         return Task.CompletedTask;
     });

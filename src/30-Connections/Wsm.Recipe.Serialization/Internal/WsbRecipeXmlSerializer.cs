@@ -77,6 +77,38 @@ internal sealed class WsbRecipeXmlSerializer : ISandboxRecipeSerializer, ITransi
             root.Add(new XElement("AccountPassword", recipe.AccountPassword));
         }
 
+        // The container desktop plan is a WSM extension (it configures containers, which
+        // do not use this .wsb payload at all). It is only written when a recipe actually
+        // asks for something, so every existing recipe keeps producing exactly the payload
+        // Microsoft's WsbRecipe type understands.
+        if (recipe.Desktop != SandboxDesktopPlan.Default)
+        {
+            var desktop = new XElement("ContainerDesktop", new XElement("Kind", recipe.Desktop.Kind.ToString()));
+            if (!string.IsNullOrWhiteSpace(recipe.Desktop.Provider))
+            {
+                desktop.Add(new XElement("Provider", recipe.Desktop.Provider));
+            }
+
+            AddBool(desktop, "PresentToInteractiveSession", recipe.Desktop.PresentToInteractiveSession);
+            AddBool(desktop, "DirtyRegions", recipe.Desktop.DirtyRegions);
+            if (recipe.Desktop.Width > 0)
+            {
+                desktop.Add(new XElement("Width", recipe.Desktop.Width.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            if (recipe.Desktop.Height > 0)
+            {
+                desktop.Add(new XElement("Height", recipe.Desktop.Height.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            if (recipe.Desktop.Fps > 0)
+            {
+                desktop.Add(new XElement("Fps", recipe.Desktop.Fps.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            root.Add(desktop);
+        }
+
         return root.ToString(SaveOptions.DisableFormatting);
     }
 
@@ -124,6 +156,27 @@ internal sealed class WsbRecipeXmlSerializer : ISandboxRecipeSerializer, ITransi
             LogonCommands = commands,
             AccountUser = root.Element("AccountUser")?.Value,
             AccountPassword = root.Element("AccountPassword")?.Value,
+            Desktop = ParseDesktop(root.Element("ContainerDesktop")),
+        };
+    }
+
+    /// <summary>Reads the WSM container desktop extension element, if the recipe has one.</summary>
+    private static SandboxDesktopPlan ParseDesktop(XElement? element)
+    {
+        if (element is null)
+        {
+            return SandboxDesktopPlan.Default;
+        }
+
+        return new SandboxDesktopPlan
+        {
+            Kind = ReadEnum(element, "Kind", ContainerDesktopKind.FrameBuffer),
+            Provider = element.Element("Provider")?.Value,
+            PresentToInteractiveSession = ReadBool(element, "PresentToInteractiveSession") ?? true,
+            DirtyRegions = ReadBool(element, "DirtyRegions") ?? true,
+            Width = ReadInt(element, "Width") ?? 0,
+            Height = ReadInt(element, "Height") ?? 0,
+            Fps = ReadInt(element, "Fps") ?? 0,
         };
     }
 

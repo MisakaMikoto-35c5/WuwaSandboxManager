@@ -262,11 +262,18 @@ net start TermService
 | 6 | — | README 章节 + 文档回填 / README section + doc backfill | 记录 record |
 | 7 | `d1235a2` | §10 桌面可达性实测（借 token / 自动登录 / ~121 秒注销 / pipe 与 3389 / 可截屏的容器桌面）+ `tools/container-desktop-agent` | 记录 + 可用 |
 | 8 | `379c2f6` | §11 RDP 的**代码级根因**（反汇编 `termsrv`）+ §12 **会话内输入代理**（`deskinput.ps1`，含验证）+ 镜像导入器改为报出 `tar` 的诊断 | 记录 + 可用 |
-| 9 | `096ce7d` | §13 共享内存呈现（容器内抓屏写 `frame.shm`、宿主映射读帧 + 输入队列，端到端实测）| **可用** works |
-| 10 | `a457439` | §13.6 句柄直通**可行**（提权 `OpenProcess`+`DuplicateHandle`+`MapViewOfFile`）/ 窗口注入**证伪** | 记录 record |
-| 11 | `1dc2024` | §13.7 由 SYSTEM 进程把窗口创建到用户 Console（`WTSQueryUserToken`+`CreateProcessAsUser`，实测 pid/会话正确）+ 输入注入进容器内进程 | **可用** works |
-| 12 | `d11d11e` | §14 把能力接进管理 service（`Wsm.Connection.ContainerDesktop` + `IContainerFileSystemAccess` + CLI `desktop`/`desktop-view`）；修掉 `Path.Combine` 有根路径 bug | 编译/单测通过；CLI 级端到端待容器栈复位 |
-| 13 | (本步 / this step) | §15 为什么不能"注入窗口"、以及真正能省掉的拷贝（DIB section 直写 + 查看器 BitBlt + 脏矩形） | 记录 record |
+| 9 | `096ce7d` | §13 共享内存呈现（容器内抓屏写 `frame.shm`、宿主映射读帧 + 输入队列，端到端实测） | **可用** works |
+| 10 | `a457439` | §13.6 句柄直通**可行**（提权 `OpenProcess` + `DuplicateHandle` + `MapViewOfFile`）/ 窗口注入**证伪** | 记录 record |
+| 11 | `1dc2024` | §13.7 由 SYSTEM 进程把窗口创建到用户 Console + 输入注入进容器内进程（实测 pid/会话正确） | **可用** works |
+| 12 | `d11d11e` | §14 把能力接进管理 service（`Wsm.Connection.ContainerDesktop` + `IContainerFileSystemAccess` + CLI）；修掉 `Path.Combine` 有根路径 bug | 编译/单测通过 |
+| 13 | `0f0cd54` | §15 为什么不能"注入窗口"，以及真正能省掉的拷贝（DIB section 直写 / 查看器 BitBlt / 脏矩形） | 记录 record |
+| 14 | `779feb1` | §16 实测：宿主看得见容器进程，但**打不开**其 window station（User 命名空间按会话虚拟化） | 记录 record |
+| 15 | `c0b81ba` | §17 实测：token/session 手术（含偷容器进程 token）**无法**在容器会话里创建进程（`0xC0000142`） | 记录 record |
+| 16 | `dd485a4` | §18 设计决定：读侧用 winlogon/Userinit 包裹，显示侧用窗口镜像 | 记录 record |
+| 17 | `1298dc4` / `d2d027c` | §19 **可替换 provider 模块 + 清单选择**（provider 接口/registry/门面 + frame-buffer/window-mirror + 镜像 payload + CLI） | 编译/单测通过 |
+| 18 | `0efd4f2` | §20 窗口镜像的**显示 + 拖动**实测（宿主逐窗口真实窗口；拖动 → `movewindow` → 窗口真的移动） | **可用** works |
+| 19 | `3b67e99` | §21 provider 改为 **HCS 启动读侧** + 读侧改**逐窗口 `PrintWindow` 进共享 DIB（零拷贝）** + 显式模块注册 | 编译/单测通过；容器内终验待重跑 |
+| 20 | (本步 / this step) | §21.4 清单持久化缺口修复（`.wsb` 序列化 `<ContainerDesktop>`）+ §21.5 CLI 表面补齐 | 单测 308 通过 |
 
 > 说明：按用户要求，**"无论是否可用"都放进本分支**——RDP 相关代码保留但明确标注
 > `Experimental`/已知无效，避免误用。
@@ -728,355 +735,555 @@ Id      SessionId MainWindowTitle
 鍙湁 **Hyper-V 闅旂 + 澧炲己浼氳瘽**銆?
 ---
 
-## 14. 鎶婂鍣ㄦ闈㈡帴杩涚鐞?service / Container desktop in the manager
+## 14. 把容器桌面接进管理 service / Container desktop in the manager
 
-> 搂13 缁欏嚭浜嗘満鍒朵笌瀹炴祴锛涙湰鑺傛妸瀹冭惤杩涢」鐩細**鑳藉姏鐢辩鐞?service 鎵胯浇**锛坰ervice 鏄?SYSTEM锛?> 鏃㈣兘鍦ㄥ鍣ㄩ噷璧?agent锛屼篃鑳芥妸绐楀彛鍒涘缓鍒扮敤鎴?Console锛夛紝CLI/UI 鍙槸瀹冪殑椹卞姩鏂广€?
-### 14.1 鍒嗗眰 / Where it lives
+> §13 给出了机制与实测；本节把它落进项目：**能力由管理 service 承载**（service 是 SYSTEM，
+> 既能在容器里起 agent，也能把窗口创建到用户 Console），CLI/UI 只是它的驱动方。
 
-| 灞?| 浣嶇疆 | 鎵挎媴浠€涔?|
+### 14.1 分层 / Where it lives
+
+| 层 | 位置 | 承担什么 |
 |---|---|---|
-| 寮曟搸鑳藉姏 | `Wsm.Engines.Abstractions/IContainerFileSystemAccess.cs` + `WindowsContainerEngine` 瀹炵幇 | 鏆撮湶**杩愯涓鍣ㄧ殑瀹夸富鍙鏍?*锛坄\\?\Volume{GUID}\`锛夛細杩欐槸鎶?agent 鏀捐繘瀹瑰櫒銆佷互鍙?瀹瑰櫒閲岀殑鏅€氭枃浠?鍏变韩鍐呭瓨"鐨勫墠鎻?|
-| 杩炴帴灞?| `src/30-Connections/Wsm.Connection.ContainerDesktop/` | `IContainerDesktopHost` 缂栨帓锛歮aterialise agent 鈫?鍦ㄥ鍣ㄥ唴鍚姩 鈫?绛夌涓€甯?鈫?鍙€?*鍦ㄤ氦浜掍細璇濋噷寮€绐?*锛沗ISessionProcessLauncher` 灏佽 `WTSQueryUserToken`+`CreateProcessAsUser`锛堝彧鏈?SYSTEM 鑳借法浼氳瘽锛?|
-| 瀹瑰櫒鍐?| `Agent/container-desktop-agent.ps1`锛堝祵鍏ヨ祫婧愶級 | 鎶撳睆杩涘叡浜唴瀛?+ 杞杈撳叆闃熷垪 + `SetCursorPos`/`mouse_event`/`keybd_event` 娉ㄥ叆锛涘搷搴?`agent-stop.txt` 閫€鍑?|
-| 鏈嶅姟 | `Wsm.Service.Host`锛坄WsmServiceModule` 渚濊禆鏂版ā鍧楋級 | 浠?SYSTEM 鎵胯浇鍚屼竴濂楃粍浠?鈫?绐楀彛钀藉湪鐢ㄦ埛 Console |
-| CLI | `wsm desktop 鈥 / `wsm desktop-view 鈥锛坄DesktopViewCommand`锛?| 椹卞姩涓庢煡鐪嬪櫒绐楀彛锛圵inForms锛沗wsm.exe` 鏈韩灏辨槸鏌ョ湅鍣ㄥ涓伙紝涓?`wsm connect` 鐨勬棦鏈夋ā寮忎竴鑷达級 |
+| 引擎能力 | `Wsm.Engines.Abstractions/IContainerFileSystemAccess.cs` + `WindowsContainerEngine` 实现 | 暴露**运行中容器的宿主可见根**（`\\?\Volume{GUID}\`）：这是把 agent 放进容器、以及"容器里的普通文件=共享内存"的前提 |
+| 连接层 | `src/30-Connections/Wsm.Connection.ContainerDesktop/` | `IContainerDesktopHost` 编排：materialise agent → 在容器内启动 → 等第一帧 → 可选**在交互会话里开窗**；`ISessionProcessLauncher` 封装 `WTSQueryUserToken`+`CreateProcessAsUser`（只有 SYSTEM 能跨会话） |
+| 容器内 | `Agent/container-desktop-agent.ps1`（嵌入资源） | 抓屏进共享内存 + 轮询输入队列 + `SetCursorPos`/`mouse_event`/`keybd_event` 注入；响应 `agent-stop.txt` 退出 |
+| 服务 | `Wsm.Service.Host`（`WsmServiceModule` 依赖新模块） | 以 SYSTEM 承载同一套组件 → 窗口落在用户 Console |
+| CLI | `wsm desktop …` / `wsm desktop-view …`（`DesktopViewCommand`） | 驱动与查看器窗口（WinForms；`wsm.exe` 本身就是查看器宿主，与 `wsm connect` 的既有模式一致） |
 
-鏂板/鏀瑰姩鏂囦欢锛歚Wsm.Connection.ContainerDesktop`锛坈sproj銆乣ContainerDesktopOptions`銆乣ContainerDesktopSession`銆?`IContainerDesktopHost`銆乣ISessionProcessLauncher`銆乣Internal/ContainerDesktopHost`銆乣Internal/SessionProcessLauncher`銆?妯″潡銆乣Agent/container-desktop-agent.ps1`锛夈€乣IContainerFileSystemAccess`銆乣WindowsContainerEngine`锛堝疄鐜拌鑳藉姏锛夈€?`CliApplication`/`CliModule`/`Wsm.Cli.csproj`銆乣WsmServiceModule`/`Wsm.Service.Host.csproj`銆乣WindowsSandboxManager.slnx`銆?`tests/鈥?Connection/ContainerDesktopHostTests.cs`銆?
-### 14.2 鍛戒护 / Commands
+新增/改动文件：`Wsm.Connection.ContainerDesktop`（csproj、`ContainerDesktopOptions`、`ContainerDesktopSession`、
+`IContainerDesktopHost`、`ISessionProcessLauncher`、`Internal/ContainerDesktopHost`、`Internal/SessionProcessLauncher`、
+模块、`Agent/container-desktop-agent.ps1`）、`IContainerFileSystemAccess`、`WindowsContainerEngine`（实现该能力）、
+`CliApplication`/`CliModule`/`Wsm.Cli.csproj`、`WsmServiceModule`/`Wsm.Service.Host.csproj`、`WindowsSandboxManager.slnx`、
+`tests/…/Connection/ContainerDesktopHostTests.cs`。
+
+### 14.2 命令 / Commands
 
 ```powershell
-# WSM 鑷繁绠＄殑娌欑锛堝紩鎿庣敤鏂拌兘鍔涜В鏋愬鍣ㄦ牴锛?wsm desktop <sandboxId> --attach
+# WSM 自己管的沙箱（引擎用新能力解析容器根）
+wsm desktop <sandboxId> --attach
 
-# 浠绘剰杩愯涓殑瀹瑰櫒锛堝伐鍏?鍙︿竴涓墍鏈夎€咃紝渚嬪浠ｇ悊鏈嶅姟鎸佹湁鐨勫鍣級
+# 任意运行中的容器（工具/另一个所有者，例如代理服务持有的容器）
 wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --attach
 wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --input "keys F3"
 wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --stop
 
-# 鏌ョ湅鍣紙`--attach` 浼氳嚜鍔ㄧ敤鍚屼竴鏉″懡浠ゅ惎鍔ㄥ畠锛涗篃鍙墜宸ヨ窇锛?wsm desktop-view --frame \\?\Volume{GUID}\wsm\frame.shm --seconds 120
+# 查看器（`--attach` 会自动用同一条命令启动它；也可手工跑）
+wsm desktop-view --frame \\?\Volume{GUID}\wsm\frame.shm --seconds 120
 ```
 
-`--attach` 鏄惁钀藉湪**鐢ㄦ埛 Console**鍙栧喅浜庢槸璋佸湪璺戯細浠?**SYSTEM** 璺戯紙鏈嶅姟锛夆啋 `WTSQueryUserToken`+
-`CreateProcessAsUser` 鎶婄獥鍙ｆ斁杩涗氦浜掍細璇濓紙搂13.7 宸插崟鐙獙璇侊級锛涗互**鏅€?鎻愭潈绠＄悊鍛?*璺戯紙CLI锛夆啋 鍥為€€鎴?"鍦ㄨ皟鐢ㄨ€呰嚜宸变細璇濋噷鍚姩"锛屽洜姝ょ敤鎴峰湪缁堢閲屾暡 `wsm desktop 鈥?--attach` 涔熻兘鐩存帴鐪嬪埌绐楀彛銆?
-### 14.3 鏈瀹炵幇椤哄甫淇帀/鍙戠幇鐨勯棶棰?/ Bugs found on the way
+`--attach` 是否落在**用户 Console**取决于是谁在跑：以 **SYSTEM** 跑（服务）→ `WTSQueryUserToken`+
+`CreateProcessAsUser` 把窗口放进交互会话（§13.7 已单独验证）；以**普通/提权管理员**跑（CLI）→ 回退成
+"在调用者自己会话里启动"，因此用户在终端里敲 `wsm desktop … --attach` 也能直接看到窗口。
 
-| 闂 | 璇存槑 |
+### 14.3 本次实现顺带修掉/发现的问题 / Bugs found on the way
+
+| 问题 | 说明 |
 |---|---|
-| **`Path.Combine("\\?\Volume{鈥", "C:\wsm")` 杩斿洖 `C:\wsm`** | 绗簩涓弬鏁版槸**鏈夋牴**璺緞鏃朵細**鏇挎崲**绗竴娈?鈬?瀹夸富鍘绘壘鑷繁鐨?`C:\wsm`锛堝疄娴嬪湪閭ｅ彴鏈哄櫒涓婄湡鐨勫缓鍑轰簡 `C:\wsm\container-desktop-agent.ps1` 涓?`agent-stop.txt`锛屽凡娓呯悊锛夈€備慨娉曪細鎶婂鍣ㄥ唴鐩綍杞垚**鐩稿**璺緞鍐嶅悎骞讹紙`ToRelativeContainerPath`锛夛紝骞跺姞鍥炲綊娴嬭瘯 |
-| 閲嶅璋冪敤浼氶噸鍚?agent | 鏈嶅姟/澶氭 CLI 璋冪敤浼氬鍚屼竴涓?`frame.shm` 鎵撴灦 鈬?`AttachAsync` 鍏堣甯уご锛?*宸插瓨鍦ㄥ氨"鏀跺吇"**锛堝箓绛夛級锛岃€屼笉鏄噸缃洰褰曞啀鍚姩 |
-| 鐭懡杩涚▼鏃犳硶 `--stop` | 浼氳瘽琛ㄦ槸杩涚▼鍐呯殑 鈬?澧炲姞 `StopAsync(computeSystemId, containerRoot)`锛岀洿鎺ュ啓鍋滄鏍囪 |
-| PowerShell 5.1 鐨?`0xC0000000`/`0xFFFFFFFF` 瀛楅潰閲?| 瑙?搂13.4锛堝鍣ㄥ唴 agent 宸茬敤鍗佽繘鍒?`[uint32]` 鍐欐硶锛?|
+| **`Path.Combine("\\?\Volume{…}", "C:\wsm")` 返回 `C:\wsm`** | 第二个参数是**有根**路径时会**替换**第一段 ⇒ 宿主去找自己的 `C:\wsm`（实测在那台机器上真的建出了 `C:\wsm\container-desktop-agent.ps1` 与 `agent-stop.txt`，已清理）。修法：把容器内目录转成**相对**路径再合并（`ToRelativeContainerPath`），并加回归测试 |
+| 重复调用会重启 agent | 服务/多次 CLI 调用会对同一个 `frame.shm` 打架 ⇒ `AttachAsync` 先读帧头，**已存在就"收养"**（幂等），而不是重置目录再启动 |
+| 短命进程无法 `--stop` | 会话表是进程内的 ⇒ 增加 `StopAsync(computeSystemId, containerRoot)`，直接写停止标记 |
+| PowerShell 5.1 的 `0xC0000000`/`0xFFFFFFFF` 字面量 | 见 §13.4（容器内 agent 已用十进制 `[uint32]` 写法） |
 
-### 14.4 楠岃瘉鐘舵€?/ Verification status
+### 14.4 验证状态 / Verification status
 
-- **缂栬瘧**锛歚wsm`(CLI) 涓?`Wsm.Service.Host` 鍧?**0 璀﹀憡 0 閿欒**锛沗dotnet test` **293 閫氳繃**锛堝惈 9 涓柊鐢ㄤ緥锛?  `ToRelativeContainerPath`銆佸鍣ㄦ牴涓嶈鏇挎崲鐨勫洖褰掓柇瑷€銆佽兘鍔涘紑鍏炽€佺己寮曟搸鎶ラ敊銆佺┖浼氳瘽 stop锛夈€?- **鏈哄埗**锛毬?3 宸茬鍒扮璇佹槑锛堝叡浜唴瀛樺抚 鈫?瀹夸富璇诲抚锛涙敞鍏?`F3` 鈫?鍓嶅彴绐楀彛鍙?`Find`锛汼YSTEM 鈫?鐢ㄦ埛 Console 寮€绐楋級銆?- **鏈鏈兘璺戦€氱殑**锛欳LI 绾х鍒扮锛坄wsm desktop 鈥?--attach`锛夎**瀹夸富瀹瑰櫒鏍?*鎸′綇鈥斺€?  杩?*鍏ㄦ柊**瀹瑰櫒閮?`HcsCreateProcess` 澶辫触 `0x80370105`锛?褰撳墠鐘舵€佹棤鏁?锛夛紝涓旀柊瀹瑰櫒璧锋潵鏃?`ip=` 涓虹┖
-  锛圚NS 娌＄粰鍦板潃锛夛紝`cmd.exe /c echo alive` 鍦ㄥ鍣ㄩ噷涔熷け璐ャ€傝繖鏄?*鏈哄櫒鎬?*闂锛堝杞鍣ㄥ垱寤?閿€姣佷箣鍚?  `vmcompute`/`hns` 鐘舵€侀渶瑕侀噸缃級锛屼笉鏄湰鍔熻兘鐨勭己闄枫€傛仮澶嶆楠わ細閲嶅惎 `vmcompute`/`hns`锛堟垨閲嶅惎鏈哄櫒锛夛紝
-  鐒跺悗鐢ㄤ笂闈㈢殑鍛戒护澶嶆牳锛沇SM 鑷繁 `wsm start` 鍑烘潵鐨勬矙绠辫繕鑳介『甯﹁蛋**寮曟搸瑙ｆ瀽瀹瑰櫒鏍?*鐨勪骇鍝佽矾寰勩€?
-### 14.5 鍚庣画 / Next
+- **编译**：`wsm`(CLI) 与 `Wsm.Service.Host` 均 **0 警告 0 错误**；`dotnet test` **293 通过**（含 9 个新用例：
+  `ToRelativeContainerPath`、容器根不被替换的回归断言、能力开关、缺引擎报错、空会话 stop）。
+- **机制**：§13 已端到端证明（共享内存帧 → 宿主读帧；注入 `F3` → 前台窗口变 `Find`；SYSTEM → 用户 Console 开窗）。
+- **本次未能跑通的**：CLI 级端到端（`wsm desktop … --attach`）被**宿主容器栈**挡住——
+  连**全新**容器都 `HcsCreateProcess` 失败 `0x80370105`（"当前状态无效"），且新容器起来时 `ip=` 为空
+  （HNS 没给地址），`cmd.exe /c echo alive` 在容器里也失败。这是**机器态**问题（多轮容器创建/销毁之后
+  `vmcompute`/`hns` 状态需要重置），不是本功能的缺陷。恢复步骤：重启 `vmcompute`/`hns`（或重启机器），
+  然后用上面的命令复核；WSM 自己 `wsm start` 出来的沙箱还能顺带走**引擎解析容器根**的产品路径。
 
-1. 缁?gRPC 濂戠害鍔?`StartDesktop/StopDesktop/GetDesktop`锛坄wsm_service.proto` + `WsmServiceGrpc` + 瀹㈡埛绔級锛?   璁?GUI锛圵inUI锛夐€氳繃浠ｇ悊鏈嶅姟璇锋眰妗岄潰锛岃€屼笉鏄嚜宸辫捣杩涚▼锛?2. 杈撳叆閫氶亾鎹㈡垚 HCS **`MappedPipes`**锛堝畼鏂硅法 silo 閫氶亾锛夛紝鏇挎帀"姣忓懡浠や竴涓枃浠?锛?3. 鐢婚潰鎹㈡垚**椤垫枃浠惰妭 + 鎻愭潈鍙ユ焺鐩撮€?*锛埪?3.6 A 宸查獙璇佸彲琛岋級鈫?鍘绘帀 NTFS 鑴忛〉鍐欏洖锛?4. 鑴忕煩褰?+ 鍘嬬缉锛堢幇鍦?3 MB/甯?脳 5 fps 鍏ㄩ噺锛夈€?
+### 14.5 后续 / Next
+
+1. 给 gRPC 契约加 `StartDesktop/StopDesktop/GetDesktop`（`wsm_service.proto` + `WsmServiceGrpc` + 客户端），
+   让 GUI（WinUI）通过代理服务请求桌面，而不是自己起进程；
+2. 输入通道换成 HCS **`MappedPipes`**（官方跨 silo 通道），替掉"每命令一个文件"；
+3. 画面换成**页文件节 + 提权句柄直通**（§13.6 A 已验证可行）→ 去掉 NTFS 脏页写回；
+4. 脏矩形 + 压缩（现在 3 MB/帧 × 5 fps 全量）。
+
 ---
 
-## 15. 鑳戒笉鑳?鎶婄獥鍙ｆ敞鍏ュ埌 Windows"锛岀渷鎺夊叡浜唴瀛樼殑鎷疯礉锛?/ Why not inject the window
+## 15. 能不能"把窗口注入到 Windows"，省掉共享内存的拷贝？ / Why not inject the window
 
-> 缁撹锛?*涓嶈兘**锛岃€屼笖杩欐槸**鏋舵瀯鎬?*鐨勶紙搂13.6 宸插疄娴嬭瘉浼級锛屼笉鏄?杩樻病鎵惧埌鍔炴硶"銆?> 浣?鍑忓皯鎷疯礉"杩欎釜鐩爣鏄鐨?鈥斺€?鍙槸瑕侀潬**鍘绘帀澶氫綑鐨勬嫹璐?*锛岃€屼笉鏄潬娉ㄥ叆绐楀彛銆?
-### 15.1 涓轰粈涔堜笉琛?/ Why it cannot work
+> 结论：**不能**，而且这是**架构性**的（§13.6 已实测证伪），不是"还没找到办法"。
+> 但"减少拷贝"这个目标是对的 —— 只是要靠**去掉多余的拷贝**，而不是靠注入窗口。
 
-| 浜嬪疄 Fact | 渚濇嵁 Evidence |
+### 15.1 为什么不行 / Why it cannot work
+
+| 事实 Fact | 依据 Evidence |
 |---|---|
-| 瀹瑰櫒鏈夎嚜宸辩殑 **session** 鍜?*鏈嶅姟 window station** | 瀹瑰櫒鍐呭疄娴嬶細鏈細璇?`4`锛堝涓?`1`锛夛紝window station `Service-0x0-鈥 |
-| 瀹瑰櫒鏈?*鑷繁鐨勭獥鍙?*锛屼絾瀹夸富**鏋氫妇涓嶅埌** | 瀹夸富涓?`FindWindow(null,'Registry Editor')=0x0`锛沗EnumWindows` 鍙湁瀹夸富绐楀彛锛涘涓昏緭鍏ユ闈?= `Default` |
-| 绐楀彛**娌℃湁 DWM / 娌℃湁 GPU** | 瀹瑰櫒鍐?`DwmIsCompositionEnabled=False`銆佹棤 `dwm.exe`銆? 涓樉绀洪€傞厤鍣ㄣ€乣D3D11CreateDevice`锛堢‖浠朵笌 WARP锛夐兘 `0x887A0004` |
-| 鍞竴鑳借法 silo 鐨勬槸**鍐呮牳瀵硅薄** | 搂13.6锛歴ection/process 鍙ユ焺鍙彁鏉?`DuplicateHandle` 鈫?"鍍忕礌鑳借繃銆佺獥鍙ｄ笉鑳借繃" |
+| 容器有自己的 **session** 和**服务 window station** | 容器内实测：本会话 `4`（宿主 `1`），window station `Service-0x0-…` |
+| 容器有**自己的窗口**，但宿主**枚举不到** | 宿主上 `FindWindow(null,'Registry Editor')=0x0`；`EnumWindows` 只有宿主窗口；宿主输入桌面 = `Default` |
+| 窗口**没有 DWM / 没有 GPU** | 容器内 `DwmIsCompositionEnabled=False`、无 `dwm.exe`、0 个显示适配器、`D3D11CreateDevice`（硬件与 WARP）都 `0x887A0004` |
+| 唯一能跨 silo 的是**内核对象** | §13.6：section/process 句柄可提权 `DuplicateHandle` → "像素能过、窗口不能过" |
 
-鏈哄埗涓婄殑鍘熷洜锛?
-1. **HWND 涓嶆槸鍐呮牳鍙ユ焺**锛屾棤娉曞儚 section 閭ｆ牱 `DuplicateHandle` 璺?silo銆傚畠褰掑睘浜?   *session + window station + desktop* 涓夎€咃紱silo 浼?*铏氭嫙鍖?win32k 鐨勫懡鍚嶇┖闂?*锛屽涓荤殑 user32 閲?   鏍规湰娌℃湁瀹瑰櫒閭ｅ瀵硅薄銆?2. `SetParent` / 璺ㄦ闈㈤噸瀹氱埗瑕佹眰**鍚屼竴** session + window station锛汥WM 鍚堟垚鏄?**per-session** 鐨勶紝
-   鑰屽鍣ㄨ繛 DWM 閮芥病鏈夈€?3. 鍗充究"娉ㄥ叆"鎴愬姛涔?*鐪佷笉涓嬫嫹璐?*锛氳兘鎯冲埌鐨勬浛浠ｅ仛娉曪紙瀹夸富鐢?`PrintWindow`/`WM_PRINT` 鍘绘姄鍒汉鐨勭獥鍙ｏ級
-   鏈韩灏辨槸涓€娆″儚绱犳嫹璐濓紝鑰屼笖闇€瑕佺洰鏍囩獥鍙ｇ殑**娑堟伅寰幆鍦ㄥ悓涓€妗岄潰涓婂簲绛?* 鈥斺€?璺?silo 鐨?   `SendMessage`/`GetWindowLong` 鍚屾牱琚尅銆?4. 璁╁鍣ㄨ繘绋嬫妸绐楀彛**鍒涘缓鍒扮敤鎴?Console** 涔熶笉琛岋細瀹瑰櫒 token 娌℃湁 `SeTcbPrivilege`锛岃€?   `CreateProcessWithTokenW` 鎸夋枃妗ｅ氨**鐣欏湪璋冪敤鑰呬細璇?*閲岋紙搂13.7 瀹炴祴锛夈€傝兘鍋氬埌"寰€鐢ㄦ埛浼氳瘽鏀剧獥鍙?鐨?   鍙湁**瀹夸富渚х殑 SYSTEM 杩涚▼** 鈥斺€?涔熷氨鏄?搂13.7/搂14 宸茬粡瀹炵幇鐨勯偅鏉¤矾锛?*瀹夸富寮€鑷繁鐨勭獥鍙ｏ紝璐存垜浠殑甯?*銆?
-**寰蒋鐨勫畼鏂圭珛鍦轰竴鑷?*锛氳繘绋嬮殧绂荤殑 Windows 瀹瑰櫒**涓嶆敮鎸?GUI 浜や簰**锛圙UI 搴旂敤鑳借窇锛屼絾娌℃湁鍐呭缓浜や簰鏂瑰紡锛?瀹瑰櫒鐨?cmd/搴旂敤钀藉湪**闈?`WinSta0` 鐨勬湇鍔?window station** 涓婏級銆傜ぞ鍖鸿姹?[microsoft/Windows-Containers#611](https://github.com/microsoft/Windows-Containers/issues/611)
-瑕佺殑姝ｆ槸杩欎釜鑳藉姏锛屽叾寤鸿鏂规鎭版伆鏄?**瀹炵幇涓€涓?GUI 鏈嶅姟鍣紝鎶婃覆鏌撶粨鏋滆浆鍙戠粰瀹夸富鏄剧ず**锛堢被浼?X server锛?
-鈥斺€?閭ｅ氨鏄湰椤圭洰鐨勫儚绱犻€氶亾 + 瀹夸富绐楀彛銆?
-### 15.2 鐪熸鑳界渷鎺夌殑鎷疯礉 / The copies we can actually remove
+机制上的原因：
 
-褰撳墠姣忓抚鐨勬嫹璐濇竻鍗曪紙1024脳768脳4 = **3 MB**锛夛細
+1. **HWND 不是内核句柄**，无法像 section 那样 `DuplicateHandle` 跨 silo。它归属于
+   *session + window station + desktop* 三者；silo 会**虚拟化 win32k 的命名空间**，宿主的 user32 里
+   根本没有容器那套对象。
+2. `SetParent` / 跨桌面重定父要求**同一** session + window station；DWM 合成是 **per-session** 的，
+   而容器连 DWM 都没有。
+3. 即便"注入"成功也**省不下拷贝**：能想到的替代做法（宿主用 `PrintWindow`/`WM_PRINT` 去抓别人的窗口）
+   本身就是一次像素拷贝，而且需要目标窗口的**消息循环在同一桌面上应答** —— 跨 silo 的
+   `SendMessage`/`GetWindowLong` 同样被挡。
+4. 让容器进程把窗口**创建到用户 Console** 也不行：容器 token 没有 `SeTcbPrivilege`，而
+   `CreateProcessWithTokenW` 按文档就**留在调用者会话**里（§13.7 实测）。能做到"往用户会话放窗口"的
+   只有**宿主侧的 SYSTEM 进程** —— 也就是 §13.7/§14 已经实现的那条路：**宿主开自己的窗口，贴我们的帧**。
 
-| # | 浣嶇疆 | 鐜板湪鎬庝箞鍋?| 澶勭疆 |
+**微软的官方立场一致**：进程隔离的 Windows 容器**不支持 GUI 交互**（GUI 应用能跑，但没有内建交互方式；
+容器的 cmd/应用落在**非 `WinSta0` 的服务 window station** 上）。社区请求
+[microsoft/Windows-Containers#611](https://github.com/microsoft/Windows-Containers/issues/611)
+要的正是这个能力，其建议方案恰恰是"**实现一个 GUI 服务器，把渲染结果转发给宿主显示**（类似 X server）"
+—— 那就是本项目的像素通道 + 宿主窗口。
+
+### 15.2 真正能省掉的拷贝 / The copies we can actually remove
+
+当前每帧的拷贝清单（1024×768×4 = **3 MB**）：
+
+| # | 位置 | 现在怎么做 | 处置 |
 |---|---|---|---|
-| 1 | 瀹瑰櫒鍐?| GDI+ `Graphics.CopyFromScreen` 鈫?鎵樼 `Bitmap` | 淇濈暀锛?*灞忓箷鍥炶涓嶅彲閬垮厤**锛夛紝浣嗘崲鎴?`BitBlt` 蹇竴涓暟閲忕骇 |
-| 2 | 瀹瑰櫒鍐?| `RtlMoveMemory`锛? MB锛塦Bitmap` 鈫?鍏变韩鍐呭瓨 | **鍘绘帀**锛氱敤 `CreateDIBSection(hSection = 鍏变韩 section 鐨勬槧灏勫彞鏌?`锛岃 GDI **鐩存帴鍐欒繘鍏变韩鍐呭瓨** |
-| 3 | 瀹夸富 | 鏌ョ湅鍣ㄦ瘡甯?`new Bitmap(frame)` 蹇収 | **鍘绘帀**锛氬湪鍏变韩 DIB 鐨勫唴瀛?DC 涓婄洿鎺?`BitBlt` 鍒扮獥鍙?DC |
-| 4 | 瀹夸富 | GDI+ 鏍煎紡杞崲/缁樺埗 | 鍩烘湰娑堝け锛坄StretchDIBits`/`BitBlt` 鐩磋创锛屼笉缁?GDI+锛?|
+| 1 | 容器内 | GDI+ `Graphics.CopyFromScreen` → 托管 `Bitmap` | 保留（**屏幕回读不可避免**），但换成 `BitBlt` 快一个数量级 |
+| 2 | 容器内 | `RtlMoveMemory`（3 MB）`Bitmap` → 共享内存 | **去掉**：用 `CreateDIBSection(hSection = 共享 section 的映射句柄)`，让 GDI **直接写进共享内存** |
+| 3 | 宿主 | 查看器每帧 `new Bitmap(frame)` 快照 | **去掉**：在共享 DIB 的内存 DC 上直接 `BitBlt` 到窗口 DC |
+| 4 | 宿主 | GDI+ 格式转换/绘制 | 基本消失（`StretchDIBits`/`BitBlt` 直贴，不经 GDI+） |
 
-鈫?姣忓抚浠?**~4 娆℃嫹璐濋檷鍒?2 娆?*锛堝睆骞曗啋section銆乻ection鈫掑悎鎴愶級锛岃€屼笖瀹瑰櫒鍐?*涓嶅啀闇€瑕?`System.Drawing`**
-锛堢函 P/Invoke锛岄『甯︾粫寮€ 搂13.4 璁板綍鐨?`Bitmap` 寤哄湪鏄犲皠鎸囬拡涓婂氨鍏ㄩ粦"閭ｇ被 GDI+ 鍧戯級銆?
-### 15.3 閲忓寲锛歮emcpy 鏈潵灏变笉鏄摱棰?/ Quantified
+→ 每帧从 **~4 次拷贝降到 2 次**（屏幕→section、section→合成），而且容器内**不再需要 `System.Drawing`**
+（纯 P/Invoke，顺带绕开 §13.4 记录的"`Bitmap` 建在映射指针上就全黑"那类 GDI+ 坑）。
 
-- 3 MB 鐨?memcpy 鎸?~10鈥?0 GB/s 绠?鈮?**0.1鈥?.3 ms**锛?- 鑰?GDI+ `CopyFromScreen` 鐨勫叏灞忓洖璇绘槸 **5鈥?0 ms** 閲忕骇銆?
-鎵€浠ユ寜**鏀剁泭**鎺掑簭搴旇鏄細
+### 15.3 量化：memcpy 本来就不是瓶颈 / Quantified
 
-1. **鑴忕煩褰?*锛堟闈㈠ぇ閮ㄥ垎鏃堕棿鏄潤姝㈢殑 鈫?姣忓抚鍙紶鍙樺寲鐨勫嚑鏉″甫锛屽嚑 KB 鑰屼笉鏄?3 MB锛夆€斺€?*姣斾换浣曟嫹璐濅紭鍖栭兘澶?*锛?2. **鈶?鎹?`BitBlt` + `CreateDIBSection` 鐩村啓**锛堝悓鏃跺共鎺夋參鐨?GDI+ 璺緞鍜屾嫹璐?鈶★級锛?3. **鈶?鈶?鏌ョ湅鍣?`BitBlt` 鐩磋创**锛?4. 鍙湁鍦?*楂樺垎杈ㄧ巼/楂樺抚鐜?*涓嬶紝鎷疯礉鏈韩鎵嶄細鍙樻垚鐡堕锛?080p@30fps 鈮?250 MB/s 鏃舵墠鍊煎緱涓婂帇缂?缂栫爜锛夈€?
-### 15.4 "闆舵嫹璐?鐨勬缁熻矾寰?/ The only zero-copy path
+- 3 MB 的 memcpy 按 ~10–30 GB/s 算 ≈ **0.1–0.3 ms**；
+- 而 GDI+ `CopyFromScreen` 的全屏回读是 **5–20 ms** 量级。
 
-Windows 涓婂敮涓€**涓嶇粡杩?鍐呭瓨 鈫?鑺?鏂囦欢"鎼繍**鐨勫儚绱犻€氶亾鏄?**Hyper-V 闅旂 + 澧炲己浼氳瘽**
-锛圴MBus 涓婄殑 RDP/RemoteFX锛屾垨甯?*铏氭嫙鏄剧ず閫傞厤鍣?*鐨?GPU 鍏变韩绾圭悊锛夈€傝繖涔熻В閲婁簡涓轰粈涔堝井杞嚜宸辨妸
-**浜や簰寮?GUI** 鍦烘櫙鏀惧湪 VM 闅旂 + 澧炲己浼氳瘽涓娿€?
-瀹冧笌"杩涚▼闅旂瑕佹洿杞汇€佺渷璧勬簮"鐨勭洰鏍?*鐩存帴鍐茬獊**銆傛墍浠ユ湰椤圭洰鐨勫彇鑸嶆槸锛?
-- **杩涚▼闅旂**锛堥粯璁ゃ€佽交閲忥級鈫?鍍忕礌閫氶亾锛?*2 娆℃嫹璐?* + 瀹夸富绐楀彛锛堟湰鏂囨。鐨勬柟妗堬級锛?- **VM 闅旂**锛堥渶瑕佸師鐢熺獥鍙?澶氬獟浣?澧炲己浼氳瘽鏃讹級鈫?瀹樻柟 Enhanced Session锛埪? 缁撹锛歏M 闅旂濮嬬粓淇濈暀锛夈€?
-### 15.5 涓€涓究瀹滅殑寰呴獙璇佸疄楠?/ One cheap experiment
+所以按**收益**排序应该是：
 
-濡傛灉鐩爣鏄?**杩炲鍣ㄥ唴鐨?agent 閮戒笉瑕?*"锛氳兘鍚﹁**瀹夸富**鐨?SYSTEM 杩涚▼
-`OpenWindowStation("Service-0x0-鈥?)` + `SetThreadDesktop` 鐩存帴鎷垮埌瀹瑰櫒鐨勬闈紝浠庤€屽湪**瀹夸富**鎶撳睆鍐欒繘 section锛?搂13.6 鐨勫疄娴嬶紙瀹夸富鐪嬩笉鍒?silo 鐨?win32k 鍛藉悕绌洪棿锛?*鏆楃ず涓嶈**锛屼絾鐢?SYSTEM 璇曚竴娆″緢渚垮疁锛?鑻ユ垚绔嬶紝瀹瑰櫒鍐呭氨鍙渶瑕佽窇搴旂敤鏈韩銆?
-### 15.6 涓嬩竴姝?/ Next
+1. **脏矩形**（桌面大部分时间是静止的 → 每帧只传变化的几条带，几 KB 而不是 3 MB）——**比任何拷贝优化都大**；
+2. **① 换 `BitBlt` + `CreateDIBSection` 直写**（同时干掉慢的 GDI+ 路径和拷贝 ②）；
+3. **③/④ 查看器 `BitBlt` 直贴**；
+4. 只有在**高分辨率/高帧率**下，拷贝本身才会变成瓶颈（1080p@30fps ≈ 250 MB/s 时才值得上压缩/编码）。
 
-鎸?15.3 鐨勯『搴忚惤鍦帮細**鑴忕煩褰?鈫?DIB section 鐩村啓 鈫?鏌ョ湅鍣?BitBlt**锛堥兘鏄函浠ｇ爜鏀瑰姩锛?瀹瑰櫒鏍堝浣嶏紙`vmcompute`/`hns` 閲嶇疆锛夊悗鍗冲彲瀹炴祴锛涜 搂14.4锛夈€?
+### 15.4 "零拷贝"的正统路径 / The only zero-copy path
+
+Windows 上唯一**不经过"内存 ↔ 节/文件"搬运**的像素通道是 **Hyper-V 隔离 + 增强会话**
+（VMBus 上的 RDP/RemoteFX，或带**虚拟显示适配器**的 GPU 共享纹理）。这也解释了为什么微软自己把
+**交互式 GUI** 场景放在 VM 隔离 + 增强会话上。
+
+它与"进程隔离要更轻、省资源"的目标**直接冲突**。所以本项目的取舍是：
+
+- **进程隔离**（默认、轻量）→ 像素通道：**2 次拷贝** + 宿主窗口（本文档的方案）；
+- **VM 隔离**（需要原生窗口/多媒体/增强会话时）→ 官方 Enhanced Session（§8 结论：VM 隔离始终保留）。
+
+### 15.5 一个便宜的待验证实验 / One cheap experiment
+
+如果目标是"**连容器内的 agent 都不要**"：能否让**宿主**的 SYSTEM 进程
+`OpenWindowStation("Service-0x0-…")` + `SetThreadDesktop` 直接拿到容器的桌面，从而在**宿主**抓屏写进 section？
+§13.6 的实测（宿主看不到 silo 的 win32k 命名空间）**暗示不行**，但用 SYSTEM 试一次很便宜；
+若成立，容器内就只需要跑应用本身。
+
+### 15.6 下一步 / Next
+
+按 15.3 的顺序落地：**脏矩形 → DIB section 直写 → 查看器 BitBlt**（都是纯代码改动，
+容器栈复位（`vmcompute`/`hns` 重置）后即可实测；见 §14.4）。
+
 ---
 
-## 16. 瀹夸富鑳戒笉鑳界洿鎺ユ懜鍒板鍣ㄧ獥鍙ｏ紵锛堝叡浜唴鏍?鈮?鍏变韩 User 瀵硅薄锛?/ Can the host touch container windows?
+## 16. 宿主能不能直接摸到容器窗口？（共享内核 ≠ 共享 User 对象） / Can the host touch container windows?
 
-> 璧峰洜锛氭湁浜猴紙姝ｇ‘鍦帮級鎸囧嚭"container 涓?host 鍏变韩鍐呮牳锛屾墍浠ュ涓诲彲浠ュ緢鏂逛究鍦拌闂鍣ㄨ繘绋嬬殑鍐呭瓨"锛?> 鍥犳绐楀彛"娉ㄥ叆"鍦ㄦ妧鏈笂搴旇鍙銆傛湰鑺傜粰鍑?*瀹炴祴**缁撹锛氫竴鍗婂銆佷竴鍗婁笉瀵?鈥斺€?鑰屼笖涓嶅鐨勯偅涓€鍗婏紝
-> 鎭版伆鏄?绐楀彛"杩欎竴姝ャ€?
-### 16.1 瀵圭殑閭ｄ竴鍗婏細瀹瑰櫒杩涚▼鍦ㄥ涓诲唴鏍搁噷瀹屽叏鍙 / Processes are visible
+> 起因：有人（正确地）指出"container 与 host 共享内核，所以宿主可以很方便地访问容器进程的内存"，
+> 因此窗口"注入"在技术上应该可行。本节给出**实测**结论：一半对、一半不对 —— 而且不对的那一半，
+> 恰恰是"窗口"这一步。
 
-瀹夸富 `Get-Process` 鐩存帴鍒楀嚭锛堝疄娴嬶紝鏈満锛夛細
+### 16.1 对的那一半：容器进程在宿主内核里完全可见 / Processes are visible
 
-| 浼氳瘽 | 杩涚▼ |
+宿主 `Get-Process` 直接列出（实测，本机）：
+
+| 会话 | 进程 |
 |---|---|
-| **4** | `csrss`銆乣wininit`銆乣lsass`銆乣services`銆乣msdtc`銆乣sppsvc`銆乣SppExtComObj`銆?1脳`svchost`銆乣cmd`銆乣conhost`銆乣powershell`銆?*`regedit`**銆?*4脳`notepad`** |
-| **5** | `csrss`锛堝鍣ㄨ嚜宸辩殑 console 浼氳瘽锛?|
+| **4** | `csrss`、`wininit`、`lsass`、`services`、`msdtc`、`sppsvc`、`SppExtComObj`、11×`svchost`、`cmd`、`conhost`、`powershell`、**`regedit`**、**4×`notepad`** |
+| **5** | `csrss`（容器自己的 console 会话） |
 
-鍗筹細**杩涚▼闅旂鐨勫鍣ㄦ嫢鏈夌湡瀹炵殑瀹夸富浼氳瘽锛? = 瀹瑰櫒鑷韩锛? = 瀹瑰櫒 console锛夛紝鍏舵暣妫佃繘绋嬫爲瀵瑰涓诲彲瑙?*锛?鑰屼笖瀹夸富鍙互 `OpenProcess` + `DuplicateHandle`锛埪?3.6 瀹炴祴锛氭彁鏉冨悗 `OpenProcess(PROCESS_DUP_HANDLE)` 鎴愬姛銆?`DuplicateHandle` 鎴愬姛锛涢潪鎻愭潈 `err=5`锛夈€傛墍浠?鍏变韩鍐呮牳 鈫?鑳借闂鍣ㄨ繘绋嬪唴瀛?鏄鐨?锛堟湁 SeDebug 鐨勬彁鏉冧护鐗屾寜鍚屼竴鏈哄埗鎷垮埌 `PROCESS_VM_READ`锛夈€?
-### 16.2 涓嶅鐨勯偅涓€鍗婏細User/win32k 鍛藉悕绌洪棿鎸?session 铏氭嫙鍖?/ Windows are not
+即：**进程隔离的容器拥有真实的宿主会话（4 = 容器自身，5 = 容器 console），其整棵进程树对宿主可见**，
+而且宿主可以 `OpenProcess` + `DuplicateHandle`（§13.6 实测：提权后 `OpenProcess(PROCESS_DUP_HANDLE)` 成功、
+`DuplicateHandle` 成功；非提权 `err=5`）。所以"共享内核 → 能访问容器进程内存"是对的
+（有 SeDebug 的提权令牌按同一机制拿到 `PROCESS_VM_READ`）。
 
-浠?**SYSTEM** 韬唤鎺㈡祴锛坄tools/container-desktop-agent/host/winsta-probe*.ps1`锛夛細
+### 16.2 不对的那一半：User/win32k 命名空间按 session 虚拟化 / Windows are not
+
+以 **SYSTEM** 身份探测（`tools/container-desktop-agent/host/winsta-probe*.ps1`）：
 
 ```
 [probe] own pid=95968 ownSession=0 user=SYSTEM
 [probe] ownWinSta=Service-0x0-3e7$ ownDesktop=Default
-[ns] \Sessions                                  -> 鍙湁 "0 (Directory)"
+[ns] \Sessions                                  -> 只有 "0 (Directory)"
 [ns] NtOpenDirectoryObject("\Sessions\4")                        -> 0xC0000034 OBJECT_NAME_NOT_FOUND
 [ns] NtOpenDirectoryObject("\Sessions\4\Windows")                -> 0xC000003A OBJECT_PATH_NOT_FOUND
 [ns] NtOpenDirectoryObject("\Sessions\4\Windows\WindowStations") -> 0xC000003A
 [ns] NtOpenDirectoryObject("\Sessions\5\Windows\WindowStations") -> 0xC000003A
-[ns] \Windows\WindowStations                    -> Service-0x0-3e4$ (WindowStation)   <- 鍙湁鑷繁浼氳瘽鐨?[open] OpenWindowStation("\Sessions\4\Windows\WindowStations\WinSta0")        -> 0x0 err=161 ERROR_BAD_PATHNAME
+[ns] \Windows\WindowStations                    -> Service-0x0-3e4$ (WindowStation)   <- 只有自己会话的
+[open] OpenWindowStation("\Sessions\4\Windows\WindowStations\WinSta0")        -> 0x0 err=161 ERROR_BAD_PATHNAME
 [open] OpenWindowStation("\Sessions\5\Windows\WindowStations\WinSta0")        -> 0x0 err=161
 [open] FAILED: the host cannot open any window station of session 4
 ```
 
-缁撹锛?*杩?SYSTEM 閮芥嬁涓嶅埌鍒殑 session 鐨?window station** 鈥斺€?`\Sessions` 鍦ㄦ瘡涓細璇濋噷鍙毚闇插畠**鑷繁**
-閭ｄ竴涓瓙鐩綍锛岃法浼氳瘽璺緞涓€寰?`OBJECT_PATH_NOT_FOUND` / `ERROR_BAD_PATHNAME`銆傛嬁涓嶅埌 window station
-鈬?鎷夸笉鍒?HWND 鈬?`EnumWindows` / `GetWindowDC` / `BitBlt` / `PrintWindow` / `PostMessage` **鍏ㄩ儴鏃犱粠涓嬫墜**銆?杩欐潯杈圭晫鏄?*瀵圭О**鐨勶紙瀹瑰櫒涔熺湅涓嶅埌瀹夸富鐨勭獥鍙ｏ紝搂13.6 瀹炴祴锛夈€?
-### 16.3 涓轰粈涔?璇昏繘绋嬪唴瀛?鏁戜笉浜嗙獥鍙?/ Why reading memory does not help
+结论：**连 SYSTEM 都拿不到别的 session 的 window station** —— `\Sessions` 在每个会话里只暴露它**自己**
+那一个子目录，跨会话路径一律 `OBJECT_PATH_NOT_FOUND` / `ERROR_BAD_PATHNAME`。拿不到 window station
+⇒ 拿不到 HWND ⇒ `EnumWindows` / `GetWindowDC` / `BitBlt` / `PrintWindow` / `PostMessage` **全部无从下手**。
+这条边界是**对称**的（容器也看不到宿主的窗口，§13.6 实测）。
 
-- 绐楀彛鐨?*鍙鍍忕礌涓嶅湪搴旂敤杩涚▼鐨勭敤鎴锋€佸唴瀛橀噷**锛氬鍣ㄦ病鏈?DWM锛岀獥鍙ｇ敱 GDI 鐩存帴缁樺埗鍒拌 session 鐨?  **TSDDD 铏氭嫙鏄剧ず琛ㄩ潰**锛岃€岄偅灞炰簬 **win32k 鐨勫唴鏍镐晶**瀵硅薄 鈥斺€?鐢ㄦ埛鎬佽涓嶅埌銆?- 搴旂敤鑷繁鍙兘鏈夌紦鍐诧紙娴忚鍣ㄥ悎鎴愬櫒绾圭悊銆乄PF render target鈥︼級锛屼絾閭ｆ槸**閫愬簲鐢ㄣ€佹棤鏂囨。**鐨勫竷灞€锛?  涓嶈兘浣滀负閫氱敤鏉ユ簮锛涜€屼笖璇诲畠鏈韩鍚屾牱鏄竴娆℃嫹璐濄€?- 鍥犳"瀹夸富璇诲鍣ㄨ繘绋嬪唴瀛?鑳藉緱鍒扮殑鏄?*鏁版嵁**锛屼笉鏄?*鐢婚潰**銆?
-### 16.4 涓轰粈涔?鏇挎崲 DWM"涔熶笉鑳藉湪瀹夸富渚у仛 / Why not replace DWM from the host
+### 16.3 为什么"读进程内存"救不了窗口 / Why reading memory does not help
 
-DWM/鍚堟垚鍣ㄦ槸 **per-session** 鐨勩€佹寕鍦?win32k 涓婄殑锛涘涓绘棤娉曟妸鑷繁鐨勫悎鎴愬櫒娉ㄥ叆鍒殑 session 鈥斺€?杩欐鏄?16.2 閭ｆ潯杈圭晫銆?*瑕?鎴戜滑鑷繁鐨?DWM"锛屽畠鍙兘璺戝湪瀹瑰櫒 session 閲?* 鈥斺€?涔熷氨鏄垜浠幇鍦ㄧ殑 agent
-锛堝畠宸茬粡琚瘉鏄庤兘鍦ㄥ鍣ㄥ唴 `CopyFromScreen` 鎷垮埌鐪熷疄绐楀彛鐢婚潰锛屄?3锛夈€?
-### 16.5 浣嗚繖涓€濊矾缁欏嚭浜嗘纭殑浼樺寲鏂瑰悜 / Where the idea *does* pay off
+- 窗口的**可见像素不在应用进程的用户态内存里**：容器没有 DWM，窗口由 GDI 直接绘制到该 session 的
+  **TSDDD 虚拟显示表面**，而那属于 **win32k 的内核侧**对象 —— 用户态读不到。
+- 应用自己可能有缓冲（浏览器合成器纹理、WPF render target…），但那是**逐应用、无文档**的布局，
+  不能作为通用来源；而且读它本身同样是一次拷贝。
+- 因此"宿主读容器进程内存"能得到的是**数据**，不是**画面**。
 
-鎶?鑷繁鐨?DWM"鎷嗘垚涓ゅ崐锛屾嫹璐濆氨涓嬫潵浜嗭細
+### 16.4 为什么"替换 DWM"也不能在宿主侧做 / Why not replace DWM from the host
 
-| 渚?| 鍋氫粈涔?| 鎷疯礉 |
+DWM/合成器是 **per-session** 的、挂在 win32k 上的；宿主无法把自己的合成器注入别的 session ——
+这正是 16.2 那条边界。**要"我们自己的 DWM"，它只能跑在容器 session 里** —— 也就是我们现在的 agent
+（它已经被证明能在容器内 `CopyFromScreen` 拿到真实窗口画面，§13）。
+
+### 16.5 但这个思路给出了正确的优化方向 / Where the idea *does* pay off
+
+把"自己的 DWM"拆成两半，拷贝就下来了：
+
+| 侧 | 做什么 | 拷贝 |
 |---|---|---|
-| **璇讳晶锛堝繀椤诲湪瀹瑰櫒鍐?= agent锛?* | 涓嶅啀鏁村睆 `CopyFromScreen`锛氬湪瀹瑰櫒鍐?`EnumWindows`锛?*瀹冩湁鏉?*锛屽氨鍦ㄨ session 閲岋級鈫?閫愮獥鍙?`GetWindowDC`+`BitBlt` / `PrintWindow(PW_RENDERFULLCONTENT)`锛屽苟鐢ㄥ奖瀛愬抚姣旇緝锛圧FB 寮忥級**鍙彂鍙樺寲鍧?琛?* | 鍙鍙涓斿彉鍖栫殑绐楀彛鍖哄煙锛堥€氬父鍑?KB鈥撳嚑鍗?KB锛夛紝鑰屼笉鏄?3 MB 鍏ㄥ睆锛涘苟涓旂敤 `CreateDIBSection(hSection)` **鐩村啓鍏变韩鍐呭瓨**锛埪?5.2锛夆啋 瀹瑰櫒鍐?0 娆￠澶?memcpy |
-| **鏄剧ず渚э紙瀹夸富锛?* | 鎶婃敹鍒扮殑绐楀彛鐭╁舰/鍖哄煙**鍚堟垚**鍒版垜浠殑绐楀彛閲岋紙杩欐墠鏄?鎴戜滑鑷繁鐨?DWM"锛夛紝杈撳叆鎸?*绐楀彛**璺敱鍥炲鍣?| 鍙创鍙樺寲鍖哄煙 |
+| **读侧（必须在容器内 = agent）** | 不再整屏 `CopyFromScreen`：在容器内 `EnumWindows`（**它有权**，就在该 session 里）→ 逐窗口 `GetWindowDC`+`BitBlt` / `PrintWindow(PW_RENDERFULLCONTENT)`，并用影子帧比较（RFB 式）**只发变化块/行** | 只读可见且变化的窗口区域（通常几 KB–几十 KB），而不是 3 MB 全屏；并且用 `CreateDIBSection(hSection)` **直写共享内存**（§15.2）→ 容器内 0 次额外 memcpy |
+| **显示侧（宿主）** | 把收到的窗口矩形/区域**合成**到我们的窗口里（这才是"我们自己的 DWM"），输入按**窗口**路由回容器 | 只贴变化区域 |
 
-鍗筹細**0 娆″叏灞忔嫹璐?+ 灏戦噺鍖哄煙鎷疯礉**锛屽ぉ鐒舵敮鎸佽剰鐭╁舰銆佸绐楀彛 z-order銆侀€愮獥鍙ｈ緭鍏ャ€?
-### 16.6 鍓╀笅鐨勪袱鏉?杈圭晫涔嬪"璺嚎锛堝垪鍑轰互鍏嶆紡锛? Routes outside the boundary
+即：**0 次全屏拷贝 + 少量区域拷贝**，天然支持脏矩形、多窗口 z-order、逐窗口输入。
 
-1. **`tscon`/浼氳瘽閲嶅畾鍚?*鎶婂鍣?session 鎺ュ埌鐗╃悊 Console锛氶渶瑕?WTS/termsrv 璁ゅ彲璇ヤ細璇濓紙瀹瑰櫒鍐?termsrv
-   涓嶅缓鐩戝惉锛屄?1锛夛紝鑰屼笖浼?*澶鸿蛋鐢ㄦ埛鑷繁鐨?Console** 鈫?涓嶅彲琛屻€佷笉鍙帴鍙椼€?2. **缁欏鍣ㄨ櫄鎷熸樉绀洪€傞厤鍣?+ D3D 鍏变韩绾圭悊**锛堢湡姝ｉ浂鎷疯礉锛夛細瀹瑰櫒鍐呭疄娴?`D3D11CreateDevice`锛堢‖浠朵笌 WARP锛?   閮藉け璐ャ€? 涓樉绀洪€傞厤鍣ㄣ€佹棤 DWM锛圵GC 涔熶笉鍙敤锛屄?3.3锛夈€傝璧拌繖鏉¤矾灏卞緱鎹㈡垚 **Hyper-V 闅旂 + 澧炲己浼氳瘽**
-   锛圴MBus 浼犺緭鐨勫畼鏂归浂鎷疯礉璺緞锛夆€斺€?閭ｆ槸 VM 闅旂锛屼笌"杩涚▼闅旂瑕佹洿杞?鐨勭洰鏍囧啿绐併€?
-### 16.7 闄勫甫鍙戠幇 / Side finding
+### 16.6 剩下的两条"边界之外"路线（列出以免漏）/ Routes outside the boundary
 
-鏈満瀹瑰櫒鏍堜粛澶勫潖鎬侊紙搂14.4锛夛細`HcsCreateProcess` 鈫?`0x80370105`锛屼絾**瀹瑰櫒鍘熸湁鐨勮繘绋嬩笌绐楀彛杩樻椿鐫€**
-锛堜細璇?4 鐨?`regedit`/`notepad` 绛夛級銆備篃灏辨槸璇?閫愮獥鍙ｆ姄鍙?杩欐潯浼樺寲涓€鏃﹀疄鐜帮紝鐢ㄨ繖浜?*瀛樻椿绐楀彛**
-鍗冲彲楠岃瘉锛屾棤闇€绛夊鍣ㄦ爤鎭㈠锛涗絾瑕佸湪浼氳瘽 4 閲?*璧锋柊杩涚▼**锛堝悎娉曡矾寰勶級浠嶉渶鍏堥噸缃?`vmcompute`/`hns`銆?
+1. **`tscon`/会话重定向**把容器 session 接到物理 Console：需要 WTS/termsrv 认可该会话（容器内 termsrv
+   不建监听，§11），而且会**夺走用户自己的 Console** → 不可行、不可接受。
+2. **给容器虚拟显示适配器 + D3D 共享纹理**（真正零拷贝）：容器内实测 `D3D11CreateDevice`（硬件与 WARP）
+   都失败、0 个显示适配器、无 DWM（WGC 也不可用，§13.3）。要走这条路就得换成 **Hyper-V 隔离 + 增强会话**
+   （VMBus 传输的官方零拷贝路径）—— 那是 VM 隔离，与"进程隔离要更轻"的目标冲突。
+
+### 16.7 附带发现 / Side finding
+
+本机容器栈仍处坏态（§14.4）：`HcsCreateProcess` → `0x80370105`，但**容器原有的进程与窗口还活着**
+（会话 4 的 `regedit`/`notepad` 等）。也就是说"逐窗口抓取"这条优化一旦实现，用这些**存活窗口**
+即可验证，无需等容器栈恢复；但要在会话 4 里**起新进程**（合法路径）仍需先重置 `vmcompute`/`hns`。
+
 ---
 
-## 17. "鏈嶅姟鎿嶄綔 GUI 浼氳瘽"杩欏 hack 鑳戒笉鑳界敤鍦ㄥ鍣ㄤ笂锛?/ Can that hack reach a container session?
+## 17. "服务操作 GUI 会话"这套 hack 能不能用在容器上？ / Can that hack reach a container session?
 
-> 鐢熶骇鐣岀‘瀹炲瓨鍦ㄨ繖澶у鏃忥細`WTSQueryUserToken` / `OpenProcessToken`+`DuplicateTokenEx` /
-> `SetTokenInformation(TokenSessionId)` + `CreateProcessAsUser` / `SetWindowsHookEx` 娉ㄥ叆 鈥?> 瀹冧滑鑳藉湪**瀹夸富浼氳瘽涔嬮棿**鎼繍杩涚▼涓庣獥鍙ｂ€斺€旀垜浠嚜宸卞氨鍦ㄧ敤锛埪?3.7锛歋YSTEM 鈫?鐢ㄦ埛 Console 寮€绐?鉁擄級銆?> 鏈妭璁板綍锛?*杩欏鍦ㄥ鍣ㄧ殑 silo 浼氳瘽涓婁細鍦ㄥ唴鏍稿澶辫触**锛屽苟缁欏嚭瀹炴祴鏁版嵁銆?
-### 17.1 鎵嬫涓庣粨鏋滐紙鍏ㄩ儴瀹炴祴锛孲YSTEM 韬唤锛孲eTcb/SeAssignPrimaryToken/SeIncreaseQuota/SeDebug 鍧囧凡鍚敤锛?
-| 鎵嬫 | 缁撴灉 |
+> 生产界确实存在这大家族：`WTSQueryUserToken` / `OpenProcessToken`+`DuplicateTokenEx` /
+> `SetTokenInformation(TokenSessionId)` + `CreateProcessAsUser` / `SetWindowsHookEx` 注入 …
+> 它们能在**宿主会话之间**搬运进程与窗口——我们自己就在用（§13.7：SYSTEM → 用户 Console 开窗 ✓）。
+> 本节记录：**这套在容器的 silo 会话上会在内核处失败**，并给出实测数据。
+
+### 17.1 手段与结果（全部实测，SYSTEM 身份，SeTcb/SeAssignPrimaryToken/SeIncreaseQuota/SeDebug 均已启用）
+
+| 手段 | 结果 |
 |---|---|
-| `OpenWindowStation("\Sessions\4\Windows\WindowStations\WinSta0")` | `ERROR_BAD_PATHNAME (161)`锛沗NtOpenDirectoryObject("\Sessions\4\Windows\WindowStations")` 鈫?`0xC000003A OBJECT_PATH_NOT_FOUND`锛沗\Sessions` 鍙垪鍑?`0`锛埪?6.2锛?|
-| 鑷?token `SetTokenInformation(TokenSessionId=4)` + `CreateProcessAsUser`锛坉esktop 渚濇 `winsta0\default` / `Service-0x0-3e4$\Default` / `null`锛?| 杩涚▼**鍒涘缓鎴愬姛**锛堝垎閰?pid锛宍ProcessIdToSessionId=4`锛夛紝浣?**5鈥?5 ms 鍐呴€€鍑?`0xC0000142` STATUS_DLL_INIT_FAILED** |
-| 浠?*瀛樻椿瀹瑰櫒杩涚▼**鍙?token锛坄OpenProcess(regedit, pid 33136)` 鈫?`OpenProcessToken` 鈫?`DuplicateTokenEx`锛岃鍥?`token session = 4`锛? `CreateProcessAsUser` | 鍚屾牱 `0xC0000142`锛?鈥?5 ms锛夛紝鏃犺 desktop 鏄粈涔?|
-| 瀛愯繘绋嬪啓鏂囦欢锛堝涓昏矾寰?/ 瀹瑰櫒璺緞 `C:\wsm`锛?| **涓€浠介兘娌℃湁** 鈥斺€?瀹冭繛鐩爣浼氳瘽鐨?loader/鏂囦欢绯荤粺涓婁笅鏂囬兘娌″缓绔?|
-| **瀵圭収缁?*锛氬悓涓€ token銆佷笉鏀?session | `cmd /c exit 7` 鈫?**exit=7锛?8 ms** 鉁?璇存槑鏈哄埗鏈韩娌￠棶棰?|
+| `OpenWindowStation("\Sessions\4\Windows\WindowStations\WinSta0")` | `ERROR_BAD_PATHNAME (161)`；`NtOpenDirectoryObject("\Sessions\4\Windows\WindowStations")` → `0xC000003A OBJECT_PATH_NOT_FOUND`；`\Sessions` 只列出 `0`（§16.2） |
+| 自 token `SetTokenInformation(TokenSessionId=4)` + `CreateProcessAsUser`（desktop 依次 `winsta0\default` / `Service-0x0-3e4$\Default` / `null`） | 进程**创建成功**（分配 pid，`ProcessIdToSessionId=4`），但 **5–15 ms 内退出 `0xC0000142` STATUS_DLL_INIT_FAILED** |
+| 从**存活容器进程**取 token（`OpenProcess(regedit, pid 33136)` → `OpenProcessToken` → `DuplicateTokenEx`，读回 `token session = 4`）+ `CreateProcessAsUser` | 同样 `0xC0000142`（5–15 ms），无论 desktop 是什么 |
+| 子进程写文件（宿主路径 / 容器路径 `C:\wsm`） | **一份都没有** —— 它连目标会话的 loader/文件系统上下文都没建立 |
+| **对照组**：同一 token、不改 session | `cmd /c exit 7` → **exit=7，38 ms** ✓ 说明机制本身没问题 |
 
-缁撹锛?*silo 浼氳瘽娌℃湁"浠庡闈㈠垱寤鸿繘绋?/ 鍔犲叆杩涘幓"鐨勯€氶亾**锛堣繖姝ｆ槸 silo 鐨勮璁＄洰鐨勶級銆傚洜姝?host 渚ф棤璁烘€庝箞鏀?token銆乻ession 鎴?desktop 瀛楃涓诧紝閮芥嬁涓嶅埌瀹瑰櫒浼氳瘽閲岀殑杩涚▼涓庣獥鍙ｃ€傜獥鍙ｈ闂紙搂16.2锛変笌杩涚▼鍒涘缓锛堟湰鑺傦級
-鏄悓涓€涓竟鐣岀殑涓ら潰銆?
-### 17.2 閭ｄ箞"鏈€閫傚悎褰撳墠鍦烘櫙鐨?hack"鏄粈涔?
-鍘熷垯涓嶅彉锛?*"璇讳晶"蹇呴』鍦ㄥ鍣ㄤ細璇濋噷**銆傝兘娉ㄥ皠杩涘幓鐨勬墜娈靛彧鏈変笁绫伙細
+结论：**silo 会话没有"从外面创建进程 / 加入进去"的通道**（这正是 silo 的设计目的）。因此 host 侧无论怎么改
+token、session 或 desktop 字符串，都拿不到容器会话里的进程与窗口。窗口访问（§16.2）与进程创建（本节）
+是同一个边界的两面。
 
-1. **HCS 鍒涘缓杩涚▼**锛坄HcsCreateProcess`锛屽嵆鎴戜滑鐨?`engine.ExecuteAsync`锛夆€斺€?瀹樻柟銆佸共鍑€锛屽氨鏄?搂14 鐨勫疄鐜帮紱
-   鏈満 `0x80370105` 鍧忎簡锛岄渶閲嶇疆 `vmcompute`/`hns` 鍚庣户缁€?2. **娉ㄥ叆瀹瑰櫒鍐呭凡鏈夎繘绋?*锛堣法浼氳瘽 hook 瀹舵棌锛夛細`CreateRemoteThread`+`LoadLibraryW`锛圖LL 蹇呴』鏀惧湪**瀹瑰櫒鍙**
-   鐨勮矾寰勶紝渚嬪 `C:\wsm`锛夋垨绾跨▼瀹氬悜 `SetWindowsHookEx`銆傚畠鑳界粫寮€"涓嶈兘寤鸿繘绋?锛屼絾鏇磋剢銆佹洿鑴忋€?3. 瀹瑰櫒鍐呰嚜鍚姩锛堢櫥褰曡剼鏈級鈥斺€?涓嶅彲鎺э紝涓嶉噰鐢ㄣ€?
-"鏄剧ず渚?浠嶇暀鍦ㄥ涓伙紙搂13.7 宸茶瘉锛歋YSTEM 鎶婄獥鍙ｆ斁杩涚敤鎴?Console锛? 鍏变韩鍐呭瓨/鍙ユ焺鐩撮€氾紙搂13.6 宸茶瘉锛夈€?
-鈬?**鏈€浼?= 鏂规 1锛圚CS锛? 閫愮獥鍙?鑴忓潡璇诲彇 + DIB 鐩村啓鍏变韩鍐呭瓨 + 瀹夸富鍚堟垚**锛埪?5.5/搂16.5锛夛紱
-鏂规 2 鍙槸 HCS 涓嶅彲鐢ㄦ椂鐨勫簲鎬ユ墜娈点€?
-### 17.3 鏈鏂板鑴氭湰 / New scripts
+### 17.2 那么"最适合当前场景的 hack"是什么
 
-`tools/container-desktop-agent/host/`锛歚winsta-probe.ps1`銆乣winsta-probe-inner.ps1`锛埪?6锛夈€?`winsta-child.ps1`锛堜細璇濆唴鏋氫妇+鎶撳彇锛夈€乣winsta-spawn.ps1`鈥winsta-spawn5.ps1`锛坱oken/session 鎵嬫湳涓庨€€鍑虹爜娴嬮噺锛夈€?
+原则不变：**"读侧"必须在容器会话里**。能注射进去的手段只有三类：
+
+1. **HCS 创建进程**（`HcsCreateProcess`，即我们的 `engine.ExecuteAsync`）—— 官方、干净，就是 §14 的实现；
+   本机 `0x80370105` 坏了，需重置 `vmcompute`/`hns` 后继续。
+2. **注入容器内已有进程**（跨会话 hook 家族）：`CreateRemoteThread`+`LoadLibraryW`（DLL 必须放在**容器可见**
+   的路径，例如 `C:\wsm`）或线程定向 `SetWindowsHookEx`。它能绕开"不能建进程"，但更脆、更脏。
+3. 容器内自启动（登录脚本）—— 不可控，不采用。
+
+"显示侧"仍留在宿主（§13.7 已证：SYSTEM 把窗口放进用户 Console）+ 共享内存/句柄直通（§13.6 已证）。
+
+⇒ **最优 = 方案 1（HCS）+ 逐窗口/脏块读取 + DIB 直写共享内存 + 宿主合成**（§15.5/§16.5）；
+方案 2 只是 HCS 不可用时的应急手段。
+
+### 17.3 本次新增脚本 / New scripts
+
+`tools/container-desktop-agent/host/`：`winsta-probe.ps1`、`winsta-probe-inner.ps1`（§16）、
+`winsta-child.ps1`（会话内枚举+抓取）、`winsta-spawn.ps1`…`winsta-spawn5.ps1`（token/session 手术与退出码测量）。
+
 ---
 
-## 18. 璁捐鍐冲畾锛氳渚х敤 "winlogon 鍖呰９ + 鎴戜滑鑷繁鐨勫悎鎴愬櫒"锛屾樉绀轰晶鐢?绐楀彛闀滃儚" / Design decision
+## 18. 设计决定：读侧用 "winlogon 包裹 + 我们自己的合成器"，显示侧用"窗口镜像" / Design decision
 
-> 鐢ㄦ埛鎻愯锛?瀹瑰櫒瀹屽叏鍙楁帶锛屽彲浠ユ妸 winlogon 鎹㈡垚鑷繁鐨勭▼搴忥紙鐢卞畠浠ｄ负鍚姩 winlogon锛夛紝鎯虫€庝箞 hook 灏辨€庝箞 hook锛?> 鍐?hook DWM 鎶婂畠杞彂鍑哄幓锛岀獥鍙ｅ氨鑳芥敞鍏ョ敤鎴?session銆?
-> 鏈妭鎶婂畠鎷嗘垚"鍙鐨勯儴鍒?涓?浠嶇劧鍋氫笉鍒扮殑閮ㄥ垎"锛屽苟瀹氫笅瀹炵幇璺嚎銆?
-### 18.1 鎴愮珛鐨勯儴鍒嗭紙鑰屼笖瀹冭В鍐充簡涓€涓疄娴嬫璺級/ The part that works
+> 用户提议：*容器完全受控，可以把 winlogon 换成自己的程序（由它代为启动 winlogon），想怎么 hook 就怎么 hook；
+> 再 hook DWM 把它转发出去，窗口就能注入用户 session。*
+> 本节把它拆成"可行的部分"与"仍然做不到的部分"，并定下实现路线。
 
-- 瀹瑰櫒闀滃儚**瀹屽叏鐢辨垜浠帶鍒?*锛堟湰鏉ュ氨鏄細搂13 鐨?`NumberOfInitialSessions=2`銆乣Shell`銆乣AutoAdminLogon`
-  閮芥槸鎴戜滑鍐欒繘鍘荤殑锛夛紝鎵€浠ュ彲浠ョ敤 **IFEO**锛坄Image File Execution Options\winlogon.exe` 鐨?`Debugger` 鍊硷級
-  鎴?`Userinit`/`Shell` 鎶?**winlogon 鍖呬竴灞?*锛氭垜浠殑 stub 鍏堣捣鐪熸鐨?winlogon锛屽啀鍦ㄨ嚜宸辩殑妗岄潰鍚姩璇讳晶缁勪欢锛?  閰嶅悎 `AppInit_DLLs` 鍙互瀵?*姣忎釜 GUI 杩涚▼**鍋氳繘绋嬪唴 hook锛堣剰鐭╁舰/paint 閫氱煡锛夛紝杩欐槸"hook explorer"瀹舵棌閲?  **鍦ㄥ彈鎺у鍣ㄩ噷鏈€骞插噣銆佹渶鍙潬**鐨勪竴绉?鈥斺€?涓嶉渶瑕佹敞鍏ユ妧宸с€?- 鍏抽敭鏀剁泭锛?*璇讳晶缁勪欢鐢卞鍣ㄨ嚜宸辩殑鐧诲綍娴佺▼鍒涘缓**锛屽洜姝?*鏍规湰涓嶉渶瑕佷粠澶栭潰鍒涘缓杩涚▼** 鈥斺€?  姝ｅソ缁曞紑 搂17.1 瀹炴祴鐨勬璺紙`CreateProcessAsUser` 杩涘鍣ㄤ細璇?鈫?`0xC0000142`锛岃繛鍋锋潵鐨勫鍣?token 涔熶竴鏍凤級銆?  瀹冧篃涓嶉渶瑕?HCS锛?*鏈満 HCS 鍧忔帀锛坄0x80370105`锛夋椂渚濈劧鍙互楠岃瘉**锛堝鍣ㄩ噸鍚椂瀹冭嚜宸变細鎷夎捣鎴戜滑鐨?stub锛夈€?- 鑰屼笖瀹冩嬁鍒扮殑姝ｆ槸鎴戜滑浠庡闈㈡嬁涓嶅埌鐨勪笢瑗匡細**鐩爣浼氳瘽鐨勪氦浜掓闈?*锛圵inSta0\Default锛夈€佹闈㈢骇 hook銆?  閫愮獥鍙?rect/z-order/鑴忓尯銆佷互鍙婄簿纭殑杈撳叆瀹氫綅銆?
-### 18.2 涓嶆垚绔嬬殑閮ㄥ垎 / The part that still does not work
+### 18.1 成立的部分（而且它解决了一个实测死路）/ The part that works
 
-**"hook DWM 杞彂 鈫?鎶婄獥鍙ｇ洿鎺ユ敞鍏ョ敤鎴?session"杩欎竴姝ュ仛涓嶅埌**锛屼袱涓師鍥狅細
+- 容器镜像**完全由我们控制**（本来就是：§13 的 `NumberOfInitialSessions=2`、`Shell`、`AutoAdminLogon`
+  都是我们写进去的），所以可以用 **IFEO**（`Image File Execution Options\winlogon.exe` 的 `Debugger` 值）
+  或 `Userinit`/`Shell` 把 **winlogon 包一层**：我们的 stub 先起真正的 winlogon，再在自己的桌面启动读侧组件；
+  配合 `AppInit_DLLs` 可以对**每个 GUI 进程**做进程内 hook（脏矩形/paint 通知），这是"hook explorer"家族里
+  **在受控容器里最干净、最可靠**的一种 —— 不需要注入技巧。
+- 关键收益：**读侧组件由容器自己的登录流程创建**，因此**根本不需要从外面创建进程** ——
+  正好绕开 §17.1 实测的死路（`CreateProcessAsUser` 进容器会话 → `0xC0000142`，连偷来的容器 token 也一样）。
+  它也不需要 HCS：**本机 HCS 坏掉（`0x80370105`）时依然可以验证**（容器重启时它自己会拉起我们的 stub）。
+- 而且它拿到的正是我们从外面拿不到的东西：**目标会话的交互桌面**（WinSta0\Default）、桌面级 hook、
+  逐窗口 rect/z-order/脏区、以及精确的输入定位。
 
-1. **瀹瑰櫒閲屾病鏈?DWM 鍙?hook**锛堝疄娴嬶細鏃?`dwm.exe`銆乣DwmIsCompositionEnabled=False`銆? 涓樉绀洪€傞厤鍣ㄣ€?   `D3D11CreateDevice`锛堢‖浠朵笌 WARP锛夐兘 `0x887A0004`锛夈€傛墍浠ヤ笉鏄?hook DWM"锛岃€屾槸**鎴戜滑灏辨槸閭ｄ釜 DWM**锛?   鎴戜滑鑷繁鏀堕泦姣忎釜绐楀彛鐨勮〃闈€佽嚜宸卞悎鎴愩€傝繖鍙嶈€屾洿绠€鍗曪紝浣?*鍚堟垚缁撴灉浠嶅湪瀹瑰櫒浼氳瘽鍐?*銆?2. **绐楀彛瀵硅薄涓嶈兘璺?session/silo 鎼?*锛埪?6.2/搂17.1 瀹炴祴锛歚\Sessions\4\鈥 杩?SYSTEM 閮芥墦涓嶅紑锛?   浠庡闈㈠缓杩涚▼杩涘鍣ㄤ細璇濅細鍦?5鈥?5 ms 鍐?`0xC0000142`锛夈€俬ook 涓庡惁閮芥敼鍙樹笉浜嗚繖涓€鐐广€?
-### 18.3 鍥犳鎶婂畠钀芥垚"绐楀彛闀滃儚" / Land it as window mirroring
+### 18.2 不成立的部分 / The part that still does not work
 
-鐢ㄦ埛瑕佺殑**鏁堟灉**锛堝鍣ㄩ噷鐨勭獥鍙ｅ儚鍘熺敓涓€鏍峰嚭鐜板湪鐢ㄦ埛妗岄潰涓婏級鍙互杩欐牱杈炬垚锛?
-| 渚?| 鍋氫粈涔?|
+**"hook DWM 转发 → 把窗口直接注入用户 session"这一步做不到**，两个原因：
+
+1. **容器里没有 DWM 可 hook**（实测：无 `dwm.exe`、`DwmIsCompositionEnabled=False`、0 个显示适配器、
+   `D3D11CreateDevice`（硬件与 WARP）都 `0x887A0004`）。所以不是"hook DWM"，而是**我们就是那个 DWM**：
+   我们自己收集每个窗口的表面、自己合成。这反而更简单，但**合成结果仍在容器会话内**。
+2. **窗口对象不能跨 session/silo 搬**（§16.2/§17.1 实测：`\Sessions\4\…` 连 SYSTEM 都打不开；
+   从外面建进程进容器会话会在 5–15 ms 内 `0xC0000142`）。hook 与否都改变不了这一点。
+
+### 18.3 因此把它落成"窗口镜像" / Land it as window mirroring
+
+用户要的**效果**（容器里的窗口像原生一样出现在用户桌面上）可以这样达成：
+
+| 侧 | 做什么 |
 |---|---|
-| 璇讳晶锛堝鍣ㄥ唴锛宻tub + hook + 鎴戜滑鐨勫悎鎴愬櫒锛?| 閫愮獥鍙ｈ〃闈?+ 鑴忕煩褰紙`AppInit_DLLs` 鐨?paint 閫氱煡 + 妗岄潰 hook 鐨?z-order/rect/鐒︾偣锛夛紝鍐欏叆**椤垫枃浠?section**锛堝彞鏌勭洿閫氾紝搂13.6 宸茶瘉锛?|
-| 鏄剧ず渚э紙瀹夸富锛岀鐞?service锛?| 鍦ㄧ敤鎴蜂細璇濋噷涓?*姣忎釜瀹瑰櫒绐楀彛鍒涘缓涓€涓湡瀹炲涓荤獥鍙?*锛堢煩褰?鏍囬/z-order 闀滃儚锛夛紝鍐呭 = 璇ュ鍣ㄧ獥鍙ｇ殑鍍忕礌锛堝彧鏇存柊鑴忓尯锛夛紱杈撳叆鎸夌獥鍙ｈ浆鍙戝洖瀹瑰櫒銆傜獥鍙ｇ敱瀹夸富 DWM 鍚堟垚锛屽洜姝や細姝ｅ父鍑虹幇鍦ㄤ换鍔℃爮 / Alt-Tab 鉁?|
+| 读侧（容器内，stub + hook + 我们的合成器） | 逐窗口表面 + 脏矩形（`AppInit_DLLs` 的 paint 通知 + 桌面 hook 的 z-order/rect/焦点），写入**页文件 section**（句柄直通，§13.6 已证） |
+| 显示侧（宿主，管理 service） | 在用户会话里为**每个容器窗口创建一个真实宿主窗口**（矩形/标题/z-order 镜像），内容 = 该容器窗口的像素（只更新脏区）；输入按窗口转发回容器。窗口由宿主 DWM 合成，因此会正常出现在任务栏 / Alt-Tab ✓ |
 
-鍗?绐楀彛娉ㄥ叆"鍙樻垚"**1:1 绐楀彛闀滃儚**"锛氱獥鍙?*浣忓湪瀹夸富浼氳瘽**銆佺敱鎴戜滑鐨勮繘绋嬪垱寤猴紙`WTSQueryUserToken`+
-`CreateProcessAsUser`锛屄?3.7 宸茶瘉锛夛紝鍐呭涓庝氦浜掓潵鑷鍣ㄣ€傝繖灏辨槸 RemoteApp 閭ｇ鏁堟灉鐨勬湰鍦板疄鐜般€?
-### 18.4 浠ｄ环涓庨闄?/ Cost and risk
+即"窗口注入"变成"**1:1 窗口镜像**"：窗口**住在宿主会话**、由我们的进程创建（`WTSQueryUserToken`+
+`CreateProcessAsUser`，§13.7 已证），内容与交互来自容器。这就是 RemoteApp 那种效果的本地实现。
 
-- winlogon 鍖呰９鏄?*渚靛叆寮?*闀滃儚鏀瑰姩锛坰tub 蹇呴』 fail-safe锛氬厛鍚姩鐪熸鐨?winlogon锛屽啀鎸傝浇璇讳晶锛涘け璐ヤ笉褰卞搷鐧诲綍锛夛紱
-- 娌℃湁 DWM 鈬?z-order/閬尅瑕佽嚜宸辫褰曪紙绐楀彛鏄洿鎺ョ敾鍒板睆骞曠殑锛夛紱
-- 闀滃儚灞傛槸鍙鍩哄骇锛堝彲鑳借澶氫釜娌欑鍏变韩锛夆噿 璇ユ楠ゅ簲鍋氭垚 `IContainerImageCustomizer` 鐨?*鍙€夊紑鍏?*锛?  骞跺啓杩涢暅鍍忔竻鍗曪紝鑰屼笉鏄粯璁ゅ紑鍚€?
-### 18.5 涓嬩竴姝?/ Next
+### 18.4 代价与风险 / Cost and risk
 
-1. **鏈€灏忛獙璇侊紙涓嶉渶瑕佷慨 HCS锛?*锛氶暅鍍忛噷鍔?IFEO 鍖呰９ + 涓€涓?stub锛屽鍣ㄩ噸鍚悗纭鎴戜滑鐨勮繘绋?*鍦ㄥ鍣ㄤ細璇濈殑
-   浜や簰妗岄潰**涓婏紝骞惰兘 `EnumWindows` 鐪嬪埌 `regedit`/`notepad` 杩欎簺绐楀彛锛?2. 閫愮獥鍙?+ 鑴忓尯璇讳晶锛堝惈 `AppInit_DLLs` 閫氱煡锛夆啋 鍐欏叆椤垫枃浠?section锛?3. 瀹夸富渚х獥鍙ｉ暅鍍?+ 杈撳叆璺敱锛?4. 涓?搂14 鐨?`IContainerDesktopHost` 鍚堝苟锛堝悓涓€濂楁娊璞★紝涓ょ浼犺緭锛氭暣灞忓抚 / 閫愮獥鍙ｉ暅鍍忥級銆?
+- winlogon 包裹是**侵入式**镜像改动（stub 必须 fail-safe：先启动真正的 winlogon，再挂载读侧；失败不影响登录）；
+- 没有 DWM ⇒ z-order/遮挡要自己记录（窗口是直接画到屏幕的）；
+- 镜像层是只读基座（可能被多个沙箱共享）⇒ 该步骤应做成 `IContainerImageCustomizer` 的**可选开关**，
+  并写进镜像清单，而不是默认开启。
+
+### 18.5 下一步 / Next
+
+1. **最小验证（不需要修 HCS）**：镜像里加 IFEO 包裹 + 一个 stub，容器重启后确认我们的进程**在容器会话的
+   交互桌面**上，并能 `EnumWindows` 看到 `regedit`/`notepad` 这些窗口；
+2. 逐窗口 + 脏区读侧（含 `AppInit_DLLs` 通知）→ 写入页文件 section；
+3. 宿主侧窗口镜像 + 输入路由；
+4. 与 §14 的 `IContainerDesktopHost` 合并（同一套抽象，两种传输：整屏帧 / 逐窗口镜像）。
+
 ---
 
-## 19. 瀹炵幇锛氬彲鏇挎崲鐨勬闈?provider 妯″潡 + 鐢辨竻鍗曢€夋嫨 / A replaceable provider module, chosen by the manifest
+## 19. 实现：可替换的桌面 provider 模块 + 由清单选择 / A replaceable provider module, chosen by the manifest
 
-> 鐢ㄦ埛瑕佹眰锛氭湰鏂规瑕佹垚涓?*鍙浛鎹㈢殑鐙珛妯″潡**锛堜互鍚庢湁鏇村ソ鐨勬柟妗堝彲鎹㈡帀锛夛紝骞朵笖**鐢辨矙绠辨竻鍗曞喅瀹氱敤鍝**銆?> 鏈钀藉湴浜嗚繖鏉℃灦鏋勶紝骞跺畬鎴?window-mirror 鏂规鐨勫墠涓ゆ锛堥暅鍍?payload + 浼氳瘽鍐呰渚э級銆?
-### 19.1 鍒嗗眰 / Layers
+> 用户要求：本方案要成为**可替换的独立模块**（以后有更好的方案可换掉），并且**由沙箱清单决定用哪种**。
+> 本步落地了这条架构，并完成 window-mirror 方案的前两步（镜像 payload + 会话内读侧）。
 
-| 浣嶇疆 | 鍐呭 |
+### 19.1 分层 / Layers
+
+| 位置 | 内容 |
 |---|---|
-| `Wsm.Domain.ValueObjects` | `ContainerDesktopKind`锛坄None`/`FrameBuffer`/`WindowMirror`锛夈€乣SandboxDesktopPlan`锛?*娓呭崟閲岀殑鏂规涓庡弬鏁?*锛夈€乣ContainerDesktopPaths`锛堝鍣ㄥ唴璺緞濂戠害锛屼笁鏉￠摼璺叡鐢ㄤ竴涓潵婧愶級 |
-| `Wsm.Connection.ContainerDesktop` | `IContainerDesktopProvider` + `IContainerDesktopProviderRegistry`锛?*鎸夋竻鍗曢€?provider**锛? `IContainerDesktopHost`锛堢ǔ瀹氶棬闈級+ 涓や釜 provider锛歚FrameBufferDesktopProvider`锛埪?3/14锛屾暣灞忓抚锛夈€乣WindowMirrorDesktopProvider`锛埪?8锛岄€愮獥鍙ｉ暅鍍忥級 |
-| `Wsm.Hcs.Storage` | `IContainerImageCustomizer.EnableWindowMirror(layerPath)`锛氭妸鐧诲綍閽╁瓙鍐欒繘闀滃儚鐨?`SOFTWARE` 铚傚发锛坄Winlogon\Userinit` 杩藉姞 `C:\wsm\wsm-winlogon-wrap.cmd`锛? 鎶婅渚?payload 鎷疯繘 `Files\wsm\`锛堜笁涓祵鍏ュ紡璧勬簮锛屽甫鍗曟祴锛?|
-| `Wsm.Cli` | `wsm image mirror <layerPath>`锛堝噯澶囬暅鍍忥級銆乣wsm desktop <id> [--provider <id>] [--mode <kind>] [--present|--no-present] [--input ...]` |
+| `Wsm.Domain.ValueObjects` | `ContainerDesktopKind`（`None`/`FrameBuffer`/`WindowMirror`）、`SandboxDesktopPlan`（**清单里的方案与参数**）、`ContainerDesktopPaths`（容器内路径契约，三条链路共用一个来源） |
+| `Wsm.Connection.ContainerDesktop` | `IContainerDesktopProvider` + `IContainerDesktopProviderRegistry`（**按清单选 provider**）+ `IContainerDesktopHost`（稳定门面）+ 两个 provider：`FrameBufferDesktopProvider`（§13/14，整屏帧）、`WindowMirrorDesktopProvider`（§18，逐窗口镜像） |
+| `Wsm.Hcs.Storage` | `IContainerImageCustomizer.EnableWindowMirror(layerPath)`：把登录钩子写进镜像的 `SOFTWARE` 蜂巢（`Winlogon\Userinit` 追加 `C:\wsm\wsm-winlogon-wrap.cmd`）+ 把读侧 payload 拷进 `Files\wsm\`（三个嵌入式资源，带单测） |
+| `Wsm.Cli` | `wsm image mirror <layerPath>`（准备镜像）、`wsm desktop <id> [--provider <id>] [--mode <kind>] [--present|--no-present] [--input ...]` |
 
-**閫夋嫨瑙勫垯**锛坄ContainerDesktopProviderRegistry.Resolve`锛夛細
-`SandboxDesktopPlan.Provider`锛堟樉寮?id锛夆啋 `SandboxDesktopPlan.Kind` 鈫?榛樿銆?鎵€浠ユ崲鏂规鏄?**鍔犱竴涓?provider + 鏀规竻鍗?*"锛岃皟鐢ㄦ柟锛圕LI/鏈嶅姟/UI锛変竴琛岄兘涓嶇敤鍔ㄣ€?
-### 19.2 娓呭崟鍐欐硶 / In the recipe
+**选择规则**（`ContainerDesktopProviderRegistry.Resolve`）：
+`SandboxDesktopPlan.Provider`（显式 id）→ `SandboxDesktopPlan.Kind` → 默认。
+所以换方案是"**加一个 provider + 改清单**"，调用方（CLI/服务/UI）一行都不用动。
+
+### 19.2 清单写法 / In the recipe
 
 ```jsonc
 {
   "name": "container-desktop",
   "desktop": {
-    "kind": "WindowMirror",       // 鎴?"FrameBuffer" / "None"
-    "provider": null,             // 涔熷彲鐩存帴鍐?provider id锛屼紭鍏堜簬 kind
+    "kind": "WindowMirror",       // 或 "FrameBuffer" / "None"
+    "provider": null,             // 也可直接写 provider id，优先于 kind
     "presentToInteractiveSession": true,
     "dirtyRegions": true
   }
 }
 ```
 
-### 19.3 涓ゆ潯閾捐矾鎬庝箞鐢?/ How each path is used
+### 19.3 两条链路怎么用 / How each path is used
 
 ```powershell
-# 鏂规 A锛堥粯璁わ紝鏃犻渶鏀归暅鍍忥級锛氭暣灞忓抚
+# 方案 A（默认，无需改镜像）：整屏帧
 wsm desktop <sandboxId> --present
 
-# 鏂规 B锛坵indow-mirror锛岄€愮獥鍙?+ 鑴忓尯锛?wsm image import mcr.microsoft.com/windows/server:ltsc2022 C:\wsm-images\server --desktop
-wsm image mirror C:\wsm-images\server          # 鍐欏叆鐧诲綍閽╁瓙 + 璇讳晶 payload
-#   娓呭崟閲屽啓 Desktop.Provider = "window-mirror"锛岀劧鍚庨噸鍚鍣?wsm desktop <sandboxId>
+# 方案 B（window-mirror，逐窗口 + 脏区）
+wsm image import mcr.microsoft.com/windows/server:ltsc2022 C:\wsm-images\server --desktop
+wsm image mirror C:\wsm-images\server          # 写入登录钩子 + 读侧 payload
+#   清单里写 Desktop.Provider = "window-mirror"，然后重启容器
+wsm desktop <sandboxId>
 ```
 
-### 19.4 璇讳晶鍗忚 / The read-side protocol (published in one shared file)
+### 19.4 读侧协议 / The read-side protocol (published in one shared file)
 
-`C:\wsm\mirror.shm`锛氬ご 64B锛坢agic `WSMM`銆佸昂瀵搞€乻tride銆乫ps銆乻eq銆乥usy銆亀riterPid銆?*windowCount**銆佸抚鏁帮級+
-鏁村睆 BGRX 鍍忕礌 + **绐楀彛琛?*锛?192B锛屾瘡椤?40B锛歩d/rect/seq/鏍囬鍋忕Щ闀垮害锛? 鏍囬鍖猴紙16KB锛夈€?璇讳晶**鍙妸鍙戠敓鍙樺寲鐨勭獥鍙ｇ煩褰㈠啓杩涘叡浜枃浠?*锛坄memcmp` 涓庡奖瀛愬抚姣旇緝锛夛紝鍥犳浼犺緭鐨勬槸鑴忓尯鑰岄潪鏁村睆銆?杈撳叆浠嶆槸"姣忓懡浠や竴涓?`input-*.txt`"锛岄€€鍑烘槸 `agent-stop.txt`锛坄C:\wsm\wsm-winlogon-wrap.cmd` 鍙礋璐?`start` 鍑哄幓锛岀粷涓嶉樆濉炵櫥褰曪級銆?
-### 19.5 涓轰粈涔堢櫥褰曢挬瀛愮敤 `Userinit` 鑰屼笉鏄浛鎹?winlogon / Why Userinit
+`C:\wsm\mirror.shm`：头 64B（magic `WSMM`、尺寸、stride、fps、seq、busy、writerPid、**windowCount**、帧数）+
+整屏 BGRX 像素 + **窗口表**（8192B，每项 40B：id/rect/seq/标题偏移长度）+ 标题区（16KB）。
+读侧**只把发生变化的窗口矩形写进共享文件**（`memcmp` 与影子帧比较），因此传输的是脏区而非整屏。
+输入仍是"每命令一个 `input-*.txt`"，退出是 `agent-stop.txt`（`C:\wsm\wsm-winlogon-wrap.cmd` 只负责
+`start` 出去，绝不阻塞登录）。
 
-鐢ㄦ埛鎻愯鎶?winlogon 鎹㈡垚鑷繁鐨勭▼搴忋€?*鐩爣涓€鑷达紙璁╂垜浠殑绋嬪簭鍦ㄥ鍣ㄤ氦浜掍細璇濋噷璺戣捣鏉ワ級锛屼絾 `Userinit`
-鏇村畨鍏?*锛氬畠鏄井杞枃妗ｅ寲鐨勭櫥褰曟墿灞曠偣锛屾槸"杩藉姞涓€鏉″懡浠?鑰屼笉鏄?椤舵浛 winlogon"锛屽け璐ュ彧浼氬皯涓€涓渚с€?涓嶄細璁╁鍣ㄧ櫥褰曚笉涓婏紙hook 鏈韩灏辨槸 fire-and-forget锛夈€侷FEO锛坄Image File Execution Options\winlogon.exe` 鐨?`Debugger`锛変綔涓哄閫変繚鐣欏湪璁板綍閲屻€?
-### 19.6 楠岃瘉鐘舵€?/ Verification
+### 19.5 为什么登录钩子用 `Userinit` 而不是替换 winlogon / Why Userinit
 
-- 缂栬瘧锛歚wsm`(CLI)銆乣Wsm.Service.Host`銆乣Wsm.Tests` 鍏ㄩ儴 **0 璀﹀憡 0 閿欒**锛沗dotnet test` **300 閫氳繃**
-  锛堟柊澧烇細娓呭崟閫?provider 鐨勫洓鏉¤鍒欍€乣ToRelative` 瓒婄晫鍥炲綊銆佸鍣ㄦ牴涓嶈鏇挎崲銆乣Userinit` 骞傜瓑銆?  涓変釜闀滃儚 payload 纭疄琚祵杩涚▼搴忛泦锛夈€?- 鏈哄埗锛毬?3鈥撀?8 宸插疄娴嬶紙甯с€佽緭鍏ャ€佸彞鏌勭洿閫氥€丼YSTEM鈫扖onsole 寮€绐椼€佷互鍙?澶栭潰鐪嬩笉鍒板鍣ㄧ獥鍙?杩涗笉鍘讳細璇?锛夈€?- **灏氭湭瀹炴祴**锛歸indow-mirror 鐨勭鍒扮锛堥渶瑕佸厛鎶婇」鐩敤鐨勫熀搴ч暅鍍?`wsm image mirror` 涓€娆°€佸啀璁╁鍣ㄧ敤璇ラ暅鍍?  鍚姩锛夈€傛敞鎰忓畠**涓嶇粡杩?HCS 寤鸿繘绋?*锛堣渚х敱瀹瑰櫒鑷繁鐨勭櫥褰曞惎鍔級锛屾墍浠ュ綋鍓?`HcsCreateProcess 0x80370105`
-  骞朵笉濡ㄧ杩欐潯閾捐矾锛屽彧濡ㄧ鎴戜滑鍦ㄥ鍣ㄩ噷"鎵嬪姩"璧疯繘绋嬨€?- 鏄剧ず渚э細`WindowMirrorDesktopProvider.PresentAsync` 宸叉寜 `--mode windows` 鍚姩鏌ョ湅鍣紱鏌ョ湅鍣?*鐩墠浠嶆寜鏁村睆
-  娓叉煋**锛坄--mode` 琚拷鐣ヤ笉鎶ラ敊锛夛紝閫愮獥鍙ｅ涓荤獥鍙ｆ槸涓嬩竴鎻愪氦锛堢獥鍙ｈ〃宸插彂甯冿紝CLI 涔熶細鎵撳嵃锛夈€?
-### 19.7 鍚庣画 / Next
+用户提议把 winlogon 换成自己的程序。**目标一致（让我们的程序在容器交互会话里跑起来），但 `Userinit`
+更安全**：它是微软文档化的登录扩展点，是"追加一条命令"而不是"顶替 winlogon"，失败只会少一个读侧、
+不会让容器登录不上（hook 本身就是 fire-and-forget）。IFEO（`Image File Execution Options\winlogon.exe` 的
+`Debugger`）作为备选保留在记录里。
 
-1. 鏌ョ湅鍣?`--mode windows`锛氭寜绐楀彛琛ㄤ负姣忎釜瀹瑰櫒绐楀彛寤轰竴涓涓荤獥鍙ｏ紙鐭╁舰/鏍囬/z-order 闀滃儚锛? 杈撳叆鎸夌獥鍙ｅ洖浼狅紱
-2. 璇讳晶鐢?`CreateDIBSection(hSection)` 鐩村啓鍏变韩鍐呭瓨锛堝幓鎺夊鍣ㄥ唴閭ｆ memcpy锛屄?5.2锛夛紱
-3. 鎶?`SignalR`/gRPC 鎺ュ埌 provider 涓婏紙鏈嶅姟瀹夸富閲屽凡鏄悓涓€濂楃粍浠讹紝鍔?`StartDesktop` 绛?RPC 鍗冲彲锛夈€?
+### 19.6 验证状态 / Verification
+
+- 编译：`wsm`(CLI)、`Wsm.Service.Host`、`Wsm.Tests` 全部 **0 警告 0 错误**；`dotnet test` **300 通过**
+  （新增：清单选 provider 的四条规则、`ToRelative` 越界回归、容器根不被替换、`Userinit` 幂等、
+  三个镜像 payload 确实被嵌进程序集）。
+- 机制：§13–§18 已实测（帧、输入、句柄直通、SYSTEM→Console 开窗、以及"外面看不到容器窗口/进不去会话"）。
+- **尚未实测**：window-mirror 的端到端（需要先把项目用的基座镜像 `wsm image mirror` 一次、再让容器用该镜像
+  启动）。注意它**不经过 HCS 建进程**（读侧由容器自己的登录启动），所以当前 `HcsCreateProcess 0x80370105`
+  并不妨碍这条链路，只妨碍我们在容器里"手动"起进程。
+- 显示侧：`WindowMirrorDesktopProvider.PresentAsync` 已按 `--mode windows` 启动查看器；查看器**目前仍按整屏
+  渲染**（`--mode` 被忽略不报错），逐窗口宿主窗口是下一提交（窗口表已发布，CLI 也会打印）。
+
+### 19.7 后续 / Next
+
+1. 查看器 `--mode windows`：按窗口表为每个容器窗口建一个宿主窗口（矩形/标题/z-order 镜像）+ 输入按窗口回传；
+2. 读侧用 `CreateDIBSection(hSection)` 直写共享内存（去掉容器内那次 memcpy，§15.2）；
+3. 把 `SignalR`/gRPC 接到 provider 上（服务宿主里已是同一套组件，加 `StartDesktop` 等 RPC 即可）。
+
 ---
 
-## 20. 绐楀彛闀滃儚鐨?鏄剧ず + 鎷栧姩"瀹炴祴 / Window mirror: display and drag, measured
+## 20. 窗口镜像的"显示 + 拖动"实测 / Window mirror: display and drag, measured
 
-### 20.1 鏈疆鏂板 / Added
+### 20.1 本轮新增 / Added
 
-| 浣嶇疆 | 鍐呭 |
+| 位置 | 内容 |
 |---|---|
-| 鏌ョ湅鍣?| `wsm desktop-view --mode windows --frame <mirror.shm> [--offset-x/-y]`锛?*姣忎釜瀹瑰櫒绐楀彛涓€涓湡瀹炲涓荤獥鍙?*锛堢浉鍚岀煩褰?鏍囬/z-order锛屽唴瀹规槸璇ョ獥鍙ｇ殑鍍忕礌锛夛紝鏍囬甯︽嫋鍔?鈫?`movewindow`锛屽鎴峰尯鐐瑰嚮/鎸夐敭 鈫?瀹瑰櫒鍧愭爣锛涢暅鍍忕獥鍙ｅ甫 `WSM_MIRROR_HOST` **绐楀彛灞炴€?*鏍囪 |
-| 璇讳晶 | 鏂板懡浠?`movewindow <hwnd> x,y`锛坄SetWindowPos`锛岀湡姝ｇЩ鍔級涓?`activate <hwnd>`锛沗-TitleFilter` 杩囨护锛?*璺宠繃甯﹂暅鍍忔爣璁扮殑绐楀彛**锛堝惁鍒欏悓涓€妗岄潰涓婁細鍑虹幇闀滃儚鐨勯暅鍍忥級 |
-| 鍏变韩甯冨眬 | `ContainerDesktopMirror`锛坢agic/鍋忕Щ/绐楀彛琛ㄥ竷灞€ + 璇诲啓鍔╂墜锛夛紝provider 涓庢煡鐪嬪櫒鍏辩敤涓€浠藉畾涔夛紙骞舵湁鍥炵幆鍗曟祴锛?|
+| 查看器 | `wsm desktop-view --mode windows --frame <mirror.shm> [--offset-x/-y]`：**每个容器窗口一个真实宿主窗口**（相同矩形/标题/z-order，内容是该窗口的像素），标题带拖动 → `movewindow`，客户区点击/按键 → 容器坐标；镜像窗口带 `WSM_MIRROR_HOST` **窗口属性**标记 |
+| 读侧 | 新命令 `movewindow <hwnd> x,y`（`SetWindowPos`，真正移动）与 `activate <hwnd>`；`-TitleFilter` 过滤；**跳过带镜像标记的窗口**（否则同一桌面上会出现镜像的镜像） |
+| 共享布局 | `ContainerDesktopMirror`（magic/偏移/窗口表布局 + 读写助手），provider 与查看器共用一份定义（并有回环单测） |
 
-### 20.2 瀹炴祴缁撴灉 / Measured (host desktop as the read side's session; same code, same protocol)
+### 20.2 实测结果 / Measured (host desktop as the read side's session; same code, same protocol)
 
 ```
 [1] target hwnd=0x15198C rect before=(80,80)
 [2] read side pid=107032 mirror.shm=True
 [3] log: window id=0x15198C "wsm-mirror-target " rect=(80,80 480x300)
-[3] DISPLAY: mirror window hwnd=0x9C0F5E rect=(500,320 480x300)      <- 瀹夸富涓哄鍣ㄧ獥鍙ｅ缓鐨勭湡瀹炵獥鍙?[4] dragged the mirror by (+90,+60) via posted mouse messages
-[5] target rect after=(170,140) delta=(90,60)                        <- 琚暅鍍忕殑绐楀彛鐪熺殑绉诲姩浜?[6] viewer drag lines=8   (drag begin / drag move ... / )
+[3] DISPLAY: mirror window hwnd=0x9C0F5E rect=(500,320 480x300)      <- 宿主为容器窗口建的真实窗口
+[4] dragged the mirror by (+90,+60) via posted mouse messages
+[5] target rect after=(170,140) delta=(90,60)                        <- 被镜像的窗口真的移动了
+[6] viewer drag lines=8   (drag begin / drag move ... / )
 [7] read side applied=movewindow 0x15198C -> (170,140) ok=True
 [=] VERDICT display=ok drag=ok
 ```
 
-鍗筹細**瀹瑰櫒绐楀彛 鈫?璇讳晶鍙戝竷甯?+ 绐楀彛琛?鈫?瀹夸富閫愮獥鍙ｅ紑鐪熷疄绐楀彛 鈫?鎷栧姩瀹夸富绐楀彛 鈫?`movewindow` 鈫?璇讳晶
-`SetWindowPos` 鈫?鐩爣绐楀彛绉诲姩 (+90,+60)**锛屽叏閾捐矾闂幆 鉁撱€?
-### 20.3 杩囩▼涓慨鎺夌殑涓や釜闂 / Two bugs fixed on the way
+即：**容器窗口 → 读侧发布帧 + 窗口表 → 宿主逐窗口开真实窗口 → 拖动宿主窗口 → `movewindow` → 读侧
+`SetWindowPos` → 目标窗口移动 (+90,+60)**，全链路闭环 ✓。
 
-1. **闀滃儚鐨勯暅鍍?*锛氳渚т笌鏌ョ湅鍣ㄥ湪鍚屼竴妗岄潰鏃讹紝璇讳晶浼氭妸"闀滃儚绐楀彛"褰撴垚瀹瑰櫒绐楀彛鍐嶉暅鍍忎竴娆★紙瀹炴祴鍑虹幇
-   (500,320)鈫?920,560)鈫?1340,800)鈥?鐨勭骇鑱旓級銆備慨娉曪細闀滃儚绐楀彛鎵撲笂绐楀彛灞炴€?`WSM_MIRROR_HOST`锛岃渚ц烦杩囧畠銆?   锛堝鍣ㄩ噷涓嶄細鍙戠敓鈥斺€斿涓荤獥鍙ｅ湪鍙︿竴浼氳瘽鈥斺€斾絾杩欐潯瑙勫垯璁╁畠涓嶅彲鑳藉彂鐢熴€傦級
-2. **鎷栧姩鍙?`Cursor.Position` 浼氬湪 DPI 铏氭嫙鍖栦笅閿欎綅**锛屼笖鍦ㄦ祴璇曢噷鏃犳硶椹卞姩锛氭敼涓虹敤**榧犳爣娑堟伅鑷韩鐨勫潗鏍?*
-   璁＄畻浣嶇Щ锛堢湡瀹炴嫋鍔ㄤ笌 PostMessage 娴嬭瘯閮芥垚绔嬶紱鍚屼竴娆′慨澶嶈繕瑙ｅ喅浜?`PictureBox` 鍚炴帀榧犳爣浜嬩欢鐨勯棶棰橈級銆?
-### 20.4 瀹瑰櫒渚х幇鐘讹紙鏈疆鏈窇閫氾紝鍘熷洜涓嶅湪浠ｇ爜锛? Container-side status
+### 20.3 过程中修掉的两个问题 / Two bugs fixed on the way
 
-- **闀滃儚姝ラ鏈夋晥**锛歚wsm image mirror C:\wsm-images\servercore-ltsc2022 --shell cmd.exe --logon-user ContainerAdministrator --logon-password ""`
-  涔嬪悗锛?*鍦ㄥ鍣ㄥ唴**鍙 `C:\wsm\wsm-desktop-read.ps1`(18764B) 涓?`C:\wsm\wsm-winlogon-wrap.cmd`(814B) 鉁?  锛堥暅鍍忓眰灏辨槸瀹瑰櫒鐨勫彧璇诲熀搴э紝鎵€浠ュ涓讳晶鐨勫啓鍏ュ鍣ㄩ┈涓婅兘鐪嬪埌锛夈€?- **鏈窇閫氱殑鍘熷洜**锛歨arness 鐨勫鍣?*娌¤兘閲嶅惎**锛堝叾 HCS 鐘舵€佸凡鍧忥紝`@stop` 鍚庤繘绋嬫爲鍘熸牱涓嶅姩锛?  `HcsCreateProcess` 浠?`0x80370105`锛夛紝鍥犳**娌℃湁鐧诲綍鍙戠敓** 鈫?鐧诲綍閽╁瓙涓嶈Е鍙?鈫?娌℃湁 `mirror.shm`
-  锛堜細璇?5 鍙湁 `csrss`锛屾病鏈?`winlogon`/`userinit`锛夈€?- **涓嬩竴姝?*锛堥渶瑕佸鍣ㄦ爤澶嶄綅鍚庯級锛氱敤寮曟搸姝ｈ璺緞璧峰鍣?鈥斺€?  `wsm start <containerSandbox>`锛坄WindowsContainerEngineOptions` 閲岄厤濂?`Shell` 涓庤嚜鍔ㄧ櫥褰曪級+ `wsm desktop <id>`锛?  鎴栧厛鎶?`vmcompute`/`hns` 閲嶇疆锛屽啀鐢?harness 閲嶈窇鏈妭鐨勮剼鏈€?
+1. **镜像的镜像**：读侧与查看器在同一桌面时，读侧会把"镜像窗口"当成容器窗口再镜像一次（实测出现
+   (500,320)→(920,560)→(1340,800)… 的级联）。修法：镜像窗口打上窗口属性 `WSM_MIRROR_HOST`，读侧跳过它。
+   （容器里不会发生——宿主窗口在另一会话——但这条规则让它不可能发生。）
+2. **拖动取 `Cursor.Position` 会在 DPI 虚拟化下错位**，且在测试里无法驱动：改为用**鼠标消息自身的坐标**
+   计算位移（真实拖动与 PostMessage 测试都成立；同一次修复还解决了 `PictureBox` 吞掉鼠标事件的问题）。
+
+### 20.4 容器侧现状（本轮未跑通，原因不在代码）/ Container-side status
+
+- **镜像步骤有效**：`wsm image mirror C:\wsm-images\servercore-ltsc2022 --shell cmd.exe --logon-user ContainerAdministrator --logon-password ""`
+  之后，**在容器内**可见 `C:\wsm\wsm-desktop-read.ps1`(18764B) 与 `C:\wsm\wsm-winlogon-wrap.cmd`(814B) ✓
+  （镜像层就是容器的只读基座，所以宿主侧的写入容器马上能看到）。
+- **未跑通的原因**：harness 的容器**没能重启**（其 HCS 状态已坏，`@stop` 后进程树原样不动，
+  `HcsCreateProcess` 仍 `0x80370105`），因此**没有登录发生** → 登录钩子不触发 → 没有 `mirror.shm`
+  （会话 5 只有 `csrss`，没有 `winlogon`/`userinit`）。
+- **下一步**（需要容器栈复位后）：用引擎正规路径起容器 ——
+  `wsm start <containerSandbox>`（`WindowsContainerEngineOptions` 里配好 `Shell` 与自动登录）+ `wsm desktop <id>`；
+  或先把 `vmcompute`/`hns` 重置，再用 harness 重跑本节的脚本。
+
 ---
 
-## 21. 瀹瑰櫒渚э細HCS 鍚姩璇讳晶 + 閫愮獥鍙?GDI 鎶撳彇锛堥浂鎷疯礉锛?/ Container side: HCS launch + per-window zero-copy capture
+## 21. 容器侧：HCS 启动读侧 + 逐窗口 GDI 抓取（零拷贝） / Container side: HCS launch + per-window zero-copy capture
 
-### 21.1 鏈疆瀹炴祴鍒扮殑瀹瑰櫒渚т簨瀹?/ What was measured in the container
+### 21.1 本轮实测到的容器侧事实 / What was measured in the container
 
-| 瑙傚療 Observation | 缁撹 |
+| 观察 Observation | 结论 |
 |---|---|
-| `### CMD cmd.exe /c echo ALIVE` 鈫?`[exit=0] ALIVE` | **HCS 鍒涘缓杩涚▼鎭㈠姝ｅ父** 鉁擄紙閲嶅惎鏈夋晥锛?|
-| `qwinsta`锛歚services 2` / `console 3`锛沗tasklist`锛歚winlogon.exe` + `LogonUI.exe` 鍦?**console 浼氳瘽** | 闀滃儚鐨?涓や釜鍒濆浼氳瘽"鐢熸晥 鉁擄紝console 浼氳瘽鏈?winlogon 鉁?|
-| console 浼氳瘽閲?*娌℃湁** `userinit`/shell锛宍LogonUI` 鍋滃湪鐧诲綍鐣岄潰 | **瀹瑰櫒涓嶄細鑷姩鐧诲綍** 鈫?鐧诲綍閽╁瓙锛坄Userinit`锛夋案杩滀笉瑙﹀彂 鉁?|
-| 鐢?provider 鍚姩璇讳晶锛歚read.log` 鈫?`read side started pid=17296 1024x768 stride=4096 fps=4 mirror=C:\wsm\mirror.shm` | **璇讳晶纭疄鍦ㄥ鍣ㄥ唴璺戣捣鏉ヤ簡** 鉁擄紙HCS 鍚姩璺緞鏈夋晥锛?|
-| 闅忓悗 `CopyFromScreen ... "The handle is invalid"` 鍙嶅澶辫触 | 瀹瑰櫒鐨?**service 浼氳瘽娌℃湁灞忓箷 DC** 鉁?鈫?鏁村睆鎶撳彇涓嶅彲鐢?|
+| `### CMD cmd.exe /c echo ALIVE` → `[exit=0] ALIVE` | **HCS 创建进程恢复正常** ✓（重启有效） |
+| `qwinsta`：`services 2` / `console 3`；`tasklist`：`winlogon.exe` + `LogonUI.exe` 在 **console 会话** | 镜像的"两个初始会话"生效 ✓，console 会话有 winlogon ✓ |
+| console 会话里**没有** `userinit`/shell，`LogonUI` 停在登录界面 | **容器不会自动登录** → 登录钩子（`Userinit`）永远不触发 ✗ |
+| 用 provider 启动读侧：`read.log` → `read side started pid=17296 1024x768 stride=4096 fps=4 mirror=C:\wsm\mirror.shm` | **读侧确实在容器内跑起来了** ✓（HCS 启动路径有效） |
+| 随后 `CopyFromScreen ... "The handle is invalid"` 反复失败 | 容器的 **service 会话没有屏幕 DC** ✗ → 整屏抓取不可用 |
 
-缁撹锛?*闀滃儚鐧诲綍閽╁瓙涓嶆槸姝ｇ‘榛樿**锛堝鍣ㄤ笉鐧诲綍灏变笉瑙﹀彂锛夛紝**HCS 鍚姩鎵嶆槸**锛堟垜浠殑 GUI 鏈潵灏卞湪 HCS 寤虹殑 service 浼氳瘽閲岋紝
-渚嬪涔嬪墠瀹瑰櫒閲岀殑 `notepad`/`regedit` 閮藉湪閭ｉ噷锛夈€?
-### 21.2 鍥犳鏈疆鐨勪袱澶勫疄鐜版敼鍔?/ Two changes
+结论：**镜像登录钩子不是正确默认**（容器不登录就不触发），**HCS 启动才是**（我们的 GUI 本来就在 HCS 建的 service 会话里，
+例如之前容器里的 `notepad`/`regedit` 都在那里）。
 
-1. **`WindowMirrorDesktopProvider.StartAsync` 鏀逛负 HCS 鍚姩璇讳晶**锛歮aterialise锛堣剼鏈?+ `.cmd` 浠庡祵鍏ュ紡璧勬簮鍐欏叆瀹瑰櫒鏍癸紝
-   `StartUp` 鐢?`.cmd` 鎵胯浇寮曞彿銆乣start` 鑴辩锛夛紝鍐?`engine.ExecuteAsync` 鍒板鍣紱宸插湪鍙戝竷灏?*鏀跺吇**锛堝箓绛夛級銆?   闀滃儚鐧诲綍閽╁瓙锛坄EnableWindowMirror`锛変繚鐣欎负"GUI 鍦ㄤ氦浜掍細璇?鏃剁殑鍙€夐」 鉁撱€?   椤哄甫淇細provider 涔嬪墠**鏍规湰娌℃敞鍐岃繘 DI**锛坄Available: .`锛夆噿 妯″潡鏀逛负**鏄惧紡娉ㄥ唽**锛坧rovider 鍒楄〃灏辨槸鍙浛鎹㈤潰锛夆湏銆?2. **璇讳晶鏀逛负閫愮獥鍙ｃ€侀浂鎷疯礉鎶撳彇**锛氱敤 `CreateDIBSection(..., hSection = 鍏变韩鏂囦欢鏄犲皠, offset = 64)` 寤轰竴涓鐩?   鍏变韩鍍忕礌鍖虹殑 DIB锛屽啀閫愮獥鍙?`PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)`锛堣鍙ｅ師鐐圭Щ鍒扮獥鍙ｄ綅缃級锛?   `PrintWindow` 涓嶈鏃堕€€鍖栦负 `GetWindowDC`+`BitBlt`銆?*GDI 鐩存帴鐢昏繘鍏变韩鍐呭瓨** 鈬?瀹瑰櫒鍐?0 娆￠澶栨嫹璐濓紝
-   涓?*涓嶉渶瑕佸睆骞?DC**锛堟鏄?service 浼氳瘽缂虹殑閭ｆ牱涓滆タ锛夈€傛暣灞?`CopyFromScreen`銆佸奖瀛愬抚姣旇緝涓庨€愯 `RtlMoveMemory` 鍏ㄩ儴鍒犻櫎銆?
-### 21.3 鐘舵€?/ Status
+### 21.2 因此本轮的两处实现改动 / Two changes
 
-- 宸茬紪璇戦€氳繃锛圕LI/鏈嶅姟瀹夸富 0 璀﹀憡 0 閿欒锛夈€佽渚ц剼鏈В鏋?0 閿欒銆佸崟娴?**305 閫氳繃**锛堟柊澧?瀹夸富鑳藉彇鏉愯渚?鐨勮祫婧愭柇瑷€锛夈€?- **灏氭湭璺戝畬**锛氭敼鍔ㄥ悗鐨勮渚у湪**瀹瑰櫒鍐?*鐨勬渶缁堥獙璇?鈥斺€?瀹瑰櫒鍦ㄦ湰娆℃祴璇曟湯灏捐 harness 鍥炴敹锛坢ount 涓嶅彲璇汇€乺unner 闃熷垪閲?  鍛戒护鏈娑堣垂锛夛紝闇€瑕侀噸鏂拌捣涓€涓鍣ㄥ啀璺戜竴娆°€傞噸璺戝懡浠わ紙涓€娆?UAC锛夛細
+1. **`WindowMirrorDesktopProvider.StartAsync` 改为 HCS 启动读侧**：materialise（脚本 + `.cmd` 从嵌入式资源写入容器根，
+   `StartUp` 用 `.cmd` 承载引号、`start` 脱离），再 `engine.ExecuteAsync` 到容器；已在发布就**收养**（幂等）。
+   镜像登录钩子（`EnableWindowMirror`）保留为"GUI 在交互会话"时的可选项 ✓。
+   顺带修：provider 之前**根本没注册进 DI**（`Available: .`）⇒ 模块改为**显式注册**（provider 列表就是可替换面）✓。
+2. **读侧改为逐窗口、零拷贝抓取**：用 `CreateDIBSection(..., hSection = 共享文件映射, offset = 64)` 建一个覆盖
+   共享像素区的 DIB，再逐窗口 `PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)`（视口原点移到窗口位置）；
+   `PrintWindow` 不行时退化为 `GetWindowDC`+`BitBlt`。**GDI 直接画进共享内存** ⇒ 容器内 0 次额外拷贝，
+   且**不需要屏幕 DC**（正是 service 会话缺的那样东西）。整屏 `CopyFromScreen`、影子帧比较与逐行 `RtlMoveMemory` 全部删除。
+
+### 21.3 状态 / Status
+
+- 已编译通过（CLI/服务宿主 0 警告 0 错误）、读侧脚本解析 0 错误、单测 **305 通过**（新增"宿主能取材读侧"的资源断言）。
+- **尚未跑完**：改动后的读侧在**容器内**的最终验证 —— 容器在本次测试末尾被 harness 回收（mount 不可读、runner 队列里
+  命令未被消费），需要重新起一个容器再跑一次。重跑命令（一次 UAC）：
   ```
-  powershell -File <dd>\container-mirror2.ps1     # 璧风獥鍙?鈫?provider 鍚姩 鈫?闀滃儚 鈫?鎷栧姩 鈫?鍥炶绐楀彛 rect
+  powershell -File <dd>\container-mirror2.ps1     # 起窗口 → provider 启动 → 镜像 → 拖动 → 回读窗口 rect
   ```
-- 瀹夸富渚х殑"鏄剧ず + 鎷栧姩"闂幆宸插湪 搂20 鐢ㄥ悓涓€濂椾唬鐮佸疄娴嬮€氳繃 鉁擄紙璇讳晶褰撴椂璺戝湪瀹夸富妗岄潰锛屽彧宸?鍦ㄥ摢涓細璇?锛夈€?
+- 宿主侧的"显示 + 拖动"闭环已在 §20 用同一套代码实测通过 ✓（读侧当时跑在宿主桌面，只差"在哪个会话"）。
+
+### 21.4 顺手补上的一个真缺口：清单里的方案没有持久化 / The plan was not persisted
+
+`.wsb` 序列化器（`WsbRecipeXmlSerializer`）**不认识**新的 `Desktop` 计划 ⇒ "用清单选择 provider"这一条
+在保存/加载/导入之后会**丢失**。已修：写出并读回 `<ContainerDesktop>` 元素（`Kind` / `Provider` /
+`PresentToInteractiveSession` / `DirtyRegions` / `Width` / `Height` / `Fps`），并且**默认计划不写这个元素** ——
+因为这份 XML 也会被送给 `WindowsSandbox.exe`（VM 隔离引擎），未知元素可能被拒；只有真的要求了容器桌面时才写。
+单测：往返保真、默认计划不写、只写 `Kind` 也能读回。**308 通过**。
+
+### 21.5 CLI 表面补齐 / CLI surface
+
+`wsm desktop` 增加 `--list-providers`（列出本宿主注册的 provider，并说明清单怎么选）；
+`PrintHelp` 增加 `image mirror` / `desktop` / `desktop-view` 三条；README 增加
+「容器桌面通道（可替换的 provider，由清单选择）」一节（含清单示例与命令）。
+
+---
+
+## 22. 新抓取路径的回归验证 + 一个操作层面的硬约束 / Zero-copy capture regression + how elevation actually works here
+
+### 22.1 为什么之前一直"没反应" / Why nothing ran
+
+| 现象 | 真因 |
+|---|---|
+| 读侧在容器里"启动了"但没有 `mirror.shm`/`read.log` | 我新加的 C# 里 **`IsWindowVisible` 重复声明** ⇒ `Add-Type` 编译失败 ⇒ 脚本在第一个 Log 之前就死了（`read.out` 里就是那段编译错误）✓ 已修 |
+| 等很久也没有 UAC 弹窗 | **我的 shell 未提权**（`whoami` 组里没有管理员、`admin role: False`），而 `elev.ps1` 用 `Start-Process -Verb RunAs` —— 在这个上下文里它**静默失败**，所以既没有提示也没有运行 ✗ |
+| 宿主写容器根是否需要提权 | **不需要**：实测非提权 `[IO.File]::WriteAllText(<root>\wsm\...)` 成功 ⇒ 只有 **HCS 建进程/起容器** 这一步需要提权 ✓（修正了 §13 里"写入需提权"的旧记录） |
+
+⇒ 涉及 **HCS 建进程/创建容器** 的验证必须由**交互会话里提权**执行；已备好自包含入口
+`<dd>\RUN-CONTAINER-TEST.cmd`（右键"以管理员身份运行"）：它**直接**启动 harness runner（避免嵌套 RunAs ✗）、
+覆盖修复后的读侧、在容器内开窗并启动读侧、在宿主上逐窗口镜像、拖动、回读容器窗口 rect，
+结果写到 `container-mirror5.out`。
+
+### 22.2 新抓取路径的宿主端回归（同一套代码，只差"在哪个会话"）/ Host regression
+
+```
+Geometry : 1024x768 stride=4096 fps=4
+Windows  : 1  -> id=0x180E68 rect=(80,80 480x300) "wsm-mirror-target"
+non-black ratio inside the window rect = 58 %      <- PrintWindow -> DIB(共享内存) 的真实像素
+mirror window: hwnd=0x3500AE "wsm-mirror-target"  <- 宿主上的真实镜像窗口
+after drag  : rect=(170,140)  -> moved by (90,60)
+[=] capture=ok display=ok drag=ok
+read.log    : movewindow 0x180E68 -> (95,90) ... -> (170,140) ok=True
+mirror-view.log: sync seq=... windows=1 visible=1
+```
+
+即：**逐窗口 `PrintWindow` → `CreateDIBSection(hSection=共享映射)`（零拷贝、不需要屏幕 DC）
+→ 宿主每个容器窗口一个真实窗口 → 拖动宿主窗口 → `movewindow` → `SetWindowPos` 真的移动** ✓。
+脚本：`tools/container-desktop-agent/host/host-mirror-test.ps1`（无提权可跑，verdict 自判）。

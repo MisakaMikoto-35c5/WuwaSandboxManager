@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using Volo.Abp.DependencyInjection;
@@ -176,39 +177,62 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
                 ?? throw new SandboxBackendException(
                     $"The offline hive '{hiveFile}' has no root key.", 0);
 
-            using var winlogon = root.CreateSubKey(WinlogonSubKey, writable: true)
+            using var winlogon = hive.OpenOrCreateSubKey(WinlogonSubKey)
                 ?? throw new SandboxBackendException(
                     $"Cannot open or create '{WinlogonSubKey}' in '{hiveFile}'.", 0);
 
             before = winlogon.GetValue(UserinitValue) as string ?? string.Empty;
             after = AppendUserinit(before, ContainerDesktopPaths.WrapCommand);
-            winlogon.SetValue(UserinitValue, after, RegistryValueKind.String);
 
-            if (!string.IsNullOrWhiteSpace(options?.Shell))
+            try
             {
-                winlogon.SetValue(ShellValue, options!.Shell!, RegistryValueKind.String);
-                _logger.LogInformation("The base image will start the shell '{Shell}' after logon.", options.Shell);
+                winlogon.SetValue(UserinitValue, after, RegistryValueKind.String);
+
+                if (!string.IsNullOrWhiteSpace(options?.Shell))
+                {
+                    winlogon.SetValue(ShellValue, options!.Shell!, RegistryValueKind.String);
+                    _logger.LogInformation("The base image will start the shell '{Shell}' after logon.", options.Shell);
+                }
+
+                if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser))
+                {
+                    // A read side that starts at logon needs a logon; these are the same
+                    // values the engine writes at container start, baked into the image
+                    // instead (so a container that is not started by WSM still works).
+                    winlogon.SetValue(AutoAdminLogonValue, "1", RegistryValueKind.String);
+                    winlogon.SetValue(DefaultUserNameValue, options.AutoLogonUser!, RegistryValueKind.String);
+                    winlogon.SetValue(DefaultPasswordValue, options.AutoLogonPassword ?? string.Empty, RegistryValueKind.String);
+                    _logger.LogInformation(
+                        "The base image will log on '{User}' automatically (blank password: {Blank}).",
+                        options.AutoLogonUser, string.IsNullOrEmpty(options.AutoLogonPassword));
+                }
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                // The managed write can be refused even for SYSTEM (the keys carry ACLs that
+                // honour the offline hive's own security), while reg.exe writes the same values
+                // successfully - verified on the same hive.
+                _logger.LogWarning(ex, "Managed write to {Key} failed; retrying through reg.exe.", WinlogonSubKey);
+                WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", UserinitValue, after);
+                if (!string.IsNullOrWhiteSpace(options?.Shell))
+                {
+                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", ShellValue, options!.Shell!);
+                }
+
+                if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser))
+                {
+                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", AutoAdminLogonValue, "1");
+                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", DefaultUserNameValue, options.AutoLogonUser!);
+                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", DefaultPasswordValue, options.AutoLogonPassword ?? string.Empty);
+                }
             }
 
-            if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser))
+            if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser) && string.IsNullOrEmpty(options.AutoLogonPassword))
             {
-                // A read side that starts at logon needs a logon; these are the same
-                // values the engine writes at container start, baked into the image
-                // instead (so a container that is not started by WSM still works).
-                winlogon.SetValue(AutoAdminLogonValue, "1", RegistryValueKind.String);
-                winlogon.SetValue(DefaultUserNameValue, options.AutoLogonUser!, RegistryValueKind.String);
-                winlogon.SetValue(DefaultPasswordValue, options.AutoLogonPassword ?? string.Empty, RegistryValueKind.String);
-                _logger.LogInformation(
-                    "The base image will log on '{User}' automatically (blank password: {Blank}).",
-                    options.AutoLogonUser, string.IsNullOrEmpty(options.AutoLogonPassword));
-
-                if (string.IsNullOrEmpty(options.AutoLogonPassword))
-                {
-                    // Container images ship the built-in accounts with no password, and Windows
-                    // refuses a blank-password auto-logon unless the LSA allows it. Without this
-                    // the container stops at LogonUI and nothing that needs a logon runs.
-                    AllowBlankPasswordAutoLogon(layerPath);
-                }
+                // Container images ship the built-in accounts with no password, and Windows
+                // refuses a blank-password auto-logon unless the LSA allows it. Without this the
+                // container stops at LogonUI and nothing that needs a logon runs.
+                AllowBlankPasswordAutoLogon(layerPath);
             }
 
             _logger.LogInformation(
@@ -226,6 +250,33 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     }
 
     /// <summary>
+    /// Writes one value into a loaded offline hive through <c>reg.exe</c>. Measured: this works
+    /// where the managed write is refused, even for SYSTEM - including inside the LSA key.
+    /// </summary>
+    private static void WriteWithRegExe(string mountName, string subKey, string name, string value)
+    {
+        var arguments = $@"add ""HKLM\{mountName}\{subKey}"" /v ""{name}"" /t REG_SZ /d ""{value}"" /f";
+        var startInfo = new ProcessStartInfo("reg.exe", arguments)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        using var process = Process.Start(startInfo)
+            ?? throw new SandboxBackendException("Could not start reg.exe to patch the image hive.", 0);
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        if (process.ExitCode != 0)
+        {
+            throw new SandboxBackendException(
+                $"reg.exe could not write '{name}' (exit {process.ExitCode}): {output.Trim()}", 0);
+        }
+    }
+
+    /// <summary>
     /// Sets <c>Lsa\LimitBlankPasswordUse = 0</c> in every control set of the image's SYSTEM
     /// hive, so auto-logon works with the blank password container images ship.
     /// </summary>
@@ -239,15 +290,9 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         foreach (var controlSet in root.GetSubKeyNames()
                      .Where(name => name.StartsWith(ControlSetPrefix, StringComparison.OrdinalIgnoreCase)))
         {
-            using var lsa = hive.OpenSubKey($@"{controlSet}\Control\Lsa", writable: true);
-            if (lsa is null)
-            {
-                _logger.LogWarning(
-                    "The image hive '{Hive}' has no '{Set}\\Control\\Lsa'; skipping it.", hiveFile, controlSet);
-                continue;
-            }
-
-            lsa.SetValue(LimitBlankPasswordValue, 0, RegistryValueKind.DWord);
+            // reg.exe, for the same reason as above: the LSA key refuses the managed write.
+            WriteWithRegExe(
+                hive.MountName, $@"{controlSet}\Control\Lsa", LimitBlankPasswordValue, "0");
             _logger.LogInformation(
                 "The base image '{Hive}': {Set}\\Control\\Lsa\\{Value} -> 0 (blank-password auto-logon).",
                 hiveFile, controlSet, LimitBlankPasswordValue);

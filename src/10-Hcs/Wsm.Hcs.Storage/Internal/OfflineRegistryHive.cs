@@ -88,6 +88,32 @@ internal sealed class OfflineRegistryHive : IDisposable
     /// <summary>The mounted hive's root key (read-only).</summary>
     public RegistryKey? OpenRoot() => Registry.LocalMachine.OpenSubKey(MountName);
 
+    /// <summary>
+    /// Opens a subkey writable, creating it when it is missing. The creation path matters:
+    /// <c>RegistryKey.CreateSubKey(name, writable: true)</c> hands back a <b>read-only</b> handle,
+    /// so writes through it fail with "Cannot write to the registry key".
+    /// </summary>
+    public RegistryKey? OpenOrCreateSubKey(string subKey)
+    {
+        var existing = OpenSubKey(subKey, writable: true);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        using var root = OpenRoot();
+        if (root is null)
+        {
+            return null;
+        }
+
+        using (root.CreateSubKey(subKey))
+        {
+        }
+
+        return OpenSubKey(subKey, writable: true);
+    }
+
     public void Dispose()
     {
         if (_disposed)

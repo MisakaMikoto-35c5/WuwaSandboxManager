@@ -28,6 +28,10 @@
     <!-- The in-container agent is embedded so the host can materialise it into a
          running container through the container's host-visible root. -->
     <EmbeddedResource Include="Agent\container-desktop-agent.ps1" />
+    <!-- The window-mirror read side is the same file the image payload installs:
+         one source of truth, embedded by both assemblies (Link keeps it that way). -->
+    <EmbeddedResource Include="..\..\10-Hcs\Wsm.Hcs.Storage\Images\wsm-desktop-read.ps1" Link="Agent\wsm-desktop-read.ps1" />
+    <EmbeddedResource Include="..\..\10-Hcs\Wsm.Hcs.Storage\Images\wsm-desktop-read.cmd" Link="Agent\wsm-desktop-read.cmd" />
   </ItemGroup>
 
   <ItemGroup>

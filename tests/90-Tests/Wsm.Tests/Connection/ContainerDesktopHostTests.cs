@@ -130,6 +130,15 @@ public sealed class ContainerDesktopProviderTests
     public void The_window_mirror_payload_is_embedded(string resourceName)
         => Assert.NotNull(typeof(ContainerImageCustomizer).Assembly.GetManifestResourceStream(resourceName));
 
+    [Theory]
+    [InlineData("Wsm.Connection.ContainerDesktop.Agent.container-desktop-agent.ps1")]
+    [InlineData("Wsm.Connection.ContainerDesktop.Agent.wsm-desktop-read.ps1")]
+    [InlineData("Wsm.Connection.ContainerDesktop.Agent.wsm-desktop-read.cmd")]
+    public void The_host_can_materialise_the_read_side(string resourceName)
+        => Assert.NotNull(
+            typeof(Wsm.Connection.ContainerDesktop.IContainerDesktopProvider).Assembly
+                .GetManifestResourceStream(resourceName));
+
     [Fact]
     public void The_mirror_layout_round_trips()
     {

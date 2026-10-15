@@ -191,6 +191,36 @@ public static class WsmMirrorWindows {
     [DllImport("user32.dll", SetLastError = true)]
     static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr GetWindowDC(IntPtr h);
+    [DllImport("user32.dll", SetLastError = true)] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("gdi32.dll", SetLastError = true)] static extern int SaveDC(IntPtr dc);
+    [DllImport("gdi32.dll", SetLastError = true)] static extern bool RestoreDC(IntPtr dc, int saved);
+    [DllImport("gdi32.dll", SetLastError = true)] static extern bool SetViewportOrgEx(IntPtr dc, int x, int y, IntPtr previous);
+    [DllImport("gdi32.dll", SetLastError = true)] static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, int rop);
+
+    /// <summary>
+    /// Paints one window into a DC whose viewport is shifted to the window's place on
+    /// the desktop, so a single desktop-sized DIB section covers every window.
+    /// PrintWindow is preferred (it asks the window to render itself and needs no screen
+    /// DC - the container's service session has none); BitBlt from the window DC is the
+    /// fallback.
+    /// </summary>
+    public static bool Paint(IntPtr dc, long id, int x, int y, int w, int h) {
+        var hwnd = new IntPtr(id);
+        if (!IsWindowVisible(hwnd)) return false;
+        int saved = SaveDC(dc);
+        try {
+            SetViewportOrgEx(dc, x, y, IntPtr.Zero);
+            if (PrintWindow(hwnd, dc, 0x2)) return true;
+            var src = GetWindowDC(hwnd);
+            if (src == IntPtr.Zero) return false;
+            try { return BitBlt(dc, 0, 0, w, h, src, 0, 0, 0x00CC0020); }
+            finally { ReleaseDC(hwnd, src); }
+        } finally { RestoreDC(dc, saved); }
+    }
+
     /// <summary>Moves a window without resizing, restacking or activating it.</summary>
     public static bool Move(long id, int x, int y) {
         const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
@@ -237,15 +267,59 @@ $marshal::WriteInt32($base, 36, $PID)
 $marshal::WriteInt32($base, 40, 0)
 $marshal::WriteInt64($base, 48, [int64]0)
 
-# Capture into a normal managed bitmap (a Bitmap built over the mapped pointer
-# renders black here) and compare against the last published pixels to find the
-# windows that actually changed.
-$target = [IntPtr]::Add($base, 64)
-$bounds = New-Object Drawing.Rectangle(0, 0, $Width, $Height)
-$size = New-Object Drawing.Size($Width, $Height)
-$bitmap = New-Object Drawing.Bitmap($Width, $Height, [Drawing.Imaging.PixelFormat]::Format32bppRgb)
-$shadow = New-Object Drawing.Bitmap($Width, $Height, [Drawing.Imaging.PixelFormat]::Format32bppRgb)
-$graphics = [Drawing.Graphics]::FromImage($bitmap)
+# ---- the pixel buffer is a GDI DIB section mapped onto the shared file -------------
+# GDI paints straight into shared memory: no CopyFromScreen, no memcpy - and unlike a
+# screen grab it works in a session with no display device (a container's service
+# session), which is exactly where HCS-created processes live.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WsmMirrorDib {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER {
+        public int biSize; public int biWidth; public int biHeight; public short biPlanes;
+        public short biBitCount; public int biCompression; public int biSizeImage;
+        public int biXPelsPerMeter; public int biYPelsPerMeter; public int biClrUsed; public int biClrImportant;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RGBQUAD { public byte b, g, r, a; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFO { public BITMAPINFOHEADER header; public RGBQUAD colors; }
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFO info, uint usage, out IntPtr bits, IntPtr section, uint offset);
+    [DllImport("gdi32.dll", SetLastError = true)] public static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll", SetLastError = true)] public static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+    [DllImport("gdi32.dll", SetLastError = true)] public static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll", SetLastError = true)] public static extern bool DeleteObject(IntPtr obj);
+
+    /// <summary>Creates a top-down 32bpp DIB whose pixels are <paramref name="section"/> at <paramref name="offset"/>.</summary>
+    public static IntPtr Create(int width, int height, IntPtr section, uint offset, out int error) {
+        var info = new BITMAPINFO();
+        info.header.biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER));
+        info.header.biWidth = width;
+        info.header.biHeight = -height;   // top-down: the shared buffer is top-down BGRX
+        info.header.biPlanes = 1;
+        info.header.biBitCount = 32;
+        info.header.biCompression = 0;    // BI_RGB
+        IntPtr bits;
+        var dib = CreateDIBSection(IntPtr.Zero, ref info, 0, out bits, section, offset);
+        error = Marshal.GetLastWin32Error();
+        return dib;
+    }
+}
+'@
+
+$pixelSection = [IntPtr]::Add($base, 64)
+$dibError = 0
+$dib = [WsmMirrorDib]::Create($Width, $Height, $mapping, 64, [ref]$dibError)
+if ($dib -eq [IntPtr]::Zero) {
+    Log ("CreateDIBSection over the shared section failed: " + $dibError)
+    throw ("CreateDIBSection failed: " + $dibError)
+}
+$memoryDc = [WsmMirrorDib]::CreateCompatibleDC([IntPtr]::Zero)
+[void][WsmMirrorDib]::SelectObject($memoryDc, $dib)
+Log ("DIB section over shared memory ready (dc=$memoryDc dib=$dib)")
 
 Log ("read side started pid=$PID ${Width}x${Height} stride=$stride fps=$Fps seconds=$Seconds mirror=$mirrorPath")
 
@@ -260,57 +334,38 @@ while ((Get-Date) -lt $deadline) {
 
     try {
         $marshal::WriteInt32($base, 32, 1)   # busy
-        $graphics.CopyFromScreen(0, 0, 0, 0, $size)
 
         $windows = [WsmMirrorWindows]::List($TitleFilter)
         $sequence++
         $count = [Math]::Min($windows.Count, [int](8192 / 40))
         $marshal::WriteInt32($base, 40, $count)
 
-        $currentData = $bitmap.LockBits($bounds, [Drawing.Imaging.ImageLockMode]::ReadOnly, [Drawing.Imaging.PixelFormat]::Format32bppRgb)
-        $shadowData = $shadow.LockBits($bounds, [Drawing.Imaging.ImageLockMode]::WriteOnly, [Drawing.Imaging.PixelFormat]::Format32bppRgb)
-        try {
-            for ($i = 0; $i -lt $count; $i++) {
-                $w = $windows[$i]
-                $x = [Math]::Max(0, $w.X); $y = [Math]::Max(0, $w.Y)
-                $right = [Math]::Min($Width, $w.X + $w.W); $bottom = [Math]::Min($Height, $w.Y + $w.H)
-                $cw = $right - $x; $ch = $bottom - $y
-                $dirty = $false
-                if ($cw -gt 0 -and $ch -gt 0) {
-                    for ($row = 0; $row -lt $ch; $row++) {
-                        $src = [IntPtr]::Add($currentData.Scan0, ($y + $row) * $currentData.Stride + $x * 4)
-                        $old = [IntPtr]::Add($shadowData.Scan0, ($y + $row) * $shadowData.Stride + $x * 4)
-                        if ([WsmMirrorNative]::memcmp($src, $old, [UIntPtr]([uint64]($cw * 4))) -ne 0) { $dirty = $true; break }
-                    }
-                }
+        for ($i = 0; $i -lt $count; $i++) {
+            $w = $windows[$i]
+            $x = [Math]::Max(0, $w.X); $y = [Math]::Max(0, $w.Y)
+            $right = [Math]::Min($Width, $w.X + $w.W); $bottom = [Math]::Min($Height, $w.Y + $w.H)
+            $cw = $right - $x; $ch = $bottom - $y
 
-                $entry = $tableOffset + $i * 40
-                $marshal::WriteInt64($base, $entry, [int64]$w.Id)
-                $marshal::WriteInt32($base, $entry + 8, $w.X)
-                $marshal::WriteInt32($base, $entry + 12, $w.Y)
-                $marshal::WriteInt32($base, $entry + 16, $w.W)
-                $marshal::WriteInt32($base, $entry + 20, $w.H)
-                $marshal::WriteInt64($base, $entry + 24, [int64]$sequence)
-                $titleBytes = [Text.Encoding]::Unicode.GetBytes($w.Title)
-                if ($titleBytes.Length -gt 512) { $titleBytes = $titleBytes[0..511] }
-                $marshal::Copy($titleBytes, 0, [IntPtr]::Add($base, $titleOffset + $i * 512), $titleBytes.Length)
-                $marshal::WriteInt32($base, $entry + 32, $i * 512)
-                $marshal::WriteInt32($base, $entry + 36, [int]($titleBytes.Length / 2))
-
-                # Only the windows that changed are written into the shared file.
-                if ($dirty -and $cw -gt 0 -and $ch -gt 0) {
-                    for ($row = 0; $row -lt $ch; $row++) {
-                        $src = [IntPtr]::Add($currentData.Scan0, ($y + $row) * $currentData.Stride + $x * 4)
-                        $dst = [IntPtr]::Add($target, (($y + $row) * $stride) + $x * 4)
-                        $shadowRow = [IntPtr]::Add($shadowData.Scan0, ($y + $row) * $shadowData.Stride + $x * 4)
-                        [WsmMirrorNative]::RtlMoveMemory($dst, $src, [UIntPtr]([uint64]($cw * 4)))
-                        [WsmMirrorNative]::RtlMoveMemory($shadowRow, $src, [UIntPtr]([uint64]($cw * 4)))
-                    }
-                }
+            # GDI paints the window straight into the shared DIB section: no copy at all,
+            # and no screen DC (which the container's service session does not have).
+            $painted = $false
+            if ($cw -gt 0 -and $ch -gt 0) {
+                $painted = [WsmMirrorWindows]::Paint($memoryDc, $w.Id, $x, $y, $cw, $ch)
             }
-        } finally {
-            $bitmap.UnlockBits($currentData)
-            $shadow.UnlockBits($shadowData)
+
+            $entry = $tableOffset + $i * 40
+            $marshal::WriteInt64($base, $entry, [int64]$w.Id)
+            $marshal::WriteInt32($base, $entry + 8, $w.X)
+            $marshal::WriteInt32($base, $entry + 12, $w.Y)
+            $marshal::WriteInt32($base, $entry + 16, $w.W)
+            $marshal::WriteInt32($base, $entry + 20, $w.H)
+            $marshal::WriteInt64($base, $entry + 24, [int64]$sequence)
+            $titleBytes = [Text.Encoding]::Unicode.GetBytes($w.Title)
+            if ($titleBytes.Length -gt 512) { $titleBytes = $titleBytes[0..511] }
+            $marshal::Copy($titleBytes, 0, [IntPtr]::Add($base, $titleOffset + $i * 512), $titleBytes.Length)
+            $marshal::WriteInt32($base, $entry + 32, $i * 512)
+            $marshal::WriteInt32($base, $entry + 36, [int]($titleBytes.Length / 2))
+            if (-not $painted) { Log ("paint failed for 0x{0:X}" -f [int64]$w.Id) }
         }
 
         $frames++
@@ -356,7 +411,7 @@ while ((Get-Date) -lt $deadline) {
 
 $marshal::WriteInt32($base, 32, 0)
 Log ("read side exiting after frames=$frames windowsPublishes=$sequence")
-try { $graphics.Dispose(); $bitmap.Dispose(); $shadow.Dispose() } catch { }
+try { [void][WsmMirrorDib]::DeleteObject($dib); [void][WsmMirrorDib]::DeleteDC($memoryDc) } catch { }
 [void][WsmMirrorNative]::UnmapViewOfFile($base)
 [void][WsmMirrorNative]::CloseHandle($mapping)
 [void][WsmMirrorNative]::CloseHandle($file)

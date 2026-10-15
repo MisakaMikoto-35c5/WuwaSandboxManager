@@ -90,18 +90,27 @@ internal sealed class WindowMirrorDesktopProvider
             request.ContainerRoot, ContainerDesktopPaths.ContainerAgentDirectory);
         var mirrorPath = Path.Combine(directory, Options.MirrorFileName);
 
-        var geometry = TryReadGeometry(mirrorPath)
-            ?? await WaitForMirrorAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
+        // Adopt a publishing read side; otherwise start one through HCS, which is the
+        // supported way to run a process inside the container's session. (The image's
+        // logon hook is the alternative when the GUI lives in the interactive session -
+        // see IContainerImageCustomizer.EnableWindowMirror.)
+        var geometry = TryReadGeometry(mirrorPath);
+        if (geometry is null)
+        {
+            await LaunchReadSideAsync(request, directory, cancellationToken).ConfigureAwait(false);
+            geometry = await WaitForMirrorAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
+        }
+
         var windows = ReadWindows(mirrorPath);
 
         var session = new ContainerDesktopSession(
-            request.SandboxId, request.ContainerRoot, directory, mirrorPath, geometry,
+            request.SandboxId, request.ContainerRoot, directory, mirrorPath, geometry.Value,
             DateTimeOffset.UtcNow, null, ContainerDesktopProviderIds.WindowMirror, windows);
 
         _sessions[request.SandboxId.Value] = session;
         _logger.LogInformation(
             "Window mirror for {SandboxId} is live: {Count} window(s), desktop {Width}x{Height}.",
-            request.SandboxId, windows.Count, geometry.Width, geometry.Height);
+            request.SandboxId, windows.Count, session.Geometry.Width, session.Geometry.Height);
         return session;
     }
 
@@ -241,6 +250,69 @@ internal sealed class WindowMirrorDesktopProvider
             "The container's window-mirror read side is not publishing. It is started by the container's own " +
             "logon, so the base image must be prepared first (wsm image mirror <layerPath>) and the container " +
             "restarted afterwards - a container that booted before the patch cannot have it.", 0);
+    }
+
+    /// <summary>
+    /// Materialises the read side and starts it inside the container through HCS,
+    /// detached, so the launch command returns immediately.
+    /// </summary>
+    private async Task LaunchReadSideAsync(
+        ContainerDesktopRequest request, string directory, CancellationToken cancellationToken)
+    {
+        var engine = _registry.Find(SandboxEngineKind.WindowsContainer)
+            ?? throw new SandboxBackendException("The Windows container engine is not registered.", 0);
+
+        Directory.CreateDirectory(directory);
+        InstallPayload(directory, "wsm-desktop-read.ps1");
+        InstallPayload(directory, "wsm-desktop-read.cmd");
+
+        foreach (var stale in new[] { Options.MirrorFileName, Options.StopFileName, "read.out", "read.log" })
+        {
+            TryDelete(Path.Combine(directory, stale));
+        }
+
+        // A starter whose quotes live in a plain .cmd, so the launch command line stays
+        // free of nested quotes; `start` detaches, so HCS does not wait for the read side.
+        const string starterName = "wsm-mirror-start.cmd";
+        var containerDirectory = ContainerDesktopPaths.ContainerAgentDirectory;
+        var starter = string.Join(
+            "\r\n",
+            "@echo off",
+            $"start \"\" /d \"{containerDirectory}\" cmd.exe /c wsm-desktop-read.cmd",
+            string.Empty);
+        File.WriteAllText(Path.Combine(directory, starterName), starter, new UTF8Encoding(false));
+
+        var launcher = Path.Combine(containerDirectory, starterName);
+        var exitCode = await engine
+            .ExecuteAsync(request.SandboxId, new LogonCommand($"cmd.exe /c {launcher}"), cancellationToken)
+            .ConfigureAwait(false);
+
+        _logger.LogInformation(
+            "Window mirror read side launched for {SandboxId} through HCS (exit={ExitCode}).",
+            request.SandboxId, exitCode);
+    }
+
+    private static void InstallPayload(string directory, string fileName)
+    {
+        var resource = $"Wsm.Connection.ContainerDesktop.Agent.{fileName}";
+        using var stream = typeof(WindowMirrorDesktopProvider).Assembly.GetManifestResourceStream(resource)
+            ?? throw new SandboxBackendException($"The embedded read side '{resource}' is missing.", 0);
+        using var target = File.Create(Path.Combine(directory, fileName));
+        stream.CopyTo(target);
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+        }
     }
 
     /// <summary>Reads the shared header through the shared mirror layout.</summary>

@@ -1052,3 +1052,31 @@ wsm image mirror C:\wsm-images\server          # 鍐欏叆鐧诲綍閽╁瓙 + �
 - **闀滃儚姝ラ鏈夋晥**锛歚wsm image mirror C:\wsm-images\servercore-ltsc2022 --shell cmd.exe --logon-user ContainerAdministrator --logon-password ""`
   涔嬪悗锛?*鍦ㄥ鍣ㄥ唴**鍙 `C:\wsm\wsm-desktop-read.ps1`(18764B) 涓?`C:\wsm\wsm-winlogon-wrap.cmd`(814B) 鉁?  锛堥暅鍍忓眰灏辨槸瀹瑰櫒鐨勫彧璇诲熀搴э紝鎵€浠ュ涓讳晶鐨勫啓鍏ュ鍣ㄩ┈涓婅兘鐪嬪埌锛夈€?- **鏈窇閫氱殑鍘熷洜**锛歨arness 鐨勫鍣?*娌¤兘閲嶅惎**锛堝叾 HCS 鐘舵€佸凡鍧忥紝`@stop` 鍚庤繘绋嬫爲鍘熸牱涓嶅姩锛?  `HcsCreateProcess` 浠?`0x80370105`锛夛紝鍥犳**娌℃湁鐧诲綍鍙戠敓** 鈫?鐧诲綍閽╁瓙涓嶈Е鍙?鈫?娌℃湁 `mirror.shm`
   锛堜細璇?5 鍙湁 `csrss`锛屾病鏈?`winlogon`/`userinit`锛夈€?- **涓嬩竴姝?*锛堥渶瑕佸鍣ㄦ爤澶嶄綅鍚庯級锛氱敤寮曟搸姝ｈ璺緞璧峰鍣?鈥斺€?  `wsm start <containerSandbox>`锛坄WindowsContainerEngineOptions` 閲岄厤濂?`Shell` 涓庤嚜鍔ㄧ櫥褰曪級+ `wsm desktop <id>`锛?  鎴栧厛鎶?`vmcompute`/`hns` 閲嶇疆锛屽啀鐢?harness 閲嶈窇鏈妭鐨勮剼鏈€?
+---
+
+## 21. 瀹瑰櫒渚э細HCS 鍚姩璇讳晶 + 閫愮獥鍙?GDI 鎶撳彇锛堥浂鎷疯礉锛?/ Container side: HCS launch + per-window zero-copy capture
+
+### 21.1 鏈疆瀹炴祴鍒扮殑瀹瑰櫒渚т簨瀹?/ What was measured in the container
+
+| 瑙傚療 Observation | 缁撹 |
+|---|---|
+| `### CMD cmd.exe /c echo ALIVE` 鈫?`[exit=0] ALIVE` | **HCS 鍒涘缓杩涚▼鎭㈠姝ｅ父** 鉁擄紙閲嶅惎鏈夋晥锛?|
+| `qwinsta`锛歚services 2` / `console 3`锛沗tasklist`锛歚winlogon.exe` + `LogonUI.exe` 鍦?**console 浼氳瘽** | 闀滃儚鐨?涓や釜鍒濆浼氳瘽"鐢熸晥 鉁擄紝console 浼氳瘽鏈?winlogon 鉁?|
+| console 浼氳瘽閲?*娌℃湁** `userinit`/shell锛宍LogonUI` 鍋滃湪鐧诲綍鐣岄潰 | **瀹瑰櫒涓嶄細鑷姩鐧诲綍** 鈫?鐧诲綍閽╁瓙锛坄Userinit`锛夋案杩滀笉瑙﹀彂 鉁?|
+| 鐢?provider 鍚姩璇讳晶锛歚read.log` 鈫?`read side started pid=17296 1024x768 stride=4096 fps=4 mirror=C:\wsm\mirror.shm` | **璇讳晶纭疄鍦ㄥ鍣ㄥ唴璺戣捣鏉ヤ簡** 鉁擄紙HCS 鍚姩璺緞鏈夋晥锛?|
+| 闅忓悗 `CopyFromScreen ... "The handle is invalid"` 鍙嶅澶辫触 | 瀹瑰櫒鐨?**service 浼氳瘽娌℃湁灞忓箷 DC** 鉁?鈫?鏁村睆鎶撳彇涓嶅彲鐢?|
+
+缁撹锛?*闀滃儚鐧诲綍閽╁瓙涓嶆槸姝ｇ‘榛樿**锛堝鍣ㄤ笉鐧诲綍灏变笉瑙﹀彂锛夛紝**HCS 鍚姩鎵嶆槸**锛堟垜浠殑 GUI 鏈潵灏卞湪 HCS 寤虹殑 service 浼氳瘽閲岋紝
+渚嬪涔嬪墠瀹瑰櫒閲岀殑 `notepad`/`regedit` 閮藉湪閭ｉ噷锛夈€?
+### 21.2 鍥犳鏈疆鐨勪袱澶勫疄鐜版敼鍔?/ Two changes
+
+1. **`WindowMirrorDesktopProvider.StartAsync` 鏀逛负 HCS 鍚姩璇讳晶**锛歮aterialise锛堣剼鏈?+ `.cmd` 浠庡祵鍏ュ紡璧勬簮鍐欏叆瀹瑰櫒鏍癸紝
+   `StartUp` 鐢?`.cmd` 鎵胯浇寮曞彿銆乣start` 鑴辩锛夛紝鍐?`engine.ExecuteAsync` 鍒板鍣紱宸插湪鍙戝竷灏?*鏀跺吇**锛堝箓绛夛級銆?   闀滃儚鐧诲綍閽╁瓙锛坄EnableWindowMirror`锛変繚鐣欎负"GUI 鍦ㄤ氦浜掍細璇?鏃剁殑鍙€夐」 鉁撱€?   椤哄甫淇細provider 涔嬪墠**鏍规湰娌℃敞鍐岃繘 DI**锛坄Available: .`锛夆噿 妯″潡鏀逛负**鏄惧紡娉ㄥ唽**锛坧rovider 鍒楄〃灏辨槸鍙浛鎹㈤潰锛夆湏銆?2. **璇讳晶鏀逛负閫愮獥鍙ｃ€侀浂鎷疯礉鎶撳彇**锛氱敤 `CreateDIBSection(..., hSection = 鍏变韩鏂囦欢鏄犲皠, offset = 64)` 寤轰竴涓鐩?   鍏变韩鍍忕礌鍖虹殑 DIB锛屽啀閫愮獥鍙?`PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)`锛堣鍙ｅ師鐐圭Щ鍒扮獥鍙ｄ綅缃級锛?   `PrintWindow` 涓嶈鏃堕€€鍖栦负 `GetWindowDC`+`BitBlt`銆?*GDI 鐩存帴鐢昏繘鍏变韩鍐呭瓨** 鈬?瀹瑰櫒鍐?0 娆￠澶栨嫹璐濓紝
+   涓?*涓嶉渶瑕佸睆骞?DC**锛堟鏄?service 浼氳瘽缂虹殑閭ｆ牱涓滆タ锛夈€傛暣灞?`CopyFromScreen`銆佸奖瀛愬抚姣旇緝涓庨€愯 `RtlMoveMemory` 鍏ㄩ儴鍒犻櫎銆?
+### 21.3 鐘舵€?/ Status
+
+- 宸茬紪璇戦€氳繃锛圕LI/鏈嶅姟瀹夸富 0 璀﹀憡 0 閿欒锛夈€佽渚ц剼鏈В鏋?0 閿欒銆佸崟娴?**305 閫氳繃**锛堟柊澧?瀹夸富鑳藉彇鏉愯渚?鐨勮祫婧愭柇瑷€锛夈€?- **灏氭湭璺戝畬**锛氭敼鍔ㄥ悗鐨勮渚у湪**瀹瑰櫒鍐?*鐨勬渶缁堥獙璇?鈥斺€?瀹瑰櫒鍦ㄦ湰娆℃祴璇曟湯灏捐 harness 鍥炴敹锛坢ount 涓嶅彲璇汇€乺unner 闃熷垪閲?  鍛戒护鏈娑堣垂锛夛紝闇€瑕侀噸鏂拌捣涓€涓鍣ㄥ啀璺戜竴娆°€傞噸璺戝懡浠わ紙涓€娆?UAC锛夛細
+  ```
+  powershell -File <dd>\container-mirror2.ps1     # 璧风獥鍙?鈫?provider 鍚姩 鈫?闀滃儚 鈫?鎷栧姩 鈫?鍥炶绐楀彛 rect
+  ```
+- 瀹夸富渚х殑"鏄剧ず + 鎷栧姩"闂幆宸插湪 搂20 鐢ㄥ悓涓€濂椾唬鐮佸疄娴嬮€氳繃 鉁擄紙璇讳晶褰撴椂璺戝湪瀹夸富妗岄潰锛屽彧宸?鍦ㄥ摢涓細璇?锛夈€?

@@ -1304,3 +1304,33 @@ movewindow 0x... -> (x,y) ok=True                          # 拖动被应用
 配套加固：**整个脚本体包在 try/catch 里**并写 `FATAL: ...`（C# 编译失败不再"静默死亡"，
 这正是上一轮"什么都没发生"的原因）；`CreateCompatibleDC(0)` 失败时**改用某个窗口的 DC** 派生内存 DC
 （容器 service 会话没有屏幕 DC 时正需要）。
+
+### 22.4 提权的真相（更正 §22.1）/ Elevation, corrected
+
+§22.1 里"我的 shell 无法提权"的结论**是错的**：本机默认**跳过 UAC 提示、自动允许提权** ⇒
+`Start-Process -Verb RunAs` **可用**（早前的证据也支持这一点：提权运行确实创建过容器、跑过探针）。
+那些"卡住很久"的**真因**是：
+
+1. 我的脚本里有**没有上限的等待**（等容器登录、等某个文件 ⇒ 永不返回）；
+2. `elev.ps1` 用**固定文件名** `elev.out` ⇒ 并发/多次运行互相覆盖 ⇒ 输出归属混乱
+   （本次就混进了已被停掉的 `container-mirror5` 的输出）。
+
+修法：`elevx.ps1 -Script <s> -Out <file>`（每次独立输出）＋ 每步等待都有上限；另外，用
+`Win32_Process.CommandLine` 批量杀进程时**必须精确匹配**（我那次的模糊匹配把自己 shell 的 job 进程
+也杀了 ⇒ `Exited with code 255`）。
+
+### 22.5 最小步骤阶梯 / The minimal step ladder
+
+`<dd>\container-steps.ps1 -Step N`：**每步只做一件事、有界、打印 `[STEP n] PASS/FAIL`**；
+1 与 8 需要提权，2–7 **不需要**。定位到哪一步再谈集成。
+
+| 步骤 | 做什么 | 判定依据 |
+|---|---|---|
+| 1 | 起 runner + 一个容器，验证能建进程 | 容器里 `[exit=0] ALIVE` |
+| 2 | 把当前读侧写进容器根 | 文件存在且 >20 KB |
+| 3 | 容器内起一个窗口进程（`notepad`） | 容器 `tasklist` 里有 `notepad.exe` |
+| 4 | 容器内启动读侧 | `read.log` 出现 `starting` / `session:` / `DIB … ready` / `read side started` |
+| 5 | 是否发布窗口、`PrintWindow` 是否拿到内容 | `--print-table` 有窗口 + `first paint … ink>0` |
+| 6 | 宿主逐窗口显示 | 找到属于 `wsm.exe` 的镜像窗口 |
+| 7 | 拖动 → 容器窗口是否真的移动 | `read.log` 有 `movewindow … ok=True` 且发布 rect 变化 ≥ 60 px |
+| 8 | 集成：产品路径 `wsm desktop --provider window-mirror` | 退出码 0 + 已发布 + 出现镜像窗口 |

@@ -3,25 +3,20 @@ using Wsm.Domain.ValueObjects;
 namespace Wsm.Connection.Session;
 
 /// <summary>
-/// Opens the user-visible RDP session for a running sandbox.
-/// <para>
-/// The path depends on the <see cref="SandboxEngineKind"/> of the sandbox:
-/// </para>
+/// Opens the user-visible session for a running sandbox, routing by connection
+/// mode:
 /// <list type="bullet">
 /// <item>
-/// <b>Windows Sandbox</b>: the full-desktop path opens the existing sandbox
-/// <b>by id</b> through the packaged connector — the platform CLI
-/// <c>wsb.exe connect --id &lt;id&gt;</c>, then the packaged
-/// <c>WindowsSandboxRemoteSession.exe --id &lt;id&gt;</c>, then the legacy
-/// launcher. RAIL/RemoteApp is presented directly over the RDPBASE named-pipe
-/// endpoint.
+/// <b>RemoteApp (RAIL)</b>: presented as a seamless per-application session
+/// through the <b>stock Remote Desktop client</b> (<c>mstsc.exe</c>) and a
+/// generated <c>.rdp</c> document — the <c>remoteapptool</c> mechanism. A
+/// sandbox whose RDP endpoint is a named pipe is bridged to loopback TCP first,
+/// so the client never needs guest networking.
 /// </item>
 /// <item>
-/// <b>Any other engine</b> (HCS, container): the by-id connector cannot resolve
-/// the sandbox (it is not registered with <c>WindowsSandboxServer</c>), so the
-/// connection is a plain RDP session over the RDPBASE named-pipe endpoint
-/// (<c>\\.\pipe&lt;VmId&gt;</c>) hosted by <c>mstscax</c>, with no packaged-client
-/// fallback.
+/// <b>Full desktop</b>: presented over the sandbox's native transport (named
+/// pipe or TCP) through the in-process <c>mstscax</c> windowed connector
+/// (<c>Wsm.Connection.RdpHost</c>).
 /// </item>
 /// </list>
 /// </summary>
@@ -33,6 +28,7 @@ public interface ISessionLauncher
         SandboxConnectionMode mode,
         SandboxEngineKind engineKind,
         string? remoteAppProgram = null,
+        string? remoteAppArguments = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

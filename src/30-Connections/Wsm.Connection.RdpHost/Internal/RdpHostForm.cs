@@ -202,7 +202,7 @@ internal sealed class RdpHostForm : Form
             client.OnConnected += (_, _) =>
             {
                 _logger.LogInformation("RDP session connected for {Endpoint}.", EndpointLabel);
-                RdpEventLog.Write("Connected", EndpointLabel);
+                ConnectionEventLog.Write("Connected", EndpointLabel);
             };
             client.OnLogonError += (_, args) =>
             {
@@ -216,13 +216,13 @@ internal sealed class RdpHostForm : Form
                 else
                 {
                     _logger.LogWarning("RDP logon error {Error} for {Endpoint}.", args.lError, EndpointLabel);
-                    RdpEventLog.Write("LogonError", $"code {args.lError} at {EndpointLabel}");
+                    ConnectionEventLog.Write("LogonError", $"code {args.lError} at {EndpointLabel}");
                 }
             };
             client.OnDisconnected += (_, args) =>
             {
                 _logger.LogInformation("RDP session disconnected (reason {Reason}) for {Endpoint}.", args.discReason, EndpointLabel);
-                RdpEventLog.Write("Disconnected", $"reason {args.discReason} at {EndpointLabel}");
+                ConnectionEventLog.Write("Disconnected", $"reason {args.discReason} at {EndpointLabel}");
                 ShowDisconnectedOverlay(
                     "Connection disconnected",
                     "The connection to the sandbox has been disconnected.",
@@ -231,7 +231,7 @@ internal sealed class RdpHostForm : Form
             client.OnFatalError += (_, args) =>
             {
                 _logger.LogError("RDP session fatal error {Error} for {Endpoint}.", args.errorCode, EndpointLabel);
-                RdpEventLog.Write("FatalError", $"code {args.errorCode} at {EndpointLabel}");
+                ConnectionEventLog.Write("FatalError", $"code {args.errorCode} at {EndpointLabel}");
                 ShowDisconnectedOverlay(
                     "Connection lost",
                     "The connection to the sandbox was lost because of a fatal error.",

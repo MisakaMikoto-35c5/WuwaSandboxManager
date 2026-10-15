@@ -71,6 +71,7 @@ public sealed class CliApplication
         var rest = args.Skip(1).ToArray();
         var options = ParseOptions(rest);
         var positional = Positional(rest);
+        var quiet = options.ContainsKey("quiet");
 
         try
         {
@@ -135,8 +136,7 @@ public sealed class CliApplication
         }
         catch (SandboxNotFoundException)
         {
-            Console.Error.WriteLine(_localizer["SandboxNotFound"]);
-            return 1;
+            return ReportError(_localizer["SandboxNotFound"], quiet);
         }
         catch (SandboxBackendException ex) when (IsForced(options) && ex.HResult == WsmServiceStatus.ServerUnavailable)
         {
@@ -144,16 +144,31 @@ public sealed class CliApplication
             // original error, then add the actionable follow-up the raw message
             // lacks (the auto-detect path degrades to in-process instead).
             Console.Error.WriteLine($"Error: {ex.Message}");
-            Console.Error.WriteLine(
+            return ReportError(
                 "WsmAgent is not available; check 'wsm service status' or start it, " +
-                "or drop --service to run in-process.");
-            return 1;
+                "or drop --service to run in-process.",
+                quiet);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error: {ex.Message}");
-            return 1;
+            return ReportError($"Error: {ex.Message}", quiet);
         }
+    }
+
+    /// <summary>
+    /// Reports a failure. In quiet mode (a desktop shortcut launching the CLI
+    /// with a hidden console) the message is also surfaced in a message box, so
+    /// the user sees why the connection did not open instead of nothing.
+    /// </summary>
+    private static int ReportError(string message, bool quiet)
+    {
+        Console.Error.WriteLine(message);
+        if (quiet)
+        {
+            ConsoleWindow.ShowError(message);
+        }
+
+        return 1;
     }
 
     private int Env()
@@ -571,14 +586,21 @@ public sealed class CliApplication
 
     /// <summary>
     /// Decides whether a routable command should run through the agent service.
-    /// <c>--service</c> forces the service; by default the agent pipe is probed
-    /// once per invocation and the in-process path is used when it is absent, so
-    /// behavior is unchanged on machines without the service. Returns
-    /// <c>null</c> to select the in-process <see cref="ISandboxManager"/> path.
+    /// <c>--service</c> forces the service; <c>--local</c> forces the in-process
+    /// engine even when the agent is reachable (diagnostics and tests); by default
+    /// the agent pipe is probed once per invocation and the in-process path is
+    /// used when it is absent, so behavior is unchanged on machines without the
+    /// service. Returns <c>null</c> to select the in-process
+    /// <see cref="ISandboxManager"/> path.
     /// </summary>
     private async Task<IWsmServiceClient?> TryGetServiceAsync(Dictionary<string, string?> options)
     {
         if (_serviceClient is null)
+        {
+            return null;
+        }
+
+        if (IsForcedLocal(options))
         {
             return null;
         }
@@ -598,6 +620,8 @@ public sealed class CliApplication
     }
 
     private static bool IsForced(Dictionary<string, string?> options) => options.ContainsKey("service");
+
+    private static bool IsForcedLocal(Dictionary<string, string?> options) => options.ContainsKey("local");
 
     /// <summary>
     /// Runs <paramref name="viaService"/> when the agent service serves the call,
@@ -647,11 +671,12 @@ public sealed class CliApplication
         var id = RequireGuid(positional, 0);
         var mode = options.ContainsKey("remoteapp") ? SandboxConnectionMode.RemoteApp : SandboxConnectionMode.FullDesktop;
         var program = options.GetValueOrDefault("program");
+        var programArguments = options.GetValueOrDefault("program-args");
 
         var service = await TryGetServiceAsync(options);
         if (service is null)
         {
-            await _manager.ConnectAsync(id, mode, program);
+            await _manager.ConnectAsync(id, mode, program, programArguments);
             Console.WriteLine("Session launched.");
             return 0;
         }
@@ -670,15 +695,45 @@ public sealed class CliApplication
         catch (SandboxBackendException ex) when (!IsForced(options) && ex.HResult == WsmServiceStatus.ServerUnavailable)
         {
             // The agent went away between the probe and the runtime fetch: fall back.
-            await _manager.ConnectAsync(id, mode, program);
+            await _manager.ConnectAsync(id, mode, program, programArguments);
             Console.WriteLine("Session launched.");
             return 0;
         }
 
         var engineKind = await ResolveEngineKindAsync(id);
-        await _sessionLauncher.LaunchAsync(SandboxInstanceId.From(id), runtime, mode, engineKind, program);
+
+        // The service prepared the runtime but knows nothing about the mode: a
+        // RAIL connect must open the guest's RemoteApp surface first (see
+        // RemoteAppGuestPolicy), which the client can do through the service's
+        // in-guest command channel.
+        if (mode == SandboxConnectionMode.RemoteApp)
+        {
+            await EnsureGuestRemoteAppAllowedAsync(service, id);
+        }
+
+        await _sessionLauncher.LaunchAsync(SandboxInstanceId.From(id), runtime, mode, engineKind, program, programArguments);
         Console.WriteLine("Session launched.");
         return 0;
+    }
+
+    /// <summary>
+    /// Best-effort guest RemoteApp enablement through the agent service; a
+    /// failure only warns (the connect proceeds and the client reports whatever
+    /// the guest decides).
+    /// </summary>
+    private static async Task EnsureGuestRemoteAppAllowedAsync(IWsmServiceClient service, Guid id)
+    {
+        try
+        {
+            foreach (var command in Wsm.Application.RemoteAppGuestPolicy.EnablementCommands)
+            {
+                await service.ExecuteAsync(id, command);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: preparing the guest RemoteApp surface failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -1052,7 +1107,9 @@ public sealed class CliApplication
               start <id> [--remoteapp]  Start a sandbox
               host <id> [--remoteapp]   Start a sandbox and hold it running until Ctrl+C
               stop <id>                 Stop a sandbox
-              connect <id> [--remoteapp] [--program <path>]  Connect an RDP session
+              connect <id> [--remoteapp] [--program <path>] [--program-args <args>]
+                                                                  Connect a session (RAIL runs through
+                                                                  mstsc + a generated .rdp file)
               ip <id>                   Get the sandbox IP addresses
               exec <id> <command>       Execute a command inside the sandbox
               share <id> <host> [sbx] [--rw]  Map a folder
@@ -1074,6 +1131,10 @@ public sealed class CliApplication
                                         not running (behavior is unchanged when the service is
                                         absent). Affects: running, start, stop, connect, exec,
                                         ip, share.
+              --local                   Force the in-process engine even when the agent
+                                        service is running (diagnostics and tests).
+              --quiet                   Hide the console window and surface failures in a message
+                                        box. Intended for desktop shortcuts that run 'connect'.
 
             create options:
               --name <name>

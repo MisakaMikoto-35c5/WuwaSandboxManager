@@ -28,6 +28,8 @@
     <Project Path="src/30-Connections/Wsm.Recipe.Serialization/Wsm.Recipe.Serialization.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.RdpBase/Wsm.Connection.RdpBase.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.RdpHost/Wsm.Connection.RdpHost.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RailClient/Wsm.Connection.RailClient.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RemoteApp/Wsm.Connection.RemoteApp.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Session/Wsm.Connection.Session.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Legacy/Wsm.Connection.Legacy.csproj" />
     <Project Path="src/30-Connections/Wsm.Service.Contracts/Wsm.Service.Contracts.csproj" />

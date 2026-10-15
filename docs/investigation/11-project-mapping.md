@@ -35,8 +35,11 @@
 | 容器引擎 / Container engine | `Wsm.Engine.WindowsContainer`（**进程隔离容器**，HCS `Container`，提权时可用） | （新拆 / new） |
 | gRPC 客户端 / gRPC client | `Wsm.SandboxServer.Client`（`ISandboxServerClient`，`sandbox_core.proto` + 命名管道通道） | `Infrastructure/Grpc/*` |
 | 序列化 / Serialization | `Wsm.Recipe.Serialization`（`ISandboxRecipeSerializer`，`.wsb` XML） | `Infrastructure/Serialization/WsbRecipeXmlSerializer` |
-| RDPBASE 连接器 / connector | `Wsm.Connection.RdpBase`（`IRdpBaseConnectorFactory`、`IRdpBaseConnector`） | `Infrastructure/Connectors/RdpBaseNamedPipeConnector` |
-| 会话启动 / session launch | `Wsm.Connection.Session`（`ISessionLauncher`） | `Infrastructure/Connectors/WindowsSandboxSessionConnector` |
+| RDPBASE 连接器 / connector | `Wsm.Connection.RdpBase`（`IRdpBaseConnectorFactory`、`IRdpBaseConnector`、`ConnectionEventLog`） | `Infrastructure/Connectors/RdpBaseNamedPipeConnector` |
+| 窗口连接器 / windowed connector | `Wsm.Connection.RdpHost`（`IRdpSessionHost`，`mstscax`；全桌面） | `Infrastructure/Connectors/WindowsSandboxSessionConnector` |
+| RAIL 客户端 / RAIL client | `Wsm.Connection.RailClient`（`IRailClientSessionHost`，WDAG 式：RDPBASE + mstscax + 自由窗口；RAIL 默认） | （新拆 / new，2026-10） |
+| RemoteApp 备选套件 / RemoteApp kit | `Wsm.Connection.RemoteApp`（`IRemoteAppSessionHost`，`mstsc` + `.rdp` + 管道桥） | （新拆 / new，2026-10） |
+| 会话启动 / session launch | `Wsm.Connection.Session`（`ISessionLauncher`，按模式路由） | `Infrastructure/Connectors/WindowsSandboxSessionConnector` |
 | 传统启动器 / legacy launcher | `Wsm.Connection.Legacy`（`ILegacySandboxLauncher`） | （新拆 / new） |
 | 持久化 / Persistence | `Wsm.Persistence`（`ISandboxInstanceRepository`，JSON + `.wsb`） | `Infrastructure/Repositories/*` |
 | 环境探测 / Environment | `Wsm.Host.Environment`（`ISandboxEnvironment`） | `Infrastructure/Environment/WindowsSandboxEnvironment` |
@@ -156,7 +159,8 @@ wsm help                # 显示帮助 / show help
 
 ## 证据 / Evidence
 
-- 解决方案 `WindowsSandboxManager.slnx`：**28 个程序集**，分层文件夹
+- 解决方案 `WindowsSandboxManager.slnx`：**30 个程序集**（2026-10 新增 `Wsm.Connection.RemoteApp` 与
+  `Wsm.Connection.RailClient`），分层文件夹
   `/src/00-Core/`、`/src/10-Hcs/`、`/src/20-Engines/`、`/src/30-Connections/`、`/src/40-Host/`、
   `/src/50-App/`、`/tests/90-Tests/`。
 - 旧栈（`src/WindowsSandboxManager.*` 与 `tests/WindowsSandboxManager.Tests`）已由提交 `92c2a08`

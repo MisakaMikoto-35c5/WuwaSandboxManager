@@ -12,6 +12,8 @@
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Environment\Wsm.Host.Environment.csproj" />
     <ProjectReference Include="..\Wsm.Connection.RdpBase\Wsm.Connection.RdpBase.csproj" />
     <ProjectReference Include="..\Wsm.Connection.RdpHost\Wsm.Connection.RdpHost.csproj" />
+    <ProjectReference Include="..\Wsm.Connection.RailClient\Wsm.Connection.RailClient.csproj" />
+    <ProjectReference Include="..\Wsm.Connection.RemoteApp\Wsm.Connection.RemoteApp.csproj" />
     <ProjectReference Include="..\Wsm.Connection.Legacy\Wsm.Connection.Legacy.csproj" />
   </ItemGroup>
 

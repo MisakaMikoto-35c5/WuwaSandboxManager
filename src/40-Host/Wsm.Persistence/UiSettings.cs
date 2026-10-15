@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Persistence;
 
@@ -13,6 +14,13 @@ public sealed record UiSettings
     /// (<see cref="SandboxPersistenceOptions.DefaultConfigDataFolder"/>).
     /// </summary>
     public string? ConfigDataFolder { get; init; }
+
+    /// <summary>
+    /// The global application launch list added by the user (offered as
+    /// quick-launch buttons for every sandbox, on top of the built-in defaults
+    /// and each sandbox's own additions).
+    /// </summary>
+    public IReadOnlyList<RailApp> QuickLaunchApps { get; init; } = Array.Empty<RailApp>();
 
     /// <summary>An empty settings instance (system defaults).</summary>
     public static UiSettings Default { get; } = new();

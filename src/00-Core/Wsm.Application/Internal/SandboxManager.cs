@@ -229,20 +229,23 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
 
     public async Task<SandboxRuntimeInfo> PrepareConnectAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        var (_, runtime, _) = await PrepareConnectCoreAsync(id, replaceActiveSessions: false, cancellationToken).ConfigureAwait(false);
+        var (_, runtime, _) = await PrepareConnectCoreAsync(
+            id, replaceActiveSessions: false, ensureRemoteAppAllowed: false, cancellationToken).ConfigureAwait(false);
         return runtime;
     }
 
-    public async Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default)
+    public async Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, string? remoteAppArguments = null, CancellationToken cancellationToken = default)
     {
         // A RemoteApp connect replaces whatever session the guest currently holds:
         // the single-session guest refuses a RAIL logon while another session is
         // connected ("too many sessions"), so the existing session must go first.
+        // It also opens the guest's RemoteApp surface before the client connects.
+        var remoteApp = mode == SandboxConnectionMode.RemoteApp;
         var (instanceId, runtime, engine) = await PrepareConnectCoreAsync(
-            id, replaceActiveSessions: mode == SandboxConnectionMode.RemoteApp, cancellationToken).ConfigureAwait(false);
+            id, replaceActiveSessions: remoteApp, ensureRemoteAppAllowed: remoteApp, cancellationToken).ConfigureAwait(false);
 
         await _sessionLauncher
-            .LaunchAsync(instanceId, runtime, mode, engine.Kind, remoteAppProgram, cancellationToken)
+            .LaunchAsync(instanceId, runtime, mode, engine.Kind, remoteAppProgram, remoteAppArguments, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -260,12 +263,17 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     /// connects: the single-session guest refuses a RemoteApp logon while another
     /// session exists instead of arbitrating it.
     /// </param>
+    /// <param name="ensureRemoteAppAllowed">
+    /// When true (RAIL connects), the guest's RemoteApp surface is opened before
+    /// the client connects — see <see cref="EnsureGuestRemoteAppAllowedAsync"/>.
+    /// </param>
     /// <exception cref="SandboxDomainException">
     /// The instance is not running (no cached runtime and the engine reports none).
     /// </exception>
     private async Task<(SandboxInstanceId Id, SandboxRuntimeInfo Runtime, ISandboxEngine Engine)> PrepareConnectCoreAsync(
         Guid id,
         bool replaceActiveSessions,
+        bool ensureRemoteAppAllowed,
         CancellationToken cancellationToken)
     {
         var instance = await GetRequiredAsync(id, cancellationToken).ConfigureAwait(false);
@@ -284,6 +292,13 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
         // guest keeps the disconnected session around and then refuses a new one
         // with "too many sessions established", so reclaim the slot first.
         await ReclaimGuestSessionsAsync(engine, instance.Id, replaceActiveSessions, cancellationToken).ConfigureAwait(false);
+
+        // Open the guest's RemoteApp surface so a RAIL connect can actually
+        // launch the requested program (RemoteApp-only for the guest).
+        if (ensureRemoteAppAllowed)
+        {
+            await EnsureGuestRemoteAppAllowedAsync(engine, instance.Id, cancellationToken).ConfigureAwait(false);
+        }
 
         return (instance.Id, runtime, engine);
     }
@@ -477,6 +492,51 @@ internal sealed class SandboxManager : ISandboxManager, ISingletonDependency
     /// do not exist.
     /// </summary>
     private const string QuietLogoffRangeCommand = "cmd.exe /c for /l %i in (1,1,20) do @logoff %i >nul 2>&1";
+
+    /// <summary>
+    /// Best-effort opening of the guest's RemoteApp surface
+    /// (<see cref="RemoteAppGuestPolicy.EnablementCommands"/>): engines that
+    /// cannot run guest commands are skipped, and a failure only logs — the
+    /// connect proceeds and the client reports whatever the guest decides.
+    /// </summary>
+    private async Task EnsureGuestRemoteAppAllowedAsync(
+        ISandboxEngine engine,
+        SandboxInstanceId id,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var exitCodes = new List<int>(RemoteAppGuestPolicy.EnablementCommands.Count);
+            foreach (var command in RemoteAppGuestPolicy.EnablementCommands)
+            {
+                exitCodes.Add(await engine
+                    .ExecuteAsync(id, new LogonCommand(command), cancellationToken)
+                    .ConfigureAwait(false));
+            }
+
+            _logger.LogInformation(
+                "Guest RemoteApp surface prepared for sandbox {SandboxId} (exit codes {ExitCodes}).",
+                id, string.Join("/", exitCodes));
+
+            if (exitCodes.Exists(code => code != 0))
+            {
+                _logger.LogWarning(
+                    "Preparing the guest RemoteApp surface for sandbox {SandboxId} reported exit codes {ExitCodes}; " +
+                    "a RemoteApp connect may stall while the guest refuses the program.",
+                    id, string.Join("/", exitCodes));
+            }
+        }
+        catch (SandboxNotSupportedException ex)
+        {
+            // The engine cannot run guest commands; there is nothing to prepare.
+            _logger.LogInformation(
+                "Skipping the guest RemoteApp preparation for sandbox {SandboxId}: {Reason}", id, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Preparing the guest RemoteApp surface for sandbox {SandboxId} failed.", id);
+        }
+    }
 
     /// <summary>
     /// Bound for waiting out the guest's asynchronous session teardown after a

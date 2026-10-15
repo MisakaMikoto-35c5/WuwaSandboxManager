@@ -28,9 +28,25 @@ internal sealed class HnsNetworkService : IHnsNetworkService, ISingletonDependen
 
     public Task<string> GetOrCreateNatNetworkIdAsync(CancellationToken ct = default)
     {
-        foreach (var network in ReadNetworks())
+        var networks = ReadNetworks();
+
+        // Prefer a DHCP/DNS-capable network first: an ICS network (the Hyper-V
+        // "Default Switch") runs the ICS DHCP service, so guests actually receive
+        // an IPv4 address. A plain NAT network may not provide DHCP at all — the
+        // fallback network created below has no DHCP allocator, and a guest
+        // attached to it comes up with an APIPA address (169.254.x), which makes
+        // every TCP-transport start fail ("no guest IPv4 address discovered").
+        foreach (var network in networks)
         {
-            if (network.Type is NetworkTypeNat or NetworkTypeIcs)
+            if (network.Type is NetworkTypeIcs)
+            {
+                return Task.FromResult(network.Id);
+            }
+        }
+
+        foreach (var network in networks)
+        {
+            if (network.Type is NetworkTypeNat)
             {
                 return Task.FromResult(network.Id);
             }

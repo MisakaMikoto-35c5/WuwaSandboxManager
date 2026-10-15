@@ -485,6 +485,35 @@ public sealed class SandboxManagerTests
     }
 
     [Fact]
+    public async Task A_remote_app_connect_opens_the_guest_remote_app_surface()
+    {
+        var repository = new InMemoryRepository();
+        var engine = new StubEngine();
+        var launcher = new StubSessionLauncher();
+        var manager = Manager(repository, engine, launcher);
+
+        engine.QwinstaTables.Enqueue(
+            " SESSIONNAME               USERNAME                 ID  STATE   TYPE        DEVICE\n" +
+            ">services                                            0  Disc\n" +
+            " 31c5ce94259d4006a9e4                            65536  Listen\n");
+
+        var created = await manager.CreateAsync("Box", SandboxRecipe.Default);
+        await manager.StartAsync(created.Id, SandboxConnectionMode.FullDesktop);
+
+        await manager.ConnectAsync(created.Id, SandboxConnectionMode.RemoteApp, @"C:\app.exe", "--flag");
+
+        // remoteapptool's server-side enablement: the allow-list check is
+        // disabled and unlisted RemoteApp programs are admitted.
+        Assert.Contains(engine.GuestCommands, command =>
+            command.Contains("TSAppAllowList") && command.Contains("fDisabledAllowList"));
+        Assert.Contains(engine.GuestCommands, command =>
+            command.Contains("fAllowUnlistedRemotePrograms"));
+        Assert.Equal(created.Id, launcher.LastId!.Value.Value);
+        Assert.Equal(@"C:\app.exe", launcher.LastRemoteAppProgram);
+        Assert.Equal("--flag", launcher.LastRemoteAppArguments);
+    }
+
+    [Fact]
     public async Task Connect_enforces_the_pipe_transport_even_when_the_engine_probes_tcp()
     {
         var repository = new InMemoryRepository();
@@ -573,6 +602,8 @@ public sealed class SandboxManagerTests
 
         public string? LastRemoteAppProgram { get; private set; }
 
+        public string? LastRemoteAppArguments { get; private set; }
+
         /// <summary>The runtime the connect flow resolved and handed to the launch.</summary>
         public SandboxRuntimeInfo? LastRuntime { get; private set; }
 
@@ -582,12 +613,14 @@ public sealed class SandboxManagerTests
             SandboxConnectionMode mode,
             SandboxEngineKind engineKind,
             string? remoteAppProgram = null,
+            string? remoteAppArguments = null,
             CancellationToken cancellationToken = default)
         {
             LastId = id;
             LastMode = mode;
             LastEngineKind = engineKind;
             LastRemoteAppProgram = remoteAppProgram;
+            LastRemoteAppArguments = remoteAppArguments;
             LastRuntime = runtime;
             return Task.CompletedTask;
         }

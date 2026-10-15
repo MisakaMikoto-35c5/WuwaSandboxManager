@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -272,6 +273,13 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, ISingletonDepende
         // The image is stripped down; bring up the configured services. Best
         // effort: a service that cannot start is logged, not fatal.
         await EnsureContainerServicesAsync(id, _options.Value.RequiredServices, cancellationToken);
+
+        // Opt-in desktop session (shell, auto-logon) and the experimental RDP
+        // attempt. Also best effort: the container stays usable without either.
+        if (_options.Value.Desktop.ShouldConfigure)
+        {
+            await ConfigureDesktopAsync(id, _options.Value.Desktop, cancellationToken);
+        }
 
         return runtime;
     }
@@ -625,6 +633,161 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, ISingletonDepende
                 _logger.LogWarning(
                     ex, "Failed to start service '{Service}' in container {SandboxId} (continuing).", service, id);
             }
+        }
+    }
+
+    /// <summary>
+    /// Opt-in desktop session inside the container: <c>winlogon</c>'s shell, an
+    /// optional auto-logon, and the experimental RDP attempt. Everything is best
+    /// effort — a container whose image was not prepared for a console session
+    /// simply has no desktop to log into, and that must not fail the start.
+    /// </summary>
+    private async Task ConfigureDesktopAsync(
+        SandboxInstanceId id, ContainerDesktopOptions desktop, CancellationToken cancellationToken)
+    {
+        const string winlogon = @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
+
+        _logger.LogInformation(
+            "Configuring a desktop session in container {SandboxId} (shell={Shell}, autoLogon={AutoLogon}).",
+            id, desktop.Shell, !string.IsNullOrEmpty(desktop.Password));
+
+        // The container images ship no explorer.exe, so winlogon's default shell
+        // cannot start; point it at something that is actually in the image.
+        await RunInContainerAsync(
+            id, RegAdd(winlogon, "Shell", desktop.Shell), cancellationToken);
+
+        if (!string.IsNullOrEmpty(desktop.Password))
+        {
+            await RunInContainerAsync(id, RegAdd(winlogon, "AutoAdminLogon", "1"), cancellationToken);
+            await RunInContainerAsync(
+                id, RegAdd(winlogon, "DefaultUserName", desktop.UserName), cancellationToken);
+            await RunInContainerAsync(
+                id, RegAdd(winlogon, "DefaultPassword", desktop.Password), cancellationToken);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Container {SandboxId} has no desktop password configured, so no auto-logon was written: the " +
+                "console session stays on the logon screen (LogonUI). That is still a desktop, just not a " +
+                "logged-in one.",
+                id);
+        }
+
+        if (desktop.ShouldAttemptTcpRdp)
+        {
+            await AttemptTcpRdpAsync(id, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The experimental RDP attempt, kept because this branch records every knob
+    /// that was tried. It writes the settings the Windows Sandbox guest uses (a
+    /// <i>client VM</i>, where <c>termsrv</c> never takes its container path) and
+    /// then reports the outcome honestly by probing 3389 from the host.
+    /// <para>
+    /// Expected result: no listener. Inside a container <c>termsrv</c> refuses to
+    /// create the RDP listener (<c>WTSIsServerContainer</c> → "TS in container and
+    /// so Remote Connection is not allow"); see
+    /// <c>docs/investigation/13-container-desktop-and-rdp.md</c>.
+    /// </para>
+    /// </summary>
+    private async Task AttemptTcpRdpAsync(SandboxInstanceId id, CancellationToken cancellationToken)
+    {
+        const string terminalServer = @"HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server";
+        const string rdpTcp = @"HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp";
+
+        _logger.LogWarning(
+            "Attempting to enable the RDP listener in container {SandboxId}. This is known not to work: termsrv " +
+            "refuses to create an RDP listener when it detects a container. The attempt is recorded here so the " +
+            "settings that were ruled out stay visible (docs/investigation/13-container-desktop-and-rdp.md).",
+            id);
+
+        foreach (var command in new[]
+                 {
+                     RegAdd(terminalServer, "ContainerMode", "0"),
+                     RegAdd(terminalServer, "fDenyTSConnections", "0"),
+                     RegAdd(terminalServer, "AllowListenersInsideArgonContainer", "1"),
+                     RegAdd(rdpTcp, "AllowListenersInsideArgonContainer", "1"),
+                     RegAdd(rdpTcp, "SecurityLayer", "0"),
+                     RegAdd(rdpTcp, "UserAuthentication", "0"),
+                     RegAdd(rdpTcp, "fEnableWinStation", "1"),
+                 })
+        {
+            await RunInContainerAsync(id, command, cancellationToken);
+        }
+
+        await RunInContainerAsync(id, "sc.exe config TermService start= auto", cancellationToken);
+        await RunInContainerAsync(id, "sc.exe start TermService", cancellationToken);
+
+        // A container's own netstat cannot see its listeners (verified), so the
+        // only trustworthy check is a TCP connect from the host.
+        var ip = (await GetIpAddressesAsync(id, cancellationToken)).FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(ip))
+        {
+            _logger.LogWarning(
+                "Container {SandboxId} has no reachable IP address, so the RDP listener could not be probed.", id);
+            return;
+        }
+
+        if (await IsTcpPortOpenAsync(ip, ContainerDesktopOptions.RdpPort, cancellationToken))
+        {
+            _logger.LogInformation(
+                "Unexpected: the RDP listener in container {SandboxId} came up on {Ip}:{Port}. RDP into a " +
+                "process-isolated container may have become possible on this build; please re-check the " +
+                "investigation document.",
+                id, ip, ContainerDesktopOptions.RdpPort);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "As expected, the RDP listener in container {SandboxId} did not come up ({Ip}:{Port} refused); " +
+                "termsrv refuses remote connections in a container. Use the console session plus an in-session " +
+                "viewer, or a Hyper-V-isolated container.",
+                id, ip, ContainerDesktopOptions.RdpPort);
+        }
+    }
+
+    /// <summary>Builds a <c>reg.exe add … /f</c> command line (values are quoted for the CRT).</summary>
+    internal static string RegAdd(string key, string name, string value)
+        => $"reg.exe add \"{key}\" /v {name} /t REG_SZ /d \"{value}\" /f";
+
+    /// <summary>Runs a command in the container and returns its exit code (-1 when it could not run).</summary>
+    private async Task<int> RunInContainerAsync(
+        SandboxInstanceId id, string command, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var exitCode = await _process.ExecuteAsync(id.ToString(), command, ct: cancellationToken);
+            _logger.LogDebug(
+                "Container {SandboxId}: '{Command}' exited with {ExitCode}.", id, command, exitCode);
+            return exitCode;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex, "Container {SandboxId}: '{Command}' could not be run (continuing).", id, command);
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// Opens a TCP connection to <paramref name="host"/>:<paramref name="port"/>
+    /// with a short timeout — the only reliable "is anything listening in the
+    /// container" check (a container's netstat cannot see its own listeners).
+    /// </summary>
+    private static async Task<bool> IsTcpPortOpenAsync(string host, int port, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
+            await client.ConnectAsync(host, port, timeout.Token);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 

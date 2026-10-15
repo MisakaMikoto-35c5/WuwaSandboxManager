@@ -39,4 +39,12 @@ public sealed class WindowsContainerEngineOptions
         "ProfSvc",
         "CryptSvc",
     ];
+
+    /// <summary>
+    /// Opt-in desktop session inside the container (shell, auto-logon) plus the
+    /// experimental RDP attempt. Requires an image prepared for a console session
+    /// (<c>wsm image desktop</c>); RDP itself stays unavailable in a container. See
+    /// <see cref="ContainerDesktopOptions"/>.
+    /// </summary>
+    public ContainerDesktopOptions Desktop { get; set; } = new();
 }

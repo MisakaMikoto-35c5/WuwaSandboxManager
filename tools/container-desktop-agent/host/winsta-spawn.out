@@ -1,0 +1,15 @@
+[spawn] own pid=101944 session=0 user=SYSTEM
+[priv] SeTcbPrivilege -> True err=0
+[priv] SeAssignPrimaryTokenPrivilege -> True err=0
+[priv] SeIncreaseQuotaPrivilege -> True err=0
+[priv] SeDebugPrivilege -> True err=0
+[v1] duplicate our token, set TokenSessionId=4
+[v1] DuplicateTokenEx -> True err=2
+[v1] SetTokenInformation(TokenSessionId) -> True err=2
+[v1] spawned on desktop winsta0\default: pid=100408 session=4
+[v2] container process = regedit (pid 33136)
+[v2] OpenProcess -> 0xAA8 err=2
+[v2] OpenProcessToken -> True err=2
+[v2] DuplicateTokenEx -> True err=2
+[v2] container token session = 4
+[v2] spawned on desktop winsta0\default: pid=92240 session=4

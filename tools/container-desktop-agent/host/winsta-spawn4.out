@@ -1,0 +1,11 @@
+[priv] SeTcbPrivilege -> True err=0
+[priv] SeAssignPrimaryTokenPrivilege -> True err=0
+[priv] SeIncreaseQuotaPrivilege -> True err=0
+[priv] SeDebugPrivilege -> True err=0
+[t] SetTokenInformation(TokenSessionId=4) -> True
+[0-control-own-session] pid=100824 session=0 exit=0x00000007 elapsed=38ms
+[1-s4-exit7] pid=93592 session=4 exit=0xC0000142 elapsed=5ms
+[2-s4-nulldesk-exit7] pid=6908 session=4 exit=0xC0000142 elapsed=6ms
+[3-s4-write-container] pid=86284 session=4 exit=0xC0000142 elapsed=14ms
+[4-s4-ps-exit42] pid=108248 session=4 exit=0xC0000142 elapsed=15ms
+[5-s4-child-probe] pid=101012 session=4 exit=0xC0000142 elapsed=15ms

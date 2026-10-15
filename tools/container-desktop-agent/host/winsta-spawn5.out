@@ -1,0 +1,8 @@
+[t] our token moved to session 4
+[t] container token source = regedit (pid 33136)
+[t] container token session = 4
+[A-container-token-winsta0-exit7] pid=96524 session=4 exit=0xC0000142 elapsed=15ms
+[B-container-token-null-exit7] pid=79100 session=4 exit=0xC0000142 elapsed=5ms
+[C-container-token-service3e4-exit7] pid=98204 session=4 exit=0xC0000142 elapsed=6ms
+[D-container-token-child-winsta0] pid=76948 session=4 exit=0xC0000142 elapsed=14ms
+[E-container-token-child-null] pid=103612 session=4 exit=0xC0000142 elapsed=6ms

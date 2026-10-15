@@ -891,3 +891,32 @@ DWM/鍚堟垚鍣ㄦ槸 **per-session** 鐨勩€佹寕鍦?win32k 涓婄殑锛涘
 鏈満瀹瑰櫒鏍堜粛澶勫潖鎬侊紙搂14.4锛夛細`HcsCreateProcess` 鈫?`0x80370105`锛屼絾**瀹瑰櫒鍘熸湁鐨勮繘绋嬩笌绐楀彛杩樻椿鐫€**
 锛堜細璇?4 鐨?`regedit`/`notepad` 绛夛級銆備篃灏辨槸璇?閫愮獥鍙ｆ姄鍙?杩欐潯浼樺寲涓€鏃﹀疄鐜帮紝鐢ㄨ繖浜?*瀛樻椿绐楀彛**
 鍗冲彲楠岃瘉锛屾棤闇€绛夊鍣ㄦ爤鎭㈠锛涗絾瑕佸湪浼氳瘽 4 閲?*璧锋柊杩涚▼**锛堝悎娉曡矾寰勶級浠嶉渶鍏堥噸缃?`vmcompute`/`hns`銆?
+---
+
+## 17. "鏈嶅姟鎿嶄綔 GUI 浼氳瘽"杩欏 hack 鑳戒笉鑳界敤鍦ㄥ鍣ㄤ笂锛?/ Can that hack reach a container session?
+
+> 鐢熶骇鐣岀‘瀹炲瓨鍦ㄨ繖澶у鏃忥細`WTSQueryUserToken` / `OpenProcessToken`+`DuplicateTokenEx` /
+> `SetTokenInformation(TokenSessionId)` + `CreateProcessAsUser` / `SetWindowsHookEx` 娉ㄥ叆 鈥?> 瀹冧滑鑳藉湪**瀹夸富浼氳瘽涔嬮棿**鎼繍杩涚▼涓庣獥鍙ｂ€斺€旀垜浠嚜宸卞氨鍦ㄧ敤锛埪?3.7锛歋YSTEM 鈫?鐢ㄦ埛 Console 寮€绐?鉁擄級銆?> 鏈妭璁板綍锛?*杩欏鍦ㄥ鍣ㄧ殑 silo 浼氳瘽涓婁細鍦ㄥ唴鏍稿澶辫触**锛屽苟缁欏嚭瀹炴祴鏁版嵁銆?
+### 17.1 鎵嬫涓庣粨鏋滐紙鍏ㄩ儴瀹炴祴锛孲YSTEM 韬唤锛孲eTcb/SeAssignPrimaryToken/SeIncreaseQuota/SeDebug 鍧囧凡鍚敤锛?
+| 鎵嬫 | 缁撴灉 |
+|---|---|
+| `OpenWindowStation("\Sessions\4\Windows\WindowStations\WinSta0")` | `ERROR_BAD_PATHNAME (161)`锛沗NtOpenDirectoryObject("\Sessions\4\Windows\WindowStations")` 鈫?`0xC000003A OBJECT_PATH_NOT_FOUND`锛沗\Sessions` 鍙垪鍑?`0`锛埪?6.2锛?|
+| 鑷?token `SetTokenInformation(TokenSessionId=4)` + `CreateProcessAsUser`锛坉esktop 渚濇 `winsta0\default` / `Service-0x0-3e4$\Default` / `null`锛?| 杩涚▼**鍒涘缓鎴愬姛**锛堝垎閰?pid锛宍ProcessIdToSessionId=4`锛夛紝浣?**5鈥?5 ms 鍐呴€€鍑?`0xC0000142` STATUS_DLL_INIT_FAILED** |
+| 浠?*瀛樻椿瀹瑰櫒杩涚▼**鍙?token锛坄OpenProcess(regedit, pid 33136)` 鈫?`OpenProcessToken` 鈫?`DuplicateTokenEx`锛岃鍥?`token session = 4`锛? `CreateProcessAsUser` | 鍚屾牱 `0xC0000142`锛?鈥?5 ms锛夛紝鏃犺 desktop 鏄粈涔?|
+| 瀛愯繘绋嬪啓鏂囦欢锛堝涓昏矾寰?/ 瀹瑰櫒璺緞 `C:\wsm`锛?| **涓€浠介兘娌℃湁** 鈥斺€?瀹冭繛鐩爣浼氳瘽鐨?loader/鏂囦欢绯荤粺涓婁笅鏂囬兘娌″缓绔?|
+| **瀵圭収缁?*锛氬悓涓€ token銆佷笉鏀?session | `cmd /c exit 7` 鈫?**exit=7锛?8 ms** 鉁?璇存槑鏈哄埗鏈韩娌￠棶棰?|
+
+缁撹锛?*silo 浼氳瘽娌℃湁"浠庡闈㈠垱寤鸿繘绋?/ 鍔犲叆杩涘幓"鐨勯€氶亾**锛堣繖姝ｆ槸 silo 鐨勮璁＄洰鐨勶級銆傚洜姝?host 渚ф棤璁烘€庝箞鏀?token銆乻ession 鎴?desktop 瀛楃涓诧紝閮芥嬁涓嶅埌瀹瑰櫒浼氳瘽閲岀殑杩涚▼涓庣獥鍙ｃ€傜獥鍙ｈ闂紙搂16.2锛変笌杩涚▼鍒涘缓锛堟湰鑺傦級
+鏄悓涓€涓竟鐣岀殑涓ら潰銆?
+### 17.2 閭ｄ箞"鏈€閫傚悎褰撳墠鍦烘櫙鐨?hack"鏄粈涔?
+鍘熷垯涓嶅彉锛?*"璇讳晶"蹇呴』鍦ㄥ鍣ㄤ細璇濋噷**銆傝兘娉ㄥ皠杩涘幓鐨勬墜娈靛彧鏈変笁绫伙細
+
+1. **HCS 鍒涘缓杩涚▼**锛坄HcsCreateProcess`锛屽嵆鎴戜滑鐨?`engine.ExecuteAsync`锛夆€斺€?瀹樻柟銆佸共鍑€锛屽氨鏄?搂14 鐨勫疄鐜帮紱
+   鏈満 `0x80370105` 鍧忎簡锛岄渶閲嶇疆 `vmcompute`/`hns` 鍚庣户缁€?2. **娉ㄥ叆瀹瑰櫒鍐呭凡鏈夎繘绋?*锛堣法浼氳瘽 hook 瀹舵棌锛夛細`CreateRemoteThread`+`LoadLibraryW`锛圖LL 蹇呴』鏀惧湪**瀹瑰櫒鍙**
+   鐨勮矾寰勶紝渚嬪 `C:\wsm`锛夋垨绾跨▼瀹氬悜 `SetWindowsHookEx`銆傚畠鑳界粫寮€"涓嶈兘寤鸿繘绋?锛屼絾鏇磋剢銆佹洿鑴忋€?3. 瀹瑰櫒鍐呰嚜鍚姩锛堢櫥褰曡剼鏈級鈥斺€?涓嶅彲鎺э紝涓嶉噰鐢ㄣ€?
+"鏄剧ず渚?浠嶇暀鍦ㄥ涓伙紙搂13.7 宸茶瘉锛歋YSTEM 鎶婄獥鍙ｆ斁杩涚敤鎴?Console锛? 鍏变韩鍐呭瓨/鍙ユ焺鐩撮€氾紙搂13.6 宸茶瘉锛夈€?
+鈬?**鏈€浼?= 鏂规 1锛圚CS锛? 閫愮獥鍙?鑴忓潡璇诲彇 + DIB 鐩村啓鍏变韩鍐呭瓨 + 瀹夸富鍚堟垚**锛埪?5.5/搂16.5锛夛紱
+鏂规 2 鍙槸 HCS 涓嶅彲鐢ㄦ椂鐨勫簲鎬ユ墜娈点€?
+### 17.3 鏈鏂板鑴氭湰 / New scripts
+
+`tools/container-desktop-agent/host/`锛歚winsta-probe.ps1`銆乣winsta-probe-inner.ps1`锛埪?6锛夈€?`winsta-child.ps1`锛堜細璇濆唴鏋氫妇+鎶撳彇锛夈€乣winsta-spawn.ps1`鈥winsta-spawn5.ps1`锛坱oken/session 鎵嬫湳涓庨€€鍑虹爜娴嬮噺锛夈€?

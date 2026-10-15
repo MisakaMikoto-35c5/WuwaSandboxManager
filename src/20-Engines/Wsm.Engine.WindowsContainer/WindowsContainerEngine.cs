@@ -47,8 +47,8 @@ namespace Wsm.Engine.WindowsContainer;
 /// Like the HCS engine it requires an elevated process (<c>0x8037011B</c>
 /// otherwise).
 /// </summary>
-[ExposeServices(typeof(ISandboxEngine))]
-internal sealed class WindowsContainerEngine : ISandboxEngine, ISingletonDependency
+[ExposeServices(typeof(ISandboxEngine), typeof(IContainerFileSystemAccess))]
+internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSystemAccess, ISingletonDependency
 {
     private const string ElevationMessage =
         "The Windows container engine drives the Host Compute Service (HCS) and requires an " +
@@ -633,6 +633,28 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, ISingletonDepende
                 _logger.LogWarning(
                     ex, "Failed to start service '{Service}' in container {SandboxId} (continuing).", service, id);
             }
+        }
+    }
+
+    /// <inheritdoc />
+    public string? GetContainerRoot(SandboxInstanceId id)
+    {
+        // The container's C:\ is its activated scratch layer, mounted as a host
+        // volume; the host can therefore read and write files inside a running
+        // container directly (no guest agent needed to get a file in).
+        if (!_containers.TryGetValue(id.ToString(), out var live))
+        {
+            return null;
+        }
+
+        try
+        {
+            return _layers.GetMountPath(live.ScratchPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Resolving the mount path of container {SandboxId} failed.", id);
+            return null;
         }
     }
 

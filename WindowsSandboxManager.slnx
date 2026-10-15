@@ -33,6 +33,7 @@
     <Project Path="src/30-Connections/Wsm.Connection.RdpHost.WinUi/Wsm.Connection.RdpHost.WinUi.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Session/Wsm.Connection.Session.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Legacy/Wsm.Connection.Legacy.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.ContainerDesktop/Wsm.Connection.ContainerDesktop.csproj" />
     <Project Path="src/30-Connections/Wsm.Service.Contracts/Wsm.Service.Contracts.csproj" />
     <Project Path="src/30-Connections/Wsm.Service.Client/Wsm.Service.Client.csproj" />
   </Folder>

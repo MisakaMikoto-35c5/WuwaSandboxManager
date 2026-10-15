@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Volo.Abp.Modularity;
 using Wsm.Application;
 using Wsm.Application.EngineSelection;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Engine.Hcs;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engine.WindowsSandbox;
@@ -23,6 +24,7 @@ namespace Wsm.Cli;
     typeof(HcsEngineModule),
     typeof(WindowsSandboxEngineModule),
     typeof(WindowsContainerEngineModule),
+    typeof(WsmConnectionContainerDesktopModule),
     typeof(WsmLocalizationModule),
     typeof(WsmServiceClientModule))]
 public sealed class CliModule : AbpModule

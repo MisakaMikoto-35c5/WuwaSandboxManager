@@ -7,6 +7,7 @@ using Wsm.Application.EngineSelection;
 using Wsm.Engine.Hcs;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engine.WindowsSandbox;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Localization;
 using Wsm.Service.Host.Internal;
 
@@ -32,6 +33,7 @@ namespace Wsm.Service.Host;
     typeof(HcsEngineModule),
     typeof(WindowsSandboxEngineModule),
     typeof(WindowsContainerEngineModule),
+    typeof(WsmConnectionContainerDesktopModule),
     typeof(WsmLocalizationModule))]
 public sealed class WsmServiceModule : AbpModule
 {

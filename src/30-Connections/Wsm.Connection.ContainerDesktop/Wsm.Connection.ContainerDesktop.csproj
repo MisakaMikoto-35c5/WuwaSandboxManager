@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Connection.ContainerDesktop</RootNamespace>
+    <AssemblyName>Wsm.Connection.ContainerDesktop</AssemblyName>
+    <Description>
+      Desktop interaction for process-isolated (Argon) containers: starts an
+      in-session capture/input agent inside the container, exposes its shared
+      memory frame buffer, and presents it in a window inside the interactive
+      user session (WTSQueryUserToken + CreateProcessAsUser). RDP is not used
+      because termsrv never creates a listener in a container.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
+    <ProjectReference Include="..\..\00-Core\Wsm.Engines.Abstractions\Wsm.Engines.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The in-container agent is embedded so the host can materialise it into a
+         running container through the container's host-visible root. -->
+    <EmbeddedResource Include="Agent\container-desktop-agent.ps1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
+  </ItemGroup>
+
+</Project>

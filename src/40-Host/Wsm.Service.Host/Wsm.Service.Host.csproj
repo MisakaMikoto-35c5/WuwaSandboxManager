@@ -14,6 +14,7 @@
     <ProjectReference Include="..\..\20-Engines\Wsm.Engine.Hcs\Wsm.Engine.Hcs.csproj" />
     <ProjectReference Include="..\..\20-Engines\Wsm.Engine.WindowsSandbox\Wsm.Engine.WindowsSandbox.csproj" />
     <ProjectReference Include="..\..\20-Engines\Wsm.Engine.WindowsContainer\Wsm.Engine.WindowsContainer.csproj" />
+    <ProjectReference Include="..\..\30-Connections\Wsm.Connection.ContainerDesktop\Wsm.Connection.ContainerDesktop.csproj" />
     <ProjectReference Include="..\..\30-Connections\Wsm.Service.Contracts\Wsm.Service.Contracts.csproj" />
     <ProjectReference Include="..\Wsm.Localization\Wsm.Localization.csproj" />
   </ItemGroup>

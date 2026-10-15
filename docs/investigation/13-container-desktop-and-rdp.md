@@ -721,3 +721,51 @@ Id      SessionId MainWindowTitle
 
 **鍚屾椂閿佸畾鐨勮竟鐣?*锛氳繖鍙В鍐炽€屾妸锛堟垜浠嚜宸辨瀯閫犵殑锛夌獥鍙ｆ樉绀哄湪鐢ㄦ埛 Console銆嶏紱**瀹瑰櫒鐨勫師鐢熺獥鍙ｄ粛鐒?璺ㄤ笉杩囨潵**锛埪?3.6 B锛歚FindWindow` 鐪嬩笉鍒般€乣SetParent`/`SetThreadDesktop` 閮戒笉閫氾級銆傝鐪熸鐨勫師鐢熺獥鍙ｏ紝
 鍙湁 **Hyper-V 闅旂 + 澧炲己浼氳瘽**銆?
+---
+
+## 14. 鎶婂鍣ㄦ闈㈡帴杩涚鐞?service / Container desktop in the manager
+
+> 搂13 缁欏嚭浜嗘満鍒朵笌瀹炴祴锛涙湰鑺傛妸瀹冭惤杩涢」鐩細**鑳藉姏鐢辩鐞?service 鎵胯浇**锛坰ervice 鏄?SYSTEM锛?> 鏃㈣兘鍦ㄥ鍣ㄩ噷璧?agent锛屼篃鑳芥妸绐楀彛鍒涘缓鍒扮敤鎴?Console锛夛紝CLI/UI 鍙槸瀹冪殑椹卞姩鏂广€?
+### 14.1 鍒嗗眰 / Where it lives
+
+| 灞?| 浣嶇疆 | 鎵挎媴浠€涔?|
+|---|---|---|
+| 寮曟搸鑳藉姏 | `Wsm.Engines.Abstractions/IContainerFileSystemAccess.cs` + `WindowsContainerEngine` 瀹炵幇 | 鏆撮湶**杩愯涓鍣ㄧ殑瀹夸富鍙鏍?*锛坄\\?\Volume{GUID}\`锛夛細杩欐槸鎶?agent 鏀捐繘瀹瑰櫒銆佷互鍙?瀹瑰櫒閲岀殑鏅€氭枃浠?鍏变韩鍐呭瓨"鐨勫墠鎻?|
+| 杩炴帴灞?| `src/30-Connections/Wsm.Connection.ContainerDesktop/` | `IContainerDesktopHost` 缂栨帓锛歮aterialise agent 鈫?鍦ㄥ鍣ㄥ唴鍚姩 鈫?绛夌涓€甯?鈫?鍙€?*鍦ㄤ氦浜掍細璇濋噷寮€绐?*锛沗ISessionProcessLauncher` 灏佽 `WTSQueryUserToken`+`CreateProcessAsUser`锛堝彧鏈?SYSTEM 鑳借法浼氳瘽锛?|
+| 瀹瑰櫒鍐?| `Agent/container-desktop-agent.ps1`锛堝祵鍏ヨ祫婧愶級 | 鎶撳睆杩涘叡浜唴瀛?+ 杞杈撳叆闃熷垪 + `SetCursorPos`/`mouse_event`/`keybd_event` 娉ㄥ叆锛涘搷搴?`agent-stop.txt` 閫€鍑?|
+| 鏈嶅姟 | `Wsm.Service.Host`锛坄WsmServiceModule` 渚濊禆鏂版ā鍧楋級 | 浠?SYSTEM 鎵胯浇鍚屼竴濂楃粍浠?鈫?绐楀彛钀藉湪鐢ㄦ埛 Console |
+| CLI | `wsm desktop 鈥 / `wsm desktop-view 鈥锛坄DesktopViewCommand`锛?| 椹卞姩涓庢煡鐪嬪櫒绐楀彛锛圵inForms锛沗wsm.exe` 鏈韩灏辨槸鏌ョ湅鍣ㄥ涓伙紝涓?`wsm connect` 鐨勬棦鏈夋ā寮忎竴鑷达級 |
+
+鏂板/鏀瑰姩鏂囦欢锛歚Wsm.Connection.ContainerDesktop`锛坈sproj銆乣ContainerDesktopOptions`銆乣ContainerDesktopSession`銆?`IContainerDesktopHost`銆乣ISessionProcessLauncher`銆乣Internal/ContainerDesktopHost`銆乣Internal/SessionProcessLauncher`銆?妯″潡銆乣Agent/container-desktop-agent.ps1`锛夈€乣IContainerFileSystemAccess`銆乣WindowsContainerEngine`锛堝疄鐜拌鑳藉姏锛夈€?`CliApplication`/`CliModule`/`Wsm.Cli.csproj`銆乣WsmServiceModule`/`Wsm.Service.Host.csproj`銆乣WindowsSandboxManager.slnx`銆?`tests/鈥?Connection/ContainerDesktopHostTests.cs`銆?
+### 14.2 鍛戒护 / Commands
+
+```powershell
+# WSM 鑷繁绠＄殑娌欑锛堝紩鎿庣敤鏂拌兘鍔涜В鏋愬鍣ㄦ牴锛?wsm desktop <sandboxId> --attach
+
+# 浠绘剰杩愯涓殑瀹瑰櫒锛堝伐鍏?鍙︿竴涓墍鏈夎€咃紝渚嬪浠ｇ悊鏈嶅姟鎸佹湁鐨勫鍣級
+wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --attach
+wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --input "keys F3"
+wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --stop
+
+# 鏌ョ湅鍣紙`--attach` 浼氳嚜鍔ㄧ敤鍚屼竴鏉″懡浠ゅ惎鍔ㄥ畠锛涗篃鍙墜宸ヨ窇锛?wsm desktop-view --frame \\?\Volume{GUID}\wsm\frame.shm --seconds 120
+```
+
+`--attach` 鏄惁钀藉湪**鐢ㄦ埛 Console**鍙栧喅浜庢槸璋佸湪璺戯細浠?**SYSTEM** 璺戯紙鏈嶅姟锛夆啋 `WTSQueryUserToken`+
+`CreateProcessAsUser` 鎶婄獥鍙ｆ斁杩涗氦浜掍細璇濓紙搂13.7 宸插崟鐙獙璇侊級锛涗互**鏅€?鎻愭潈绠＄悊鍛?*璺戯紙CLI锛夆啋 鍥為€€鎴?"鍦ㄨ皟鐢ㄨ€呰嚜宸变細璇濋噷鍚姩"锛屽洜姝ょ敤鎴峰湪缁堢閲屾暡 `wsm desktop 鈥?--attach` 涔熻兘鐩存帴鐪嬪埌绐楀彛銆?
+### 14.3 鏈瀹炵幇椤哄甫淇帀/鍙戠幇鐨勯棶棰?/ Bugs found on the way
+
+| 闂 | 璇存槑 |
+|---|---|
+| **`Path.Combine("\\?\Volume{鈥", "C:\wsm")` 杩斿洖 `C:\wsm`** | 绗簩涓弬鏁版槸**鏈夋牴**璺緞鏃朵細**鏇挎崲**绗竴娈?鈬?瀹夸富鍘绘壘鑷繁鐨?`C:\wsm`锛堝疄娴嬪湪閭ｅ彴鏈哄櫒涓婄湡鐨勫缓鍑轰簡 `C:\wsm\container-desktop-agent.ps1` 涓?`agent-stop.txt`锛屽凡娓呯悊锛夈€備慨娉曪細鎶婂鍣ㄥ唴鐩綍杞垚**鐩稿**璺緞鍐嶅悎骞讹紙`ToRelativeContainerPath`锛夛紝骞跺姞鍥炲綊娴嬭瘯 |
+| 閲嶅璋冪敤浼氶噸鍚?agent | 鏈嶅姟/澶氭 CLI 璋冪敤浼氬鍚屼竴涓?`frame.shm` 鎵撴灦 鈬?`AttachAsync` 鍏堣甯уご锛?*宸插瓨鍦ㄥ氨"鏀跺吇"**锛堝箓绛夛級锛岃€屼笉鏄噸缃洰褰曞啀鍚姩 |
+| 鐭懡杩涚▼鏃犳硶 `--stop` | 浼氳瘽琛ㄦ槸杩涚▼鍐呯殑 鈬?澧炲姞 `StopAsync(computeSystemId, containerRoot)`锛岀洿鎺ュ啓鍋滄鏍囪 |
+| PowerShell 5.1 鐨?`0xC0000000`/`0xFFFFFFFF` 瀛楅潰閲?| 瑙?搂13.4锛堝鍣ㄥ唴 agent 宸茬敤鍗佽繘鍒?`[uint32]` 鍐欐硶锛?|
+
+### 14.4 楠岃瘉鐘舵€?/ Verification status
+
+- **缂栬瘧**锛歚wsm`(CLI) 涓?`Wsm.Service.Host` 鍧?**0 璀﹀憡 0 閿欒**锛沗dotnet test` **293 閫氳繃**锛堝惈 9 涓柊鐢ㄤ緥锛?  `ToRelativeContainerPath`銆佸鍣ㄦ牴涓嶈鏇挎崲鐨勫洖褰掓柇瑷€銆佽兘鍔涘紑鍏炽€佺己寮曟搸鎶ラ敊銆佺┖浼氳瘽 stop锛夈€?- **鏈哄埗**锛毬?3 宸茬鍒扮璇佹槑锛堝叡浜唴瀛樺抚 鈫?瀹夸富璇诲抚锛涙敞鍏?`F3` 鈫?鍓嶅彴绐楀彛鍙?`Find`锛汼YSTEM 鈫?鐢ㄦ埛 Console 寮€绐楋級銆?- **鏈鏈兘璺戦€氱殑**锛欳LI 绾х鍒扮锛坄wsm desktop 鈥?--attach`锛夎**瀹夸富瀹瑰櫒鏍?*鎸′綇鈥斺€?  杩?*鍏ㄦ柊**瀹瑰櫒閮?`HcsCreateProcess` 澶辫触 `0x80370105`锛?褰撳墠鐘舵€佹棤鏁?锛夛紝涓旀柊瀹瑰櫒璧锋潵鏃?`ip=` 涓虹┖
+  锛圚NS 娌＄粰鍦板潃锛夛紝`cmd.exe /c echo alive` 鍦ㄥ鍣ㄩ噷涔熷け璐ャ€傝繖鏄?*鏈哄櫒鎬?*闂锛堝杞鍣ㄥ垱寤?閿€姣佷箣鍚?  `vmcompute`/`hns` 鐘舵€侀渶瑕侀噸缃級锛屼笉鏄湰鍔熻兘鐨勭己闄枫€傛仮澶嶆楠わ細閲嶅惎 `vmcompute`/`hns`锛堟垨閲嶅惎鏈哄櫒锛夛紝
+  鐒跺悗鐢ㄤ笂闈㈢殑鍛戒护澶嶆牳锛沇SM 鑷繁 `wsm start` 鍑烘潵鐨勬矙绠辫繕鑳介『甯﹁蛋**寮曟搸瑙ｆ瀽瀹瑰櫒鏍?*鐨勪骇鍝佽矾寰勩€?
+### 14.5 鍚庣画 / Next
+
+1. 缁?gRPC 濂戠害鍔?`StartDesktop/StopDesktop/GetDesktop`锛坄wsm_service.proto` + `WsmServiceGrpc` + 瀹㈡埛绔級锛?   璁?GUI锛圵inUI锛夐€氳繃浠ｇ悊鏈嶅姟璇锋眰妗岄潰锛岃€屼笉鏄嚜宸辫捣杩涚▼锛?2. 杈撳叆閫氶亾鎹㈡垚 HCS **`MappedPipes`**锛堝畼鏂硅法 silo 閫氶亾锛夛紝鏇挎帀"姣忓懡浠や竴涓枃浠?锛?3. 鐢婚潰鎹㈡垚**椤垫枃浠惰妭 + 鎻愭潈鍙ユ焺鐩撮€?*锛埪?3.6 A 宸查獙璇佸彲琛岋級鈫?鍘绘帀 NTFS 鑴忛〉鍐欏洖锛?4. 鑴忕煩褰?+ 鍘嬬缉锛堢幇鍦?3 MB/甯?脳 5 fps 鍏ㄩ噺锛夈€?

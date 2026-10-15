@@ -7,6 +7,7 @@ using Wsm.Domain.Exceptions;
 using Wsm.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Connection.Session;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Elevation;
 using Wsm.Hcs.Storage;
@@ -38,6 +39,12 @@ public sealed class CliApplication
     private readonly IContainerImageCustomizer? _imageCustomizer;
 
     /// <summary>
+    /// Container desktop channel (frames + input for a process-isolated
+    /// container). Optional so a host without the connection layer still runs.
+    /// </summary>
+    private readonly IContainerDesktopHost? _containerDesktop;
+
+    /// <summary>
     /// The client-side RDP entry point. <c>connect</c> presents the session in
     /// this process, even when the live VM is owned by the agent service: only
     /// the connection parameters are sourced from the service (see
@@ -62,6 +69,7 @@ public sealed class CliApplication
         _serviceClient = provider.GetService<IWsmServiceClient>();
         _imageImporter = provider.GetService<IContainerImageImporter>();
         _imageCustomizer = provider.GetService<IContainerImageCustomizer>();
+        _containerDesktop = provider.GetService<IContainerDesktopHost>();
     }
 
     public async Task<int> RunAsync(string[] args)
@@ -128,6 +136,12 @@ public sealed class CliApplication
 
                 case "image":
                     return await ImageAsync(positional, options);
+
+                case "desktop":
+                    return await DesktopAsync(positional, options);
+
+                case "desktop-view":
+                    return DesktopViewAsync(options);
 
                 case "multi":
                     return Multi(options);
@@ -659,6 +673,86 @@ public sealed class CliApplication
     /// path is used unchanged.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// <c>wsm desktop [&lt;id&gt;] [--attach] [--stop] [--input "&lt;command&gt;"]
+    /// [--compute-system &lt;id&gt; --container-root &lt;path&gt;]</c> - the container
+    /// desktop channel.
+    /// <para>
+    /// <c>--attach</c> presents the desktop as a window in the <b>interactive
+    /// session</b>; without it the command only verifies that frames flow.
+    /// <c>--compute-system/--container-root</c> attach to a container this process
+    /// does not manage (tooling, or a container owned by the agent service).
+    /// </para>
+    /// </summary>
+    private async Task<int> DesktopAsync(List<string> positional, Dictionary<string, string?> options)
+    {
+        if (_containerDesktop is null)
+        {
+            Console.Error.WriteLine("The container desktop channel is not composed into this host.");
+            return 1;
+        }
+
+        var computeSystem = options.GetValueOrDefault("compute-system");
+        var containerRoot = options.GetValueOrDefault("container-root");
+        var byComputeSystem = !string.IsNullOrWhiteSpace(computeSystem) && !string.IsNullOrWhiteSpace(containerRoot);
+
+        var id = byComputeSystem ? Guid.Parse(computeSystem!) : RequireGuid(positional, 0);
+        var sandboxId = SandboxInstanceId.From(id);
+
+        if (options.ContainsKey("stop"))
+        {
+            if (byComputeSystem)
+            {
+                await _containerDesktop.StopAsync(computeSystem!, containerRoot!);
+            }
+            else
+            {
+                await _containerDesktop.StopAsync(sandboxId);
+            }
+
+            Console.WriteLine($"Container desktop {sandboxId} stopped.");
+            return 0;
+        }
+
+        var session = byComputeSystem
+            ? await _containerDesktop.AttachAsync(computeSystem!, containerRoot!)
+            : await _containerDesktop.StartAsync(sandboxId);
+
+        Console.WriteLine($"Desktop  : {session.SandboxId}");
+        Console.WriteLine($"Root     : {session.ContainerRoot}");
+        Console.WriteLine($"Frames   : {session.FramePath}");
+        Console.WriteLine($"Geometry : {session.Geometry.Width}x{session.Geometry.Height} @ {session.Geometry.Fps}fps");
+
+        var input = options.GetValueOrDefault("input");
+        if (!string.IsNullOrWhiteSpace(input))
+        {
+            await _containerDesktop.SendInputAsync(sandboxId, input!);
+            Console.WriteLine($"Input    : sent '{input}'");
+        }
+
+        if (options.ContainsKey("attach"))
+        {
+            var presented = await _containerDesktop.PresentAsync(sandboxId);
+            Console.WriteLine($"Viewer   : pid {presented.ViewerProcessId}");
+        }
+
+        return 0;
+    }
+
+    private int DesktopViewAsync(Dictionary<string, string?> options)
+    {
+        var frame = options.GetValueOrDefault("frame");
+        if (string.IsNullOrWhiteSpace(frame))
+        {
+            Console.Error.WriteLine("desktop-view requires --frame <path>.");
+            return 2;
+        }
+
+        var seconds = int.TryParse(options.GetValueOrDefault("seconds"), out var parsed) ? parsed : 0;
+        var prefix = options.GetValueOrDefault("input-prefix") ?? "input-";
+        return DesktopViewCommand.Run(frame!, seconds, prefix);
+    }
+
     private async Task<int> ConnectAsync(List<string> positional, Dictionary<string, string?> options)
     {
         var id = RequireGuid(positional, 0);

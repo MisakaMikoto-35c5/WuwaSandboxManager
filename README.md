@@ -214,6 +214,37 @@ wsm stop $id
 > 也可用 `WindowsContainer:BaseImageLayerPath` 配置项（等价于该环境变量）。
 > `wsm env` 会列出每个引擎的可用性。
 
+### 容器的交互式会话（进程隔离）
+
+Microsoft 的容器镜像把**交互式会话关掉了**：镜像当前控制集里的
+`Session Manager\NumberOfInitialSessions = 1`（姊妹控制集仍是默认的 `2`），于是 `smss` 只创建
+services 会话，`winlogon.exe` —— 以及 `LogonUI`、登录桌面、shell 链 —— **从不启动**。
+把它改成 `2` 后重建容器，console 会话与登录链就会真的起来（已复现多次）：
+
+```powershell
+wsm elevate
+# 对已导入的镜像打补丁（也可在导入时加尾部 --desktop）
+wsm image desktop C:\wsm-images\servercore-ltsc2022
+
+$env:WSM_CONTAINER_BASE_IMAGE = 'C:\wsm-images\servercore-ltsc2022'
+$id = (wsm create --name desk --engine container --memory 4096 --cpu 2 --networking enable)
+wsm host $id
+wsm exec $id cmd.exe /c qwinsta     # 应能看到  console  <id>  Conn
+```
+
+> **注意：这不能让你"远程进桌面"。** 进程隔离容器里 RDP 监听器被 `termsrv` 主动拒绝
+> （`WTSIsServerContainer` → “TS in container and so Remote Connection is not allow”），
+> 已逐一试过并全部失败的开关包括 `ContainerMode`、`AllowListenersInsideArgonContainer`
+> （5 个位置 + 环境变量）、`EditionID=ContainerOSPlus`、RDP 策略项等。想看画面需要自建
+> **会话内截屏/输入代理**，或改用 Hyper-V 隔离。完整证据见
+> [docs/investigation/13-container-desktop-and-rdp.md](docs/investigation/13-container-desktop-and-rdp.md)。
+
+容器桌面的引擎选项（默认关闭）：`WindowsContainer:Desktop`
+（`Enabled` / `UserName` / `Password` / `Shell` / `AttemptTcpRdp`），也可用环境变量
+`WSM_CONTAINER_DESKTOP=1` 打开。镜像是精简的且**没有 `explorer.exe`**，所以 `Shell` 默认是
+`cmd.exe`；配了 `Password` 才会写自动登录，否则会话停在 `LogonUI` 登录界面（也是桌面）。
+`AttemptTcpRdp` 是**实验性且已知无效**的 RDP 尝试，保留原因见上面的文档。
+
 ### 桌面与 mstsc（用 VM 隔离）
 
 **容器（进程隔离**或** Hyper-V 隔离）不支持图形界面与 RDP 交互会话**——这是 Microsoft 的设计
@@ -221,7 +252,8 @@ wsm stop $id
 “Containers don't support GUI”、“An application using RDP can't be containerized as-is”；
 即便是 “Desktop Experience” 的 `windows/server` 镜像，官方也明确 **没有 GUI**）。
 实测：WS2022 容器内 `TermService` 能启动、`WinStations\RDP-Tcp` 配置存在，但**永远不监听 3389**，
-因此 `mstsc` 无法连入容器。
+因此 `mstsc` 无法连入容器。（容器内的**交互式会话本身是可以打开的**，见上一节；打不开的是
+RDP 这条通道——`termsrv` 在容器里主动拒绝创建监听器。）
 
 **要进入桌面并用 `mstsc` 连接，必须用 VM/Hyper-V 隔离**（Windows Sandbox / HCS 引擎，不是容器）。
 该引擎默认走命名管道（应用内 `RDPBASE` + `mstscax` 呈现桌面）；要改用标准 `mstsc`，选择

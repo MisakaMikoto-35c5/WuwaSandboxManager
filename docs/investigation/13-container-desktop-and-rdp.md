@@ -252,14 +252,14 @@ net start TermService
 
 分支 Branch: **`feat/windows-container-desktop`**（基于 `main`）。
 
-| 步骤 Step | 内容 What | 状态 Status |
-|---|---|---|
-| 1 | 本文档 + 调查索引更新 / this document + index | 记录 record |
-| 2 | `tools/container-probe`：本次用到的 HCS/WCOW 探针与脚本 / the probe + scripts used | 记录 record |
-| 3 | `Wsm.Hcs.Storage`：离线注册表单元工具 + 镜像定制器（`NumberOfInitialSessions=2`） | 可用 works |
-| 4 | 镜像导入可选「桌面预处理」+ CLI `wsm image desktop` | 可用 works |
-| 5 | `WindowsContainerEngine` 桌面选项（自动登录 / Shell / 可选 RDP 尝试） | 自动登录与 Shell 可用；**RDP 部分已知无效，仅作记录** |
-| 6 | 测试与 README / tests and README | 可用 works |
+| 步骤 Step | 提交 Commit | 内容 What | 状态 Status |
+|---|---|---|---|
+| 1 | `53aa774` | 本文档 + 调查索引更新 / this document + index | 记录 record |
+| 2 | `d3b1db2` | `tools/container-probe`：本次用到的 HCS/WCOW 探针与一次性脚本 / the probe + the raw scripts | 记录 record |
+| 3 | `86d405b` | `Wsm.Hcs.Storage`：离线注册表单元工具（`RegLoadKey` + 权限）+ 镜像定制器（`NumberOfInitialSessions=2`）+ 10 个单测 | **可用** works |
+| 4 | `94e32f2` | CLI：`wsm image desktop <layerPath>`、`wsm image import … --desktop`（已提权实测通过） | **可用** works |
+| 5 | `aad2c43` | `WindowsContainerEngine` 桌面选项（Shell / 自动登录 / 可选 RDP 尝试）+ 17 个单测 | Shell 与自动登录可用；**RDP 部分已知无效，仅作记录** |
+| 6 | (本步 / this step) | README 章节 + 文档回填 / README section + doc backfill | 记录 record |
 
 > 说明：按用户要求，**"无论是否可用"都放进本分支**——RDP 相关代码保留但明确标注
 > `Experimental`/已知无效，避免误用。

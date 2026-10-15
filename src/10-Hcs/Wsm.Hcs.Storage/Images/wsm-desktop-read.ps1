@@ -39,6 +39,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Logging comes first, and the whole body runs inside a try: a failure in any of the C#
+# blocks below used to kill the script before its first log line, which looked exactly
+# like "the read side never started".
+$log = Join-Path $AgentDirectory 'read.log'
+function Log([string] $message) {
+    try { Add-Content -Path $log -Value (('{0} {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $message)) -ErrorAction SilentlyContinue } catch { }
+}
+Log ("starting pid=$PID user=$([Environment]::UserName) interactive=$([Environment]::UserInteractive) dir=$AgentDirectory")
+
+try {
+
 Add-Type -AssemblyName System.Drawing
 
 Add-Type -TypeDefinition @'
@@ -226,6 +238,18 @@ public static class WsmMirrorWindows {
         return SetWindowPos(new IntPtr(id), IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
+    /// <summary>A window's DC, so a memory DC can be derived where there is no screen DC.</summary>
+    public static IntPtr WindowDc(long id) { return GetWindowDC(new IntPtr(id)); }
+
+    /// <summary>Releases a DC obtained from <see cref="WindowDc"/>.</summary>
+    public static void ReleaseWindowDc(long id, IntPtr dc) { ReleaseDC(new IntPtr(id), dc); }
+
+    /// <summary>The handle of the first visible titled window, or 0.</summary>
+    public static long FirstWindow(string titleFilter) {
+        var list = List(titleFilter);
+        return list.Count > 0 ? list[0].Id : 0L;
+    }
+
     /// <summary>Brings a window to the foreground (a click on a mirrored window).</summary>
     public static bool Activate(long id) {
         const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002;
@@ -317,6 +341,25 @@ if ($dib -eq [IntPtr]::Zero) {
     throw ("CreateDIBSection failed: " + $dibError)
 }
 $memoryDc = [WsmMirrorDib]::CreateCompatibleDC([IntPtr]::Zero)
+if ($memoryDc -eq [IntPtr]::Zero) {
+    # A session whose desktop has no display device may refuse a screen-compatible DC
+    # (the container's service session is exactly that). A window DC exists wherever
+    # windows do, so derive the memory DC from one.
+    Log 'CreateCompatibleDC(0) failed; deriving a memory DC from a window DC'
+    $probeId = [WsmMirrorWindows]::FirstWindow($TitleFilter)
+    if ($probeId -eq 0) { $probeId = [WsmMirrorWindows]::FirstWindow('') }
+    if ($probeId -ne 0) {
+        $windowDc = [WsmMirrorWindows]::WindowDc($probeId)
+        if ($windowDc -ne [IntPtr]::Zero) {
+            $memoryDc = [WsmMirrorDib]::CreateCompatibleDC($windowDc)
+            [WsmMirrorWindows]::ReleaseWindowDc($probeId, $windowDc)
+        }
+    }
+}
+if ($memoryDc -eq [IntPtr]::Zero) {
+    Log 'no memory DC could be created; giving up'
+    throw 'CreateCompatibleDC failed'
+}
 [void][WsmMirrorDib]::SelectObject($memoryDc, $dib)
 Log ("DIB section over shared memory ready (dc=$memoryDc dib=$dib)")
 
@@ -414,3 +457,9 @@ try { [void][WsmMirrorDib]::DeleteObject($dib); [void][WsmMirrorDib]::DeleteDC($
 [void][WsmMirrorNative]::UnmapViewOfFile($base)
 [void][WsmMirrorNative]::CloseHandle($mapping)
 [void][WsmMirrorNative]::CloseHandle($file)
+
+}
+catch {
+    Log ("FATAL: " + $_.Exception.ToString())
+    throw
+}

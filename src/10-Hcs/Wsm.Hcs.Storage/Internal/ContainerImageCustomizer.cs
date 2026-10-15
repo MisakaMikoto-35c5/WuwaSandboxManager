@@ -42,6 +42,9 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     private const string DefaultUserNameValue = "DefaultUserName";
     private const string DefaultPasswordValue = "DefaultPassword";
 
+    /// <summary>The LSA switch that permits auto-logon with a blank password.</summary>
+    private const string LimitBlankPasswordValue = "LimitBlankPasswordUse";
+
     /// <summary>Folder inside the container that receives the payload files.</summary>
     private const string PayloadFolder = "wsm";
 
@@ -198,6 +201,14 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
                 _logger.LogInformation(
                     "The base image will log on '{User}' automatically (blank password: {Blank}).",
                     options.AutoLogonUser, string.IsNullOrEmpty(options.AutoLogonPassword));
+
+                if (string.IsNullOrEmpty(options.AutoLogonPassword))
+                {
+                    // Container images ship the built-in accounts with no password, and Windows
+                    // refuses a blank-password auto-logon unless the LSA allows it. Without this
+                    // the container stops at LogonUI and nothing that needs a logon runs.
+                    AllowBlankPasswordAutoLogon(layerPath);
+                }
             }
 
             _logger.LogInformation(
@@ -212,6 +223,35 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
 
         return new ContainerImageDesktopPrep(
             hiveFile, before, after, payloadPaths, options?.Shell, options?.AutoLogonUser);
+    }
+
+    /// <summary>
+    /// Sets <c>Lsa\LimitBlankPasswordUse = 0</c> in every control set of the image's SYSTEM
+    /// hive, so auto-logon works with the blank password container images ship.
+    /// </summary>
+    private void AllowBlankPasswordAutoLogon(string layerPath)
+    {
+        var hiveFile = ResolveSystemHive(layerPath);
+        using var hive = OfflineRegistryHive.Load(hiveFile);
+        using var root = hive.OpenRoot()
+            ?? throw new SandboxBackendException($"The offline hive '{hiveFile}' has no root key.", 0);
+
+        foreach (var controlSet in root.GetSubKeyNames()
+                     .Where(name => name.StartsWith(ControlSetPrefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            using var lsa = hive.OpenSubKey($@"{controlSet}\Control\Lsa", writable: true);
+            if (lsa is null)
+            {
+                _logger.LogWarning(
+                    "The image hive '{Hive}' has no '{Set}\\Control\\Lsa'; skipping it.", hiveFile, controlSet);
+                continue;
+            }
+
+            lsa.SetValue(LimitBlankPasswordValue, 0, RegistryValueKind.DWord);
+            _logger.LogInformation(
+                "The base image '{Hive}': {Set}\\Control\\Lsa\\{Value} -> 0 (blank-password auto-logon).",
+                hiveFile, controlSet, LimitBlankPasswordValue);
+        }
     }
 
     /// <summary>Appends our hook to the comma-separated <c>Userinit</c> list, idempotently.</summary>
@@ -229,7 +269,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         return string.Join(",", entries);
     }
 
-    private static string InstallPayload(string layerPath, out IReadOnlyList<string> containerPaths)
+    private string InstallPayload(string layerPath, out IReadOnlyList<string> containerPaths)
     {
         var directory = Path.Combine(Path.GetFullPath(layerPath), "Files", PayloadFolder);
         Directory.CreateDirectory(directory);
@@ -237,11 +277,24 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         var installed = new List<string>();
         foreach (var file in PayloadFiles)
         {
+            var target = Path.Combine(directory, file);
             var resource = $"Wsm.Hcs.Storage.Images.{file}";
-            using var stream = typeof(ContainerImageCustomizer).Assembly.GetManifestResourceStream(resource)
-                ?? throw new SandboxBackendException($"The embedded image payload '{resource}' is missing.", 0);
-            using var target = File.Create(Path.Combine(directory, file));
-            stream.CopyTo(target);
+            try
+            {
+                using var stream = typeof(ContainerImageCustomizer).Assembly.GetManifestResourceStream(resource)
+                    ?? throw new SandboxBackendException($"The embedded image payload '{resource}' is missing.", 0);
+                using var output = File.Create(target);
+                stream.CopyTo(output);
+            }
+            catch (IOException ex)
+            {
+                // A layer file can be pinned by whatever created the image, and refusing to patch
+                // the registry because of one locked payload file would be the wrong trade.
+                _logger.LogWarning(
+                    "Could not refresh the image payload '{File}' ({Message}); keeping the copy already " +
+                    "in the image.", target, ex.Message);
+            }
+
             installed.Add($@"C:\{PayloadFolder}\{file}");
         }
 

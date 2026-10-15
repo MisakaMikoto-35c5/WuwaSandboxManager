@@ -264,27 +264,31 @@ internal sealed class WindowMirrorDesktopProvider
 
         Directory.CreateDirectory(directory);
         InstallPayload(directory, "wsm-desktop-read.ps1");
-        InstallPayload(directory, "wsm-desktop-read.cmd");
 
         foreach (var stale in new[] { Options.MirrorFileName, Options.StopFileName, "read.out", "read.log" })
         {
             TryDelete(Path.Combine(directory, stale));
         }
 
-        // A starter whose quotes live in a plain .cmd, so the launch command line stays
-        // free of nested quotes; `start` detaches, so HCS does not wait for the read side.
-        const string starterName = "wsm-mirror-start.cmd";
-        var containerDirectory = ContainerDesktopPaths.ContainerAgentDirectory;
-        var starter = string.Join(
-            "\r\n",
-            "@echo off",
-            $"start \"\" /d \"{containerDirectory}\" cmd.exe /c wsm-desktop-read.cmd",
-            string.Empty);
-        File.WriteAllText(Path.Combine(directory, starterName), starter, new UTF8Encoding(false));
+        // The read side detaches itself (see its -Detached switch), so HCS does not have to
+        // wait for it - and no cmd/`start` sits in between, which would keep the launcher
+        // alive for the child's lifetime and park HCS process creation for its timeout.
+        var container = ContainerDesktopPaths.ContainerAgentDirectory;
+        var command = string.Join(
+            ' ',
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File",
+            ContainerDesktopPaths.ReadAgent,
+            "-AgentDirectory", container,
+            "-MirrorFile", Options.MirrorFileName,
+            "-InputPrefix", Options.InputFilePrefix,
+            "-StopFile", Options.StopFileName,
+            "-Width", Options.Width.ToString(CultureInfo.InvariantCulture),
+            "-Height", Options.Height.ToString(CultureInfo.InvariantCulture),
+            "-Fps", Options.Fps.ToString(CultureInfo.InvariantCulture),
+            "-Seconds", Options.AgentLifetimeSeconds.ToString(CultureInfo.InvariantCulture));
 
-        var launcher = Path.Combine(containerDirectory, starterName);
         var exitCode = await engine
-            .ExecuteAsync(request.SandboxId, new LogonCommand($"cmd.exe /c {launcher}"), cancellationToken)
+            .ExecuteAsync(request.SandboxId, new LogonCommand(command), cancellationToken)
             .ConfigureAwait(false);
 
         _logger.LogInformation(

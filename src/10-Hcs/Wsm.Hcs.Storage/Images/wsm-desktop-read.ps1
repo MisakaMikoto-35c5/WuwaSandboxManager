@@ -35,19 +35,52 @@ param(
     [int] $Height = 768,
     [int] $Fps = 4,
     [int] $Seconds = 86400,
-    [string] $TitleFilter = ''
+    [string] $TitleFilter = '',
+    [string] $StartProgram = '',
+    [switch] $Detached
 )
 
 $ErrorActionPreference = 'Stop'
 
-# Logging comes first, and the whole body runs inside a try: a failure in any of the C#
-# blocks below used to kill the script before its first log line, which looked exactly
-# like "the read side never started".
+# Logging comes first: both the parent (which detaches) and the child (which does the work)
+# write here, and the whole body runs inside a try so a failure in the C# blocks below can
+# no longer kill the script before its first log line (which looked exactly like
+# "the read side never started").
 $log = Join-Path $AgentDirectory 'read.log'
 function Log([string] $message) {
     try { Add-Content -Path $log -Value (('{0} {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $message)) -ErrorAction SilentlyContinue } catch { }
 }
-Log ("starting pid=$PID user=$([Environment]::UserName) interactive=$([Environment]::UserInteractive) dir=$AgentDirectory")
+Log ("invoked pid=$PID detached=$($Detached.IsPresent) user=$([Environment]::UserName) dir=$AgentDirectory")
+
+# Self-detach: HCS waits for the process it created to exit, so the read side must not be that
+# process. It re-launches itself through Start-Process (which detaches) and exits - so the real
+# read side is created exactly like any other process in the session (no cmd/`start`, which kept
+# the launcher alive for the child's lifetime and parked HCS process creation).
+if (-not $Detached) {
+    $parts = @(
+        '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Detached'
+        '-AgentDirectory "' + $AgentDirectory + '"'
+        '-MirrorFile "' + $MirrorFile + '"'
+        '-InputPrefix "' + $InputPrefix + '"'
+        '-StopFile "' + $StopFile + '"'
+        '-Width ' + $Width
+        '-Height ' + $Height
+        '-Fps ' + $Fps
+        '-Seconds ' + $Seconds
+    )
+    if ($TitleFilter) { $parts += ('-TitleFilter "' + $TitleFilter + '"') }
+    if ($StartProgram) { $parts += ('-StartProgram "' + $StartProgram + '"') }
+    $commandLine = $parts -join ' '
+    Log ('detaching: powershell.exe ' + $commandLine)
+    try {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $commandLine -WindowStyle Hidden | Out-Null
+        Log 'parent exiting after detaching'
+    } catch {
+        Log ('detach failed: ' + $_.Exception.Message)
+        throw
+    }
+    exit 0
+}
 
 try {
 
@@ -78,6 +111,8 @@ public static class WsmMirrorNative {
     [DllImport("kernel32.dll")] public static extern int GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, int rop);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder info, int length, out int needed);
 
@@ -203,10 +238,14 @@ public static class WsmMirrorWindows {
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int command);
+    [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr h, int command);
+    [DllImport("kernel32.dll")] static extern int GetCurrentProcessId();
     public static List<Entry> List(string titleFilter) {
         var list = new List<Entry>();
+        int self = GetCurrentProcessId();
         EnumWindows(delegate(IntPtr h, IntPtr l) {
-            if (!IsWindowVisible(h)) return true;
             if (IsIconic(h)) return true;
             if ((GetWindowLong(h, -20) & 0x00000080) != 0) return true; // WS_EX_TOOLWINDOW
             if (GetPropW(h, "WSM_MIRROR_HOST") != IntPtr.Zero) return true; // never mirror a mirror
@@ -218,12 +257,28 @@ public static class WsmMirrorWindows {
             RECT r; GetWindowRect(h, out r);
             int w = r.R - r.L, hh = r.B - r.T;
             if (w < 24 || hh < 24) return true;
+            int pid; GetWindowThreadProcessId(h, out pid);
+            if (pid == self) return true;   // never mirror our own windows
             var e = new Entry();
             e.Id = h.ToInt64(); e.X = r.L; e.Y = r.T; e.W = w; e.H = hh; e.Title = sb.ToString();
             list.Add(e);
             return true;
         }, IntPtr.Zero);
         return list;
+    }
+
+    /// <summary>
+    /// Best effort: a window created in a service session may not carry WS_VISIBLE, and a hidden
+    /// window yields nothing from PrintWindow. ShowWindow is unreliable across processes, but
+    /// ShowWindowAsync and SetWindowPos(SWP_SHOWWINDOW) are made for exactly that.
+    /// </summary>
+    public static bool Show(long id) {
+        var h = new IntPtr(id);
+        const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004,
+                   SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
+        return ShowWindowAsync(h, 5) |
+            SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -264,6 +319,33 @@ public static class WsmMirrorWindows {
         return SetWindowPos(new IntPtr(id), IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
+    /// <summary>Why the window list is (not) what we expect - written to the log once.</summary>
+    public static string Diagnose() {
+        var sb = new StringBuilder();
+        int total = 0, visible = 0, titled = 0, sized = 0;
+        var samples = new StringBuilder();
+        EnumWindows(delegate(IntPtr h, IntPtr l) {
+            total++;
+            bool vis = IsWindowVisible(h);
+            if (vis) visible++;
+            var t = new StringBuilder(300);
+            GetWindowTextW(h, t, t.Capacity);
+            if (t.Length > 0) titled++;
+            RECT r; GetWindowRect(h, out r);
+            int w = r.R - r.L, hh = r.B - r.T;
+            if (vis && t.Length > 0 && w >= 24 && hh >= 24) sized++;
+            if (samples.Length < 600) {
+                int pid; GetWindowThreadProcessId(h, out pid);
+                samples.Append(string.Format("[0x{0:X} pid={1} vis={2} iconic={3} ex=0x{4:X} {5}x{6} \"{7}\"] ",
+                    h.ToInt64(), pid, vis, IsIconic(h), GetWindowLong(h, -20), w, hh, t.ToString()));
+            }
+            return true;
+        }, IntPtr.Zero);
+        sb.Append(string.Format("top-level={0} visible={1} titled={2} sized={3} :: {4}",
+            total, visible, titled, sized, samples.ToString()));
+        return sb.ToString();
+    }
+
     /// <summary>A window's DC, so a memory DC can be derived where there is no screen DC.</summary>
     public static IntPtr WindowDc(long id) { return GetWindowDC(new IntPtr(id)); }
 
@@ -284,7 +366,142 @@ public static class WsmMirrorWindows {
 }
 '@
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class WsmMirrorDesktops {
+    // Without this the names come back as single characters (classic ANSI/Unicode marshalling
+    // mismatch), so every OpenWindowStation fails with ERROR_FILE_NOT_FOUND.
+    [UnmanagedFunctionPointer(CallingConvention.Winapi, CharSet = CharSet.Unicode)]
+    public delegate bool NameProc(string name, IntPtr lparam);
+    [DllImport("user32.dll", EntryPoint = "EnumWindowStationsW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool EnumWindowStations(NameProc proc, IntPtr lparam);
+    [DllImport("user32.dll", EntryPoint = "EnumDesktopsW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool EnumDesktops(IntPtr winsta, NameProc proc, IntPtr lparam);
+    [DllImport("user32.dll", EntryPoint = "OpenWindowStationW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr OpenWindowStationW(string name, bool inherit, uint access);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool SetProcessWindowStation(IntPtr winsta);
+    [DllImport("user32.dll", EntryPoint = "OpenDesktopW", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr OpenDesktopW(string name, int flags, bool inherit, uint access);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool SetThreadDesktop(IntPtr desktop);
+    [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
+    [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(int threadId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern bool GetUserObjectInformationW(IntPtr h, int index, StringBuilder info, int len, out int needed);
+    [DllImport("kernel32.dll")] static extern int GetCurrentThreadId();
+
+    public static string Name(IntPtr handle) {
+        if (handle == IntPtr.Zero) return "(null)";
+        var sb = new StringBuilder(256); int needed;
+        GetUserObjectInformationW(handle, 2, sb, sb.Capacity * 2, out needed);
+        return sb.ToString();
+    }
+
+    public static string Current() {
+        return Name(GetProcessWindowStation()) + @"\" + Name(GetThreadDesktop(GetCurrentThreadId()));
+    }
+
+    public static List<string> Stations() {
+        var list = new List<string>();
+        EnumWindowStations(delegate(string n, IntPtr l) { list.Add(n); return true; }, IntPtr.Zero);
+        return list;
+    }
+
+    public static List<string> Desktops(IntPtr winsta) {
+        var list = new List<string>();
+        EnumDesktops(winsta, delegate(string n, IntPtr l) { list.Add(n); return true; }, IntPtr.Zero);
+        return list;
+    }
+
+    public static IntPtr OpenStation(string name) {
+        // Minimal rights: asking for WINSTA_ALL_ACCESS is denied (err 5) even for our own
+        // station, while enumerate + read attributes is granted.
+        return OpenWindowStationW(name, false, 0x0103);
+    }
+
+    public static IntPtr OpenDesk(string name) {
+        const uint DESKTOP_READOBJECTS = 0x0001, DESKTOP_ENUMERATE = 0x0040;
+        return OpenDesktopW(name, 0, false, DESKTOP_READOBJECTS | DESKTOP_ENUMERATE);
+    }
+    public static bool UseStation(IntPtr winsta) { return SetProcessWindowStation(winsta); }
+    public static bool UseDesktop(IntPtr desktop) { return SetThreadDesktop(desktop); }
+}
+'@
+
+# ---- attach to the desktop that actually has windows -------------------------------
+# A helper process in a container does not necessarily inherit the same window station /
+# desktop as the GUI processes of that session (measured: our own console window was the only
+# window on the inherited desktop while notepad lived elsewhere). Window handles are
+# per-desktop, so the read side has to BE on the desktop it captures.
+$attached = ''
+$bestCount = -1
+$stations = [WsmMirrorDesktops]::Stations()
+Log ("window stations visible in this session: " + $stations.Count + " [" + ($stations -join ', ') + "]")
+foreach ($stationName in $stations) {
+    $stationHandle = [WsmMirrorDesktops]::OpenStation($stationName)
+    if ($stationHandle -eq [IntPtr]::Zero) {
+        Log ("window station '$stationName': open failed (err " + [Runtime.InteropServices.Marshal]::GetLastWin32Error() + ")")
+        continue
+    }
+    if (-not [WsmMirrorDesktops]::UseStation($stationHandle)) {
+        Log ("window station '$stationName': cannot attach (err " + [Runtime.InteropServices.Marshal]::GetLastWin32Error() + ")")
+        continue
+    }
+    $desktopNames = [WsmMirrorDesktops]::Desktops($stationHandle)
+    Log ("station '$stationName' -> desktops: [" + ($desktopNames -join ', ') + "]")
+    foreach ($desktopName in $desktopNames) {
+        $desktopHandle = [WsmMirrorDesktops]::OpenDesk($desktopName)
+        if ($desktopHandle -eq [IntPtr]::Zero) {
+            Log ("  desktop '$desktopName': open failed (err " + [Runtime.InteropServices.Marshal]::GetLastWin32Error() + ")")
+            continue
+        }
+        if (-not [WsmMirrorDesktops]::UseDesktop($desktopHandle)) {
+            Log ("  desktop '$desktopName': cannot attach (err " + [Runtime.InteropServices.Marshal]::GetLastWin32Error() + ")")
+            continue
+        }
+        $count = ([WsmMirrorWindows]::List($TitleFilter)).Count
+        Log ("  candidate ${stationName}\$desktopName -> $count window(s)")
+        if ($count -gt $bestCount) {
+            $bestCount = $count
+            $attached = "$stationName\$desktopName"
+        }
+    }
+}
+if ($bestCount -gt 0) {
+    # Attach for real (re-open and switch), so every later call sees that desktop.
+    foreach ($stationName in [WsmMirrorDesktops]::Stations()) {
+        if ($attached -notlike ($stationName + '\*')) { continue }
+        $stationHandle = [WsmMirrorDesktops]::OpenStation($stationName)
+        if ($stationHandle -eq [IntPtr]::Zero) { continue }
+        [void][WsmMirrorDesktops]::UseStation($stationHandle)
+        $desktopName = $attached.Substring($stationName.Length + 1)
+        $desktopHandle = [WsmMirrorDesktops]::OpenDesk($desktopName)
+        if ($desktopHandle -ne [IntPtr]::Zero) { [void][WsmMirrorDesktops]::UseDesktop($desktopHandle) }
+    }
+    Log ("attached to $attached ($bestCount window(s)); now on " + [WsmMirrorDesktops]::Current())
+} else {
+    Log ("no desktop with windows found in this session; staying on " + [WsmMirrorDesktops]::Current())
+}
+
 # ---- shared mirror file ----
+# Optionally start the program we are supposed to mirror: a child inherits this process's
+# window station and desktop, which is the only reliable way to land on the same desktop as
+# the GUI - inside a container, opening another window station is denied outright (measured:
+# every OpenWindowStation fails with ERROR_ACCESS_DENIED, even for our own station).
+if ($StartProgram) {
+    try {
+        # -WindowStyle Normal matters: this process's console is hidden, and a child started
+        # without it inherits SW_HIDE - the window then exists but is never WS_VISIBLE, so it
+        # is not something to mirror.
+        Start-Process -FilePath $StartProgram -WindowStyle Normal | Out-Null
+        Log ("started '$StartProgram' from the read side (same desktop as this process)")
+        Start-Sleep -Seconds 3
+    } catch {
+        Log ("StartProgram '$StartProgram' failed: " + $_.Exception.Message)
+    }
+}
 $stride = $Width * 4
 $pixels = $stride * $Height
 $tableOffset = 64 + $pixels
@@ -389,6 +606,14 @@ if ($memoryDc -eq [IntPtr]::Zero) {
 [void][WsmMirrorDib]::SelectObject($memoryDc, $dib)
 Log ("DIB section over shared memory ready (dc=$memoryDc dib=$dib)")
 
+# The screen is read into a normal managed bitmap and moved into the shared DIB in one call:
+# this is the capture path that was proven to work inside a container (doc section 13), while
+# drawing directly into a DIB section over a file mapping failed there.
+$captureBounds = New-Object Drawing.Rectangle(0, 0, $Width, $Height)
+$captureSize = New-Object Drawing.Size($Width, $Height)
+$captureBitmap = New-Object Drawing.Bitmap($Width, $Height, [Drawing.Imaging.PixelFormat]::Format32bppRgb)
+$captureGraphics = [Drawing.Graphics]::FromImage($captureBitmap)
+
 Log ("read side started pid=$PID ${Width}x${Height} stride=$stride fps=$Fps seconds=$Seconds mirror=$mirrorPath")
 
 $sequence = [int64]0
@@ -404,9 +629,27 @@ while ((Get-Date) -lt $deadline) {
         $marshal::WriteInt32($base, 32, 1)   # busy
 
         $windows = [WsmMirrorWindows]::List($TitleFilter)
+        if ($sequence -eq 0) { Log ("diagnose: " + [WsmMirrorWindows]::Diagnose()) }
         $sequence++
         $count = [Math]::Min($windows.Count, [int](8192 / 40))
         $marshal::WriteInt32($base, 40, $count)
+
+        # Capture once per pass, straight from the screen DC into the shared DIB section. The
+        # container's service session does have a screen DC (measured), and this is a single
+        # GDI copy - the per-window PrintWindow path stays as the fallback for sessions that
+        # do not (where a hidden window also has no surface to read).
+        $captured = $false
+        try {
+            $captureGraphics.CopyFromScreen(0, 0, 0, 0, $captureSize)
+            $data = $captureBitmap.LockBits($captureBounds, [Drawing.Imaging.ImageLockMode]::ReadOnly, [Drawing.Imaging.PixelFormat]::Format32bppRgb)
+            try {
+                [WsmMirrorNative]::RtlMoveMemory($pixelSection, $data.Scan0, [UIntPtr]([uint64]($stride * $Height)))
+                $captured = $true
+            } finally { $captureBitmap.UnlockBits($data) }
+        } catch {
+            if ($sequence -eq 1) { Log ('screen capture failed: ' + $_.Exception.Message) }
+        }
+        if (-not $captured -and $sequence -eq 1) { Log 'falling back to per-window PrintWindow' }
 
         for ($i = 0; $i -lt $count; $i++) {
             $w = $windows[$i]
@@ -414,10 +657,9 @@ while ((Get-Date) -lt $deadline) {
             $right = [Math]::Min($Width, $w.X + $w.W); $bottom = [Math]::Min($Height, $w.Y + $w.H)
             $cw = $right - $x; $ch = $bottom - $y
 
-            # GDI paints the window straight into the shared DIB section: no copy at all,
-            # and no screen DC (which the container's service session does not have).
-            $painted = $false
-            if ($cw -gt 0 -and $ch -gt 0) {
+            $painted = $captured
+            if (-not $captured -and $cw -gt 0 -and $ch -gt 0) {
+                if ($sequence -le 2) { [void][WsmMirrorWindows]::Show($w.Id) }
                 $painted = [WsmMirrorWindows]::Paint($memoryDc, $w.Id, $x, $y, $cw, $ch)
             }
 

@@ -223,6 +223,8 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         {
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         startInfo.ArgumentList.Add("-xf");
         startInfo.ArgumentList.Add(tarball);
@@ -232,13 +234,26 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         using var process = Process.Start(startInfo)
             ?? throw new SandboxBackendException("Failed to start tar.exe to extract the image layer.", 0);
 
+        // Read both pipes asynchronously so a chatty tar cannot deadlock us, and
+        // keep its diagnosis: a bare "tar.exe exited with 1" is unusable when a
+        // layer contains an entry Windows will not create (long paths, reserved
+        // names, ...).
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
         process.WaitForExit();
+        var details = (stderr.GetAwaiter().GetResult() + Environment.NewLine + stdout.GetAwaiter().GetResult()).Trim();
+
         if (process.ExitCode != 0)
         {
             throw new SandboxBackendException(
-                $"Extracting the image layer failed (tar.exe exited with {process.ExitCode}).", 0);
+                $"Extracting the image layer failed (tar.exe exited with {process.ExitCode})."
+                + (details.Length == 0 ? string.Empty : $" tar said: {Truncate(details, 4000)}"),
+                0);
         }
     }
+
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..max] + " ...";
 
     private static void TryDelete(string path)
     {

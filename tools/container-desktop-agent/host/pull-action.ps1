@@ -1,1 +1,1 @@
-if (Test-Path 'C:\wsm\shot.png') { [Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\wsm\shot.png')) } else { 'MISSING' }
+if (Test-Path 'C:\wsm\find.png') { [Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\wsm\find.png')) } else { 'MISSING' }

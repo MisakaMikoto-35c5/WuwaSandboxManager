@@ -27,6 +27,7 @@ for the measurements.
 | `session-run.ps1` | in the container (services session) | Borrows the token of a process that lives in another session (winlogon/LogonUI/csrss) and starts a command line there on a chosen desktop (`winsta0\default`, `winsta0\Winlogon`). Tries impersonation-token `CreateProcessAsUser` first, then the `CreateProcessWithTokenW` fallbacks, and reports which one worked *and which session the child actually landed in*. Caches the compiled helper in `SessionLauncher.dll` (the in-box compiler takes 20-40 s cold). Also accepts `-ArgumentFile` (`key=value`) so a scheduled task can drive it quote-free. |
 | `session-run-as-system.ps1` | in the container | Runs `session-run.ps1` **as SYSTEM** through a one-shot scheduled task (`schtasks /ru SYSTEM`), because a container administrator's token lacks `SeAssignPrimaryTokenPrivilege`/`SeTcbPrivilege`. (Still hits the silo's cross-session denial, but it is the correct shape for a host that allows it.) |
 | `deskcap.ps1` | in the container, on the target desktop | Captures the desktop with `Graphics.CopyFromScreen` and either serves PNGs over TCP (`[4-byte length][PNG]` per connection) or writes one PNG with `-Once`. Reports the window station, desktop, input desktop and screen size in its log/banner. |
+| `deskinput.ps1` | in the container, on the target desktop | **Input injection** (the other half of a usable desktop). Actions: `info` (window station / desktop / input desktop / cursor / foreground window), `move`, `click`, `keys` (`F3`, `CTRL+S`, `ALT+F4`), `text`, `serve -Port` (a line protocol), and `script -TextFile` (one command per line - use this to avoid nested quoting). Verified: injected `F3` turned the Registry Editor's foreground window into its `Find` dialog. |
 | `agent.cmd` | as the console session's shell (`Winlogon\Shell`) | Writes a proof file, starts `regedt32.exe` + a console, and starts `deskcap.ps1`. Must keep running (winlogon logs the session off if the shell exits). |
 | `agent.ps1` | as the console session's shell (alternative) | Same, but as a single PowerShell process. |
 
@@ -46,6 +47,17 @@ for the measurements.
   change).
 * Screenshot of a container desktop (Registry Editor drawn on the session's
   active desktop, captured with `deskcap.ps1 -Once`): see the investigation doc.
+* **Input reaches the desktop too.** With the agent running on the session's
+  *active* desktop, `deskinput.ps1 -Action keys -Keys F3` changed the foreground
+  window from `Registry Editor` to its `Find` dialog
+  (`foreground=0x6006C pid=33136 'Find'`), and the dialog is visible in the next
+  `deskcap.ps1` frame.
+* **Scripts must be PowerShell 5.1.** Server Core has 5.1 only; PS7-only syntax
+  (e.g. `$b = if (…) {…} else {…}`) is a *parse* error and a hidden
+  `powershell -File` child then exits **silently** - no output, no log. Validate
+  with `[Parser]::ParseFile` inside the container before blaming the transport.
+* `Add-Type -Path` locks the assembly for the process lifetime, so a second
+  process cannot rebuild the same `Ui.dll`; fall back to an in-memory compile.
 
 ## host/
 

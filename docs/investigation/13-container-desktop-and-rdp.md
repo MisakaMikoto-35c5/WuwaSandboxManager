@@ -1287,3 +1287,20 @@ mirror-view.log: sync seq=... windows=1 visible=1
 即：**逐窗口 `PrintWindow` → `CreateDIBSection(hSection=共享映射)`（零拷贝、不需要屏幕 DC）
 → 宿主每个容器窗口一个真实窗口 → 拖动宿主窗口 → `movewindow` → `SetWindowPos` 真的移动** ✓。
 脚本：`tools/container-desktop-agent/host/host-mirror-test.ps1`（无提权可跑，verdict 自判）。
+
+### 22.3 读侧现在会自己交代关键事实 / The read side now reports what matters
+
+每次启动写进 `read.log`（顺序本身就是诊断线索）：
+
+```
+starting pid=... user=... interactive=... dir=C:\wsm
+session: winsta=<窗口站> desktop=<桌面> screenDC=ok|NONE (没有显示设备的会话)
+DIB section over shared memory ready (dc=... dib=...)      # CreateDIBSection(hSection) + DC 成功
+read side started pid=... 1024x768 stride=4096 fps=4 ...
+first paint 0x... rect=(x,y wxh) ink=N%                    # PrintWindow 真正拿到内容的比例
+movewindow 0x... -> (x,y) ok=True                          # 拖动被应用
+```
+
+配套加固：**整个脚本体包在 try/catch 里**并写 `FATAL: ...`（C# 编译失败不再"静默死亡"，
+这正是上一轮"什么都没发生"的原因）；`CreateCompatibleDC(0)` 失败时**改用某个窗口的 DC** 派生内存 DC
+（容器 service 会话没有屏幕 DC 时正需要）。

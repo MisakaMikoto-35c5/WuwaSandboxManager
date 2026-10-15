@@ -56,6 +56,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 public static class WsmMirrorNative {
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
@@ -72,6 +73,22 @@ public static class WsmMirrorNative {
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, IntPtr extra);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern short VkKeyScanW(char c);
+    [DllImport("user32.dll")] public static extern IntPtr GetProcessWindowStation();
+    [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(int threadId);
+    [DllImport("kernel32.dll")] public static extern int GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder info, int length, out int needed);
+
+    /// <summary>The name of a window station or desktop handle (for the log).</summary>
+    public static string Name(IntPtr handle) {
+        if (handle == IntPtr.Zero) return "(null)";
+        var sb = new StringBuilder(256);
+        int needed;
+        GetUserObjectInformationW(handle, 2, sb, sb.Capacity * 2, out needed);
+        return sb.ToString();
+    }
 }
 '@
 
@@ -81,6 +98,15 @@ function Log([string] $message) {
 }
 
 # ---- input injection (in process: a child per event would be far too slow) ----
+$winstaName = [WsmMirrorNative]::Name([WsmMirrorNative]::GetProcessWindowStation())
+$desktopName = [WsmMirrorNative]::Name([WsmMirrorNative]::GetThreadDesktop([WsmMirrorNative]::GetCurrentThreadId()))
+$screenDc = [WsmMirrorNative]::GetDC([IntPtr]::Zero)
+$screenText = 'NONE (a session without a display device; per-window PrintWindow is used)'
+if ($screenDc -ne [IntPtr]::Zero) {
+    $screenText = 'ok'
+    [void][WsmMirrorNative]::ReleaseDC([IntPtr]::Zero, $screenDc)
+}
+Log ("session: winsta=$winstaName desktop=$desktopName screenDC=$screenText")
 $virtualKeys = @{
     'ENTER' = 0x0D; 'ESC' = 0x1B; 'TAB' = 0x09; 'SPACE' = 0x20; 'BACKSPACE' = 0x08; 'DELETE' = 0x2E
     'UP' = 0x26; 'DOWN' = 0x28; 'LEFT' = 0x25; 'RIGHT' = 0x27; 'HOME' = 0x24; 'END' = 0x23
@@ -408,6 +434,23 @@ while ((Get-Date) -lt $deadline) {
             $marshal::WriteInt32($base, $entry + 32, $i * 512)
             $marshal::WriteInt32($base, $entry + 36, [int]($titleBytes.Length / 2))
             if (-not $painted) { Log ("paint failed for 0x{0:X}" -f [int64]$w.Id) }
+
+            # On the first pass, report how much of the window actually came back: this is
+            # the container-side question ("does PrintWindow give content in a session with
+            # no display device?"), and it is answerable from read.log alone.
+            if ($sequence -eq 1 -and $painted -and $cw -gt 16 -and $ch -gt 16) {
+                $nonBlack = 0; $sampled = 0
+                for ($ry = 0; $ry -lt $ch; $ry += 4) {
+                    for ($rx = 0; $rx -lt $cw; $rx += 4) {
+                        $px = [IntPtr]::Add($pixelSection, (($y + $ry) * $stride) + (($x + $rx) * 4))
+                        $sampled++
+                        if ($marshal::ReadByte($px) -gt 8 -or $marshal::ReadByte($px, 1) -gt 8 -or $marshal::ReadByte($px, 2) -gt 8) { $nonBlack++ }
+                    }
+                }
+                $inkPercent = 0
+                if ($sampled -gt 0) { $inkPercent = [Math]::Round(100 * $nonBlack / $sampled, 1) }
+                Log ("first paint 0x{0:X} rect=({1},{2} {3}x{4}) ink={5}%" -f [int64]$w.Id, $x, $y, $cw, $ch, $inkPercent)
+            }
         }
 
         $frames++

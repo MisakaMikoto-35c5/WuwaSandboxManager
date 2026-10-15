@@ -38,6 +38,7 @@
 | 10 | [10-hcs-schema-and-native-api.md](10-hcs-schema-and-native-api.md) | HCS JSON Schema 与原生 API 参考 / HCS JSON schema and native API reference |
 | 11 | [11-project-mapping.md](11-project-mapping.md) | 本项目（WindowsSandboxManager）映射与能力矩阵 / How this project maps to the above |
 | 12 | [12-modular-architecture.md](12-modular-architecture.md) | ABP 模块化架构：程序集分层、约定规约、多引擎抽象、本地化 / ABP modular architecture |
+| 13 | [13-container-desktop-and-rdp.md](13-container-desktop-and-rdp.md) | 进程隔离容器里的桌面/会话与 RDP：`NumberOfInitialSessions` 让 console 会话起来、`termsrv` 容器门禁让 RDP 无法建立 / Container desktop, sessions and RDP in a process-isolated container |
 
 > 早前的单文件汇总版仍保留在 [`../investigation.md`](../investigation.md)。
 >

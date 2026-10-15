@@ -259,9 +259,14 @@ net start TermService
 | 3 | `86d405b` | `Wsm.Hcs.Storage`：离线注册表单元工具（`RegLoadKey` + 权限）+ 镜像定制器（`NumberOfInitialSessions=2`）+ 10 个单测 | **可用** works |
 | 4 | `94e32f2` | CLI：`wsm image desktop <layerPath>`、`wsm image import … --desktop`（已提权实测通过） | **可用** works |
 | 5 | `aad2c43` | `WindowsContainerEngine` 桌面选项（Shell / 自动登录 / 可选 RDP 尝试）+ 17 个单测 | Shell 与自动登录可用；**RDP 部分已知无效，仅作记录** |
-| 6 | (本步 / this step) | README 章节 + 文档回填 / README section + doc backfill | 记录 record |
-| 7 | (本步 / this step) | §10 桌面可达性实测（借 token / 自动登录 / ~121 秒注销 / pipe 与 3389 / 可截屏的容器桌面）+ `tools/container-desktop-agent` | 记录 + 可用 |
-| 8 | (本步 / this step) | §11 RDP 的**代码级根因**（反汇编 `termsrv`）+ §12 **会话内输入代理**（`deskinput.ps1`，含验证）+ 镜像导入器改为报出 `tar` 的诊断 | 记录 + 可用 |
+| 6 | — | README 章节 + 文档回填 / README section + doc backfill | 记录 record |
+| 7 | `d1235a2` | §10 桌面可达性实测（借 token / 自动登录 / ~121 秒注销 / pipe 与 3389 / 可截屏的容器桌面）+ `tools/container-desktop-agent` | 记录 + 可用 |
+| 8 | `379c2f6` | §11 RDP 的**代码级根因**（反汇编 `termsrv`）+ §12 **会话内输入代理**（`deskinput.ps1`，含验证）+ 镜像导入器改为报出 `tar` 的诊断 | 记录 + 可用 |
+| 9 | `096ce7d` | §13 共享内存呈现（容器内抓屏写 `frame.shm`、宿主映射读帧 + 输入队列，端到端实测）| **可用** works |
+| 10 | `a457439` | §13.6 句柄直通**可行**（提权 `OpenProcess`+`DuplicateHandle`+`MapViewOfFile`）/ 窗口注入**证伪** | 记录 record |
+| 11 | `1dc2024` | §13.7 由 SYSTEM 进程把窗口创建到用户 Console（`WTSQueryUserToken`+`CreateProcessAsUser`，实测 pid/会话正确）+ 输入注入进容器内进程 | **可用** works |
+| 12 | `d11d11e` | §14 把能力接进管理 service（`Wsm.Connection.ContainerDesktop` + `IContainerFileSystemAccess` + CLI `desktop`/`desktop-view`）；修掉 `Path.Combine` 有根路径 bug | 编译/单测通过；CLI 级端到端待容器栈复位 |
+| 13 | (本步 / this step) | §15 为什么不能"注入窗口"、以及真正能省掉的拷贝（DIB section 直写 + 查看器 BitBlt + 脏矩形） | 记录 record |
 
 > 说明：按用户要求，**"无论是否可用"都放进本分支**——RDP 相关代码保留但明确标注
 > `Experimental`/已知无效，避免误用。
@@ -769,3 +774,57 @@ wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --stop
 ### 14.5 鍚庣画 / Next
 
 1. 缁?gRPC 濂戠害鍔?`StartDesktop/StopDesktop/GetDesktop`锛坄wsm_service.proto` + `WsmServiceGrpc` + 瀹㈡埛绔級锛?   璁?GUI锛圵inUI锛夐€氳繃浠ｇ悊鏈嶅姟璇锋眰妗岄潰锛岃€屼笉鏄嚜宸辫捣杩涚▼锛?2. 杈撳叆閫氶亾鎹㈡垚 HCS **`MappedPipes`**锛堝畼鏂硅法 silo 閫氶亾锛夛紝鏇挎帀"姣忓懡浠や竴涓枃浠?锛?3. 鐢婚潰鎹㈡垚**椤垫枃浠惰妭 + 鎻愭潈鍙ユ焺鐩撮€?*锛埪?3.6 A 宸查獙璇佸彲琛岋級鈫?鍘绘帀 NTFS 鑴忛〉鍐欏洖锛?4. 鑴忕煩褰?+ 鍘嬬缉锛堢幇鍦?3 MB/甯?脳 5 fps 鍏ㄩ噺锛夈€?
+---
+
+## 15. 鑳戒笉鑳?鎶婄獥鍙ｆ敞鍏ュ埌 Windows"锛岀渷鎺夊叡浜唴瀛樼殑鎷疯礉锛?/ Why not inject the window
+
+> 缁撹锛?*涓嶈兘**锛岃€屼笖杩欐槸**鏋舵瀯鎬?*鐨勶紙搂13.6 宸插疄娴嬭瘉浼級锛屼笉鏄?杩樻病鎵惧埌鍔炴硶"銆?> 浣?鍑忓皯鎷疯礉"杩欎釜鐩爣鏄鐨?鈥斺€?鍙槸瑕侀潬**鍘绘帀澶氫綑鐨勬嫹璐?*锛岃€屼笉鏄潬娉ㄥ叆绐楀彛銆?
+### 15.1 涓轰粈涔堜笉琛?/ Why it cannot work
+
+| 浜嬪疄 Fact | 渚濇嵁 Evidence |
+|---|---|
+| 瀹瑰櫒鏈夎嚜宸辩殑 **session** 鍜?*鏈嶅姟 window station** | 瀹瑰櫒鍐呭疄娴嬶細鏈細璇?`4`锛堝涓?`1`锛夛紝window station `Service-0x0-鈥 |
+| 瀹瑰櫒鏈?*鑷繁鐨勭獥鍙?*锛屼絾瀹夸富**鏋氫妇涓嶅埌** | 瀹夸富涓?`FindWindow(null,'Registry Editor')=0x0`锛沗EnumWindows` 鍙湁瀹夸富绐楀彛锛涘涓昏緭鍏ユ闈?= `Default` |
+| 绐楀彛**娌℃湁 DWM / 娌℃湁 GPU** | 瀹瑰櫒鍐?`DwmIsCompositionEnabled=False`銆佹棤 `dwm.exe`銆? 涓樉绀洪€傞厤鍣ㄣ€乣D3D11CreateDevice`锛堢‖浠朵笌 WARP锛夐兘 `0x887A0004` |
+| 鍞竴鑳借法 silo 鐨勬槸**鍐呮牳瀵硅薄** | 搂13.6锛歴ection/process 鍙ユ焺鍙彁鏉?`DuplicateHandle` 鈫?"鍍忕礌鑳借繃銆佺獥鍙ｄ笉鑳借繃" |
+
+鏈哄埗涓婄殑鍘熷洜锛?
+1. **HWND 涓嶆槸鍐呮牳鍙ユ焺**锛屾棤娉曞儚 section 閭ｆ牱 `DuplicateHandle` 璺?silo銆傚畠褰掑睘浜?   *session + window station + desktop* 涓夎€咃紱silo 浼?*铏氭嫙鍖?win32k 鐨勫懡鍚嶇┖闂?*锛屽涓荤殑 user32 閲?   鏍规湰娌℃湁瀹瑰櫒閭ｅ瀵硅薄銆?2. `SetParent` / 璺ㄦ闈㈤噸瀹氱埗瑕佹眰**鍚屼竴** session + window station锛汥WM 鍚堟垚鏄?**per-session** 鐨勶紝
+   鑰屽鍣ㄨ繛 DWM 閮芥病鏈夈€?3. 鍗充究"娉ㄥ叆"鎴愬姛涔?*鐪佷笉涓嬫嫹璐?*锛氳兘鎯冲埌鐨勬浛浠ｅ仛娉曪紙瀹夸富鐢?`PrintWindow`/`WM_PRINT` 鍘绘姄鍒汉鐨勭獥鍙ｏ級
+   鏈韩灏辨槸涓€娆″儚绱犳嫹璐濓紝鑰屼笖闇€瑕佺洰鏍囩獥鍙ｇ殑**娑堟伅寰幆鍦ㄥ悓涓€妗岄潰涓婂簲绛?* 鈥斺€?璺?silo 鐨?   `SendMessage`/`GetWindowLong` 鍚屾牱琚尅銆?4. 璁╁鍣ㄨ繘绋嬫妸绐楀彛**鍒涘缓鍒扮敤鎴?Console** 涔熶笉琛岋細瀹瑰櫒 token 娌℃湁 `SeTcbPrivilege`锛岃€?   `CreateProcessWithTokenW` 鎸夋枃妗ｅ氨**鐣欏湪璋冪敤鑰呬細璇?*閲岋紙搂13.7 瀹炴祴锛夈€傝兘鍋氬埌"寰€鐢ㄦ埛浼氳瘽鏀剧獥鍙?鐨?   鍙湁**瀹夸富渚х殑 SYSTEM 杩涚▼** 鈥斺€?涔熷氨鏄?搂13.7/搂14 宸茬粡瀹炵幇鐨勯偅鏉¤矾锛?*瀹夸富寮€鑷繁鐨勭獥鍙ｏ紝璐存垜浠殑甯?*銆?
+**寰蒋鐨勫畼鏂圭珛鍦轰竴鑷?*锛氳繘绋嬮殧绂荤殑 Windows 瀹瑰櫒**涓嶆敮鎸?GUI 浜や簰**锛圙UI 搴旂敤鑳借窇锛屼絾娌℃湁鍐呭缓浜や簰鏂瑰紡锛?瀹瑰櫒鐨?cmd/搴旂敤钀藉湪**闈?`WinSta0` 鐨勬湇鍔?window station** 涓婏級銆傜ぞ鍖鸿姹?[microsoft/Windows-Containers#611](https://github.com/microsoft/Windows-Containers/issues/611)
+瑕佺殑姝ｆ槸杩欎釜鑳藉姏锛屽叾寤鸿鏂规鎭版伆鏄?**瀹炵幇涓€涓?GUI 鏈嶅姟鍣紝鎶婃覆鏌撶粨鏋滆浆鍙戠粰瀹夸富鏄剧ず**锛堢被浼?X server锛?
+鈥斺€?閭ｅ氨鏄湰椤圭洰鐨勫儚绱犻€氶亾 + 瀹夸富绐楀彛銆?
+### 15.2 鐪熸鑳界渷鎺夌殑鎷疯礉 / The copies we can actually remove
+
+褰撳墠姣忓抚鐨勬嫹璐濇竻鍗曪紙1024脳768脳4 = **3 MB**锛夛細
+
+| # | 浣嶇疆 | 鐜板湪鎬庝箞鍋?| 澶勭疆 |
+|---|---|---|---|
+| 1 | 瀹瑰櫒鍐?| GDI+ `Graphics.CopyFromScreen` 鈫?鎵樼 `Bitmap` | 淇濈暀锛?*灞忓箷鍥炶涓嶅彲閬垮厤**锛夛紝浣嗘崲鎴?`BitBlt` 蹇竴涓暟閲忕骇 |
+| 2 | 瀹瑰櫒鍐?| `RtlMoveMemory`锛? MB锛塦Bitmap` 鈫?鍏变韩鍐呭瓨 | **鍘绘帀**锛氱敤 `CreateDIBSection(hSection = 鍏变韩 section 鐨勬槧灏勫彞鏌?`锛岃 GDI **鐩存帴鍐欒繘鍏变韩鍐呭瓨** |
+| 3 | 瀹夸富 | 鏌ョ湅鍣ㄦ瘡甯?`new Bitmap(frame)` 蹇収 | **鍘绘帀**锛氬湪鍏变韩 DIB 鐨勫唴瀛?DC 涓婄洿鎺?`BitBlt` 鍒扮獥鍙?DC |
+| 4 | 瀹夸富 | GDI+ 鏍煎紡杞崲/缁樺埗 | 鍩烘湰娑堝け锛坄StretchDIBits`/`BitBlt` 鐩磋创锛屼笉缁?GDI+锛?|
+
+鈫?姣忓抚浠?**~4 娆℃嫹璐濋檷鍒?2 娆?*锛堝睆骞曗啋section銆乻ection鈫掑悎鎴愶級锛岃€屼笖瀹瑰櫒鍐?*涓嶅啀闇€瑕?`System.Drawing`**
+锛堢函 P/Invoke锛岄『甯︾粫寮€ 搂13.4 璁板綍鐨?`Bitmap` 寤哄湪鏄犲皠鎸囬拡涓婂氨鍏ㄩ粦"閭ｇ被 GDI+ 鍧戯級銆?
+### 15.3 閲忓寲锛歮emcpy 鏈潵灏变笉鏄摱棰?/ Quantified
+
+- 3 MB 鐨?memcpy 鎸?~10鈥?0 GB/s 绠?鈮?**0.1鈥?.3 ms**锛?- 鑰?GDI+ `CopyFromScreen` 鐨勫叏灞忓洖璇绘槸 **5鈥?0 ms** 閲忕骇銆?
+鎵€浠ユ寜**鏀剁泭**鎺掑簭搴旇鏄細
+
+1. **鑴忕煩褰?*锛堟闈㈠ぇ閮ㄥ垎鏃堕棿鏄潤姝㈢殑 鈫?姣忓抚鍙紶鍙樺寲鐨勫嚑鏉″甫锛屽嚑 KB 鑰屼笉鏄?3 MB锛夆€斺€?*姣斾换浣曟嫹璐濅紭鍖栭兘澶?*锛?2. **鈶?鎹?`BitBlt` + `CreateDIBSection` 鐩村啓**锛堝悓鏃跺共鎺夋參鐨?GDI+ 璺緞鍜屾嫹璐?鈶★級锛?3. **鈶?鈶?鏌ョ湅鍣?`BitBlt` 鐩磋创**锛?4. 鍙湁鍦?*楂樺垎杈ㄧ巼/楂樺抚鐜?*涓嬶紝鎷疯礉鏈韩鎵嶄細鍙樻垚鐡堕锛?080p@30fps 鈮?250 MB/s 鏃舵墠鍊煎緱涓婂帇缂?缂栫爜锛夈€?
+### 15.4 "闆舵嫹璐?鐨勬缁熻矾寰?/ The only zero-copy path
+
+Windows 涓婂敮涓€**涓嶇粡杩?鍐呭瓨 鈫?鑺?鏂囦欢"鎼繍**鐨勫儚绱犻€氶亾鏄?**Hyper-V 闅旂 + 澧炲己浼氳瘽**
+锛圴MBus 涓婄殑 RDP/RemoteFX锛屾垨甯?*铏氭嫙鏄剧ず閫傞厤鍣?*鐨?GPU 鍏变韩绾圭悊锛夈€傝繖涔熻В閲婁簡涓轰粈涔堝井杞嚜宸辨妸
+**浜や簰寮?GUI** 鍦烘櫙鏀惧湪 VM 闅旂 + 澧炲己浼氳瘽涓娿€?
+瀹冧笌"杩涚▼闅旂瑕佹洿杞汇€佺渷璧勬簮"鐨勭洰鏍?*鐩存帴鍐茬獊**銆傛墍浠ユ湰椤圭洰鐨勫彇鑸嶆槸锛?
+- **杩涚▼闅旂**锛堥粯璁ゃ€佽交閲忥級鈫?鍍忕礌閫氶亾锛?*2 娆℃嫹璐?* + 瀹夸富绐楀彛锛堟湰鏂囨。鐨勬柟妗堬級锛?- **VM 闅旂**锛堥渶瑕佸師鐢熺獥鍙?澶氬獟浣?澧炲己浼氳瘽鏃讹級鈫?瀹樻柟 Enhanced Session锛埪? 缁撹锛歏M 闅旂濮嬬粓淇濈暀锛夈€?
+### 15.5 涓€涓究瀹滅殑寰呴獙璇佸疄楠?/ One cheap experiment
+
+濡傛灉鐩爣鏄?**杩炲鍣ㄥ唴鐨?agent 閮戒笉瑕?*"锛氳兘鍚﹁**瀹夸富**鐨?SYSTEM 杩涚▼
+`OpenWindowStation("Service-0x0-鈥?)` + `SetThreadDesktop` 鐩存帴鎷垮埌瀹瑰櫒鐨勬闈紝浠庤€屽湪**瀹夸富**鎶撳睆鍐欒繘 section锛?搂13.6 鐨勫疄娴嬶紙瀹夸富鐪嬩笉鍒?silo 鐨?win32k 鍛藉悕绌洪棿锛?*鏆楃ず涓嶈**锛屼絾鐢?SYSTEM 璇曚竴娆″緢渚垮疁锛?鑻ユ垚绔嬶紝瀹瑰櫒鍐呭氨鍙渶瑕佽窇搴旂敤鏈韩銆?
+### 15.6 涓嬩竴姝?/ Next
+
+鎸?15.3 鐨勯『搴忚惤鍦帮細**鑴忕煩褰?鈫?DIB section 鐩村啓 鈫?鏌ョ湅鍣?BitBlt**锛堥兘鏄函浠ｇ爜鏀瑰姩锛?瀹瑰櫒鏍堝浣嶏紙`vmcompute`/`hns` 閲嶇疆锛夊悗鍗冲彲瀹炴祴锛涜 搂14.4锛夈€?

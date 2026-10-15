@@ -679,3 +679,45 @@ host input desktop handle=0x954 name='Default'   鈫?瀹夸富鑷繁鐨勮緭
 鍚屾牱涓嶉€氥€傗噿 **銆屾妸绐楀彛娉ㄥ叆鐢ㄦ埛鎺у埗鍙般€嶅湪杩涚▼闅旂閲屽仛涓嶅埌**锛岃兘杩囧幓鐨勫彧鏈?*鍍忕礌/鍐呭**锛埪?3.2 鐨勬柟妗堬級锛?鎯宠鐪熸鐨勭獥鍙ｅ彧鑳借蛋 **Hyper-V 闅旂 + 澧炲己浼氳瘽**銆?
 **缁撹锛堝畾涓嬬殑浜у搧褰㈡€侊級**锛氱敾闈?= `pid`+`handle` 鐩撮€氱殑**椤垫枃浠惰妭**锛堟彁鏉冨涓?鈫?绾唴瀛樸€侀浂钀界洏锛夛紱
 杈撳叆/鎺у埗 = HCS `MappedPipes` 鎴栥€屾瘡鍛戒护涓€涓枃浠躲€嶃€?
+### 13.7 璁?SYSTEM 鎶婄獥鍙ｆ樉绀哄埌鐢ㄦ埛 Console锛堝凡瀹炵幇骞堕獙璇侊級/ A SYSTEM process showing a window on the user console
+
+銆屼笉鍚屼細璇濅篃鑳藉叡浜獥鍙ｃ€嶉噷**鎴愮珛涓斿繀闇€**鐨勯偅涓€鍗婏細瀹夸富渚?**SYSTEM 鏈嶅姟鎶?UI 鏄剧ず鍒扮敤鎴蜂氦浜掍細璇?*銆?杩欐鏄?WSM 杩欑鎻愭潈/鏈嶅姟褰㈡€佸繀椤诲叿澶囩殑鑳藉姏锛堝惁鍒欐湇鍔″湪 session 0锛岀敤鎴锋案杩滅湅涓嶅埌绐楀彛锛夈€?
+| 鑴氭湰锛坄tools/container-desktop-agent/host/`锛?| 浣滅敤 |
+|---|---|
+| `sessions.ps1` | 鎶ュ憡鏈繘绋嬬湅鍒扮殑**浼氳瘽 / 绐楀彛绔?/ 妗岄潰**锛堝鍣ㄤ笌瀹夸富鍚勮窇涓€娆″仛瀵圭収锛?|
+| `launch-in-console.ps1` | `WTSQueryUserToken(console)` 鈫?`DuplicateTokenEx` 鈫?`CreateProcessAsUser(..., lpDesktop="winsta0\default")`锛涘繀椤?*浠?SYSTEM 杩愯**锛堥渶瑕?`SeTcbPrivilege`锛孶AC 鎻愭潈鐨?admin 浠ょ墝娌℃湁锛?|
+| `run-assystem.ps1` | 鐢ㄤ竴娆℃€ц鍒掍换鍔★紙`schtasks /ru SYSTEM /rl HIGHEST`锛夋墽琛屼笂闈㈢殑鑴氭湰锛岃窇瀹屽嵆鍒?|
+
+**浼氳瘽瀵圭収锛堝悓涓€鑴氭湰涓よ竟璺戯級锛?*
+
+| | 瀹瑰櫒鍐?| 瀹夸富 |
+|---|---|---|
+| 鑷韩浼氳瘽 | `4` | `1` |
+| `WTSGetActiveConsoleSessionId()` | **5**锛堝畠鑷繁鐨?console锛?| **1** |
+| 杩涚▼绐楀彛绔?| `Service-0x0-鈥 | `WinSta0` |
+
+鈬?瀹瑰櫒鑷鐨?console(5) 涓庣敤鎴?console(1) 涓嶆槸鍚屼竴涓細璇濓紝绐楀彛绔欎篃涓嶆槸鍚屼竴涓璞°€?
+**瀹炴祴锛坄launch.log`锛孲YSTEM 杩涚▼鍐欑殑锛夛細**
+
+```
+identity: NT AUTHORITY\SYSTEM        own pid=101168 session=0 ; active console session=1
+WTSQueryUserToken(1) ok=True token=0x970
+DuplicateTokenEx     ok=True primary=0x93C
+CreateProcessAsUser  ok=True pid=102056   (winsta0\default, session 1)
+child pid=102056 session=1  (should equal 1)
+```
+
+**楠岃瘉锛堝涓讳晶鏌ヨ锛夛細**
+
+```
+Id      SessionId MainWindowTitle
+102056  1         WSM - container desktop over shared memory   frame 398
+```
+
+鍗筹細**session 0 鐨?SYSTEM 杩涚▼鎶婂瓙杩涚▼鏀捐繘浜?session 1锛堢敤鎴?Console锛?*锛岃€岃繖涓獥鍙ｉ噷鏄剧ず鐨勬鏄?**瀹瑰櫒妗岄潰**锛堝叡浜唴瀛橀噷鐨勭 398 甯э級銆傗噿銆孲ystem 绾у埆浼氳瘽鍦ㄧ敤鎴?Console 鏄剧ず绐楀彛銆?*鎴愮珛**锛?骞朵笖杩欏氨鏄€屾妸瀹瑰櫒妗岄潰鍛堢幇缁欑敤鎴枫€嶇殑浜у搧绾ц惤鐐癸細**鐢婚潰鏉ヨ嚜鍙ユ焺鐩撮€?鍏变韩鍐呭瓨锛岀獥鍙ｇ敱 SYSTEM 鏈嶅姟
+鎸変細璇濆垱寤?*锛屽叏绋嬩笉闇€瑕?RDP锛屽鍣ㄩ噷涔熶笉闇€瑕佷换浣?listener銆?
+锛堥檮娉細鍦ㄨ繖涓?SYSTEM 浠诲姟閲?`AdjustTokenPrivileges` 瀵?`SeTcb/SeAssignPrimaryToken/SeIncreaseQuota/SeDebug`
+閮藉洖 `err 1300`锛屼絾 `CreateProcessAsUser` 浠嶇劧鎴愬姛鈥斺€擲YSTEM 浠ょ墝榛樿宸插甫鎵€闇€鐗规潈锛屾樉寮忓紑鍚彧鏄繚闄┿€傦級
+
+**鍚屾椂閿佸畾鐨勮竟鐣?*锛氳繖鍙В鍐炽€屾妸锛堟垜浠嚜宸辨瀯閫犵殑锛夌獥鍙ｆ樉绀哄湪鐢ㄦ埛 Console銆嶏紱**瀹瑰櫒鐨勫師鐢熺獥鍙ｄ粛鐒?璺ㄤ笉杩囨潵**锛埪?3.6 B锛歚FindWindow` 鐪嬩笉鍒般€乣SetParent`/`SetThreadDesktop` 閮戒笉閫氾級銆傝鐪熸鐨勫師鐢熺獥鍙ｏ紝
+鍙湁 **Hyper-V 闅旂 + 澧炲己浼氳瘽**銆?

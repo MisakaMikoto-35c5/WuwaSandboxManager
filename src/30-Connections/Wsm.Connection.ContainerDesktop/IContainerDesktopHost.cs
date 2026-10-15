@@ -20,6 +20,15 @@ public interface IContainerDesktopHost
     /// <summary>Whether the capability is enabled on this host.</summary>
     bool IsSupported { get; }
 
+    /// <summary>Ids of the registered providers, for diagnostics and CLI help.</summary>
+    IReadOnlyList<string> ProviderIds { get; }
+
+    /// <summary>
+    /// The provider a sandbox's manifest selects. This is the only place the
+    /// mechanism is chosen, which is what makes providers replaceable.
+    /// </summary>
+    IContainerDesktopProvider ResolveProvider(SandboxRecipe recipe);
+
     /// <summary>All live desktop channels.</summary>
     IReadOnlyList<ContainerDesktopSession> Sessions { get; }
 
@@ -33,11 +42,23 @@ public interface IContainerDesktopHost
     Task<ContainerDesktopSession> StartAsync(SandboxInstanceId id, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Starts a desktop for a running container using the provider its
+    /// <b>manifest</b> selects, and presents it when the plan asks for that.
+    /// </summary>
+    Task<ContainerDesktopSession> StartAsync(
+        SandboxInstanceId id, SandboxRecipe recipe, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Starts a desktop channel against an already-running compute system and the
     /// host-visible root of its filesystem. Used when the sandbox is not managed
     /// by this process (and by tooling/tests).
     /// </summary>
     Task<ContainerDesktopSession> AttachAsync(string computeSystemId, string containerRoot, CancellationToken cancellationToken = default);
+
+    /// <summary>As <see cref="AttachAsync(string, string, CancellationToken)"/>, with an explicit manifest.</summary>
+    Task<ContainerDesktopSession> AttachAsync(
+        string computeSystemId, string containerRoot, SandboxRecipe recipe,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens the channel's frames in a window <b>inside the interactive user

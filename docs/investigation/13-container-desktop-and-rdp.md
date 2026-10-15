@@ -955,3 +955,63 @@ DWM/鍚堟垚鍣ㄦ槸 **per-session** 鐨勩€佹寕鍦?win32k 涓婄殑锛涘
 
 1. **鏈€灏忛獙璇侊紙涓嶉渶瑕佷慨 HCS锛?*锛氶暅鍍忛噷鍔?IFEO 鍖呰９ + 涓€涓?stub锛屽鍣ㄩ噸鍚悗纭鎴戜滑鐨勮繘绋?*鍦ㄥ鍣ㄤ細璇濈殑
    浜や簰妗岄潰**涓婏紝骞惰兘 `EnumWindows` 鐪嬪埌 `regedit`/`notepad` 杩欎簺绐楀彛锛?2. 閫愮獥鍙?+ 鑴忓尯璇讳晶锛堝惈 `AppInit_DLLs` 閫氱煡锛夆啋 鍐欏叆椤垫枃浠?section锛?3. 瀹夸富渚х獥鍙ｉ暅鍍?+ 杈撳叆璺敱锛?4. 涓?搂14 鐨?`IContainerDesktopHost` 鍚堝苟锛堝悓涓€濂楁娊璞★紝涓ょ浼犺緭锛氭暣灞忓抚 / 閫愮獥鍙ｉ暅鍍忥級銆?
+---
+
+## 19. 瀹炵幇锛氬彲鏇挎崲鐨勬闈?provider 妯″潡 + 鐢辨竻鍗曢€夋嫨 / A replaceable provider module, chosen by the manifest
+
+> 鐢ㄦ埛瑕佹眰锛氭湰鏂规瑕佹垚涓?*鍙浛鎹㈢殑鐙珛妯″潡**锛堜互鍚庢湁鏇村ソ鐨勬柟妗堝彲鎹㈡帀锛夛紝骞朵笖**鐢辨矙绠辨竻鍗曞喅瀹氱敤鍝**銆?> 鏈钀藉湴浜嗚繖鏉℃灦鏋勶紝骞跺畬鎴?window-mirror 鏂规鐨勫墠涓ゆ锛堥暅鍍?payload + 浼氳瘽鍐呰渚э級銆?
+### 19.1 鍒嗗眰 / Layers
+
+| 浣嶇疆 | 鍐呭 |
+|---|---|
+| `Wsm.Domain.ValueObjects` | `ContainerDesktopKind`锛坄None`/`FrameBuffer`/`WindowMirror`锛夈€乣SandboxDesktopPlan`锛?*娓呭崟閲岀殑鏂规涓庡弬鏁?*锛夈€乣ContainerDesktopPaths`锛堝鍣ㄥ唴璺緞濂戠害锛屼笁鏉￠摼璺叡鐢ㄤ竴涓潵婧愶級 |
+| `Wsm.Connection.ContainerDesktop` | `IContainerDesktopProvider` + `IContainerDesktopProviderRegistry`锛?*鎸夋竻鍗曢€?provider**锛? `IContainerDesktopHost`锛堢ǔ瀹氶棬闈級+ 涓や釜 provider锛歚FrameBufferDesktopProvider`锛埪?3/14锛屾暣灞忓抚锛夈€乣WindowMirrorDesktopProvider`锛埪?8锛岄€愮獥鍙ｉ暅鍍忥級 |
+| `Wsm.Hcs.Storage` | `IContainerImageCustomizer.EnableWindowMirror(layerPath)`锛氭妸鐧诲綍閽╁瓙鍐欒繘闀滃儚鐨?`SOFTWARE` 铚傚发锛坄Winlogon\Userinit` 杩藉姞 `C:\wsm\wsm-winlogon-wrap.cmd`锛? 鎶婅渚?payload 鎷疯繘 `Files\wsm\`锛堜笁涓祵鍏ュ紡璧勬簮锛屽甫鍗曟祴锛?|
+| `Wsm.Cli` | `wsm image mirror <layerPath>`锛堝噯澶囬暅鍍忥級銆乣wsm desktop <id> [--provider <id>] [--mode <kind>] [--present|--no-present] [--input ...]` |
+
+**閫夋嫨瑙勫垯**锛坄ContainerDesktopProviderRegistry.Resolve`锛夛細
+`SandboxDesktopPlan.Provider`锛堟樉寮?id锛夆啋 `SandboxDesktopPlan.Kind` 鈫?榛樿銆?鎵€浠ユ崲鏂规鏄?**鍔犱竴涓?provider + 鏀规竻鍗?*"锛岃皟鐢ㄦ柟锛圕LI/鏈嶅姟/UI锛変竴琛岄兘涓嶇敤鍔ㄣ€?
+### 19.2 娓呭崟鍐欐硶 / In the recipe
+
+```jsonc
+{
+  "name": "container-desktop",
+  "desktop": {
+    "kind": "WindowMirror",       // 鎴?"FrameBuffer" / "None"
+    "provider": null,             // 涔熷彲鐩存帴鍐?provider id锛屼紭鍏堜簬 kind
+    "presentToInteractiveSession": true,
+    "dirtyRegions": true
+  }
+}
+```
+
+### 19.3 涓ゆ潯閾捐矾鎬庝箞鐢?/ How each path is used
+
+```powershell
+# 鏂规 A锛堥粯璁わ紝鏃犻渶鏀归暅鍍忥級锛氭暣灞忓抚
+wsm desktop <sandboxId> --present
+
+# 鏂规 B锛坵indow-mirror锛岄€愮獥鍙?+ 鑴忓尯锛?wsm image import mcr.microsoft.com/windows/server:ltsc2022 C:\wsm-images\server --desktop
+wsm image mirror C:\wsm-images\server          # 鍐欏叆鐧诲綍閽╁瓙 + 璇讳晶 payload
+#   娓呭崟閲屽啓 Desktop.Provider = "window-mirror"锛岀劧鍚庨噸鍚鍣?wsm desktop <sandboxId>
+```
+
+### 19.4 璇讳晶鍗忚 / The read-side protocol (published in one shared file)
+
+`C:\wsm\mirror.shm`锛氬ご 64B锛坢agic `WSMM`銆佸昂瀵搞€乻tride銆乫ps銆乻eq銆乥usy銆亀riterPid銆?*windowCount**銆佸抚鏁帮級+
+鏁村睆 BGRX 鍍忕礌 + **绐楀彛琛?*锛?192B锛屾瘡椤?40B锛歩d/rect/seq/鏍囬鍋忕Щ闀垮害锛? 鏍囬鍖猴紙16KB锛夈€?璇讳晶**鍙妸鍙戠敓鍙樺寲鐨勭獥鍙ｇ煩褰㈠啓杩涘叡浜枃浠?*锛坄memcmp` 涓庡奖瀛愬抚姣旇緝锛夛紝鍥犳浼犺緭鐨勬槸鑴忓尯鑰岄潪鏁村睆銆?杈撳叆浠嶆槸"姣忓懡浠や竴涓?`input-*.txt`"锛岄€€鍑烘槸 `agent-stop.txt`锛坄C:\wsm\wsm-winlogon-wrap.cmd` 鍙礋璐?`start` 鍑哄幓锛岀粷涓嶉樆濉炵櫥褰曪級銆?
+### 19.5 涓轰粈涔堢櫥褰曢挬瀛愮敤 `Userinit` 鑰屼笉鏄浛鎹?winlogon / Why Userinit
+
+鐢ㄦ埛鎻愯鎶?winlogon 鎹㈡垚鑷繁鐨勭▼搴忋€?*鐩爣涓€鑷达紙璁╂垜浠殑绋嬪簭鍦ㄥ鍣ㄤ氦浜掍細璇濋噷璺戣捣鏉ワ級锛屼絾 `Userinit`
+鏇村畨鍏?*锛氬畠鏄井杞枃妗ｅ寲鐨勭櫥褰曟墿灞曠偣锛屾槸"杩藉姞涓€鏉″懡浠?鑰屼笉鏄?椤舵浛 winlogon"锛屽け璐ュ彧浼氬皯涓€涓渚с€?涓嶄細璁╁鍣ㄧ櫥褰曚笉涓婏紙hook 鏈韩灏辨槸 fire-and-forget锛夈€侷FEO锛坄Image File Execution Options\winlogon.exe` 鐨?`Debugger`锛変綔涓哄閫変繚鐣欏湪璁板綍閲屻€?
+### 19.6 楠岃瘉鐘舵€?/ Verification
+
+- 缂栬瘧锛歚wsm`(CLI)銆乣Wsm.Service.Host`銆乣Wsm.Tests` 鍏ㄩ儴 **0 璀﹀憡 0 閿欒**锛沗dotnet test` **300 閫氳繃**
+  锛堟柊澧烇細娓呭崟閫?provider 鐨勫洓鏉¤鍒欍€乣ToRelative` 瓒婄晫鍥炲綊銆佸鍣ㄦ牴涓嶈鏇挎崲銆乣Userinit` 骞傜瓑銆?  涓変釜闀滃儚 payload 纭疄琚祵杩涚▼搴忛泦锛夈€?- 鏈哄埗锛毬?3鈥撀?8 宸插疄娴嬶紙甯с€佽緭鍏ャ€佸彞鏌勭洿閫氥€丼YSTEM鈫扖onsole 寮€绐椼€佷互鍙?澶栭潰鐪嬩笉鍒板鍣ㄧ獥鍙?杩涗笉鍘讳細璇?锛夈€?- **灏氭湭瀹炴祴**锛歸indow-mirror 鐨勭鍒扮锛堥渶瑕佸厛鎶婇」鐩敤鐨勫熀搴ч暅鍍?`wsm image mirror` 涓€娆°€佸啀璁╁鍣ㄧ敤璇ラ暅鍍?  鍚姩锛夈€傛敞鎰忓畠**涓嶇粡杩?HCS 寤鸿繘绋?*锛堣渚х敱瀹瑰櫒鑷繁鐨勭櫥褰曞惎鍔級锛屾墍浠ュ綋鍓?`HcsCreateProcess 0x80370105`
+  骞朵笉濡ㄧ杩欐潯閾捐矾锛屽彧濡ㄧ鎴戜滑鍦ㄥ鍣ㄩ噷"鎵嬪姩"璧疯繘绋嬨€?- 鏄剧ず渚э細`WindowMirrorDesktopProvider.PresentAsync` 宸叉寜 `--mode windows` 鍚姩鏌ョ湅鍣紱鏌ョ湅鍣?*鐩墠浠嶆寜鏁村睆
+  娓叉煋**锛坄--mode` 琚拷鐣ヤ笉鎶ラ敊锛夛紝閫愮獥鍙ｅ涓荤獥鍙ｆ槸涓嬩竴鎻愪氦锛堢獥鍙ｈ〃宸插彂甯冿紝CLI 涔熶細鎵撳嵃锛夈€?
+### 19.7 鍚庣画 / Next
+
+1. 鏌ョ湅鍣?`--mode windows`锛氭寜绐楀彛琛ㄤ负姣忎釜瀹瑰櫒绐楀彛寤轰竴涓涓荤獥鍙ｏ紙鐭╁舰/鏍囬/z-order 闀滃儚锛? 杈撳叆鎸夌獥鍙ｅ洖浼狅紱
+2. 璇讳晶鐢?`CreateDIBSection(hSection)` 鐩村啓鍏变韩鍐呭瓨锛堝幓鎺夊鍣ㄥ唴閭ｆ memcpy锛屄?5.2锛夛紱
+3. 鎶?`SignalR`/gRPC 鎺ュ埌 provider 涓婏紙鏈嶅姟瀹夸富閲屽凡鏄悓涓€濂楃粍浠讹紝鍔?`StartDesktop` 绛?RPC 鍗冲彲锛夈€?

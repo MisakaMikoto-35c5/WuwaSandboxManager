@@ -24,6 +24,14 @@ public sealed record SandboxRecipe
 
     public RdpTransportKind Transport { get; init; } = RdpTransportKind.NamedPipe;
 
+    /// <summary>
+    /// How the container's desktop is produced and presented. Only meaningful for
+    /// process-isolated containers (see
+    /// <see cref="ContainerDesktopKind"/> and
+    /// <c>docs/investigation/13-container-desktop-and-rdp.md</c>).
+    /// </summary>
+    public SandboxDesktopPlan Desktop { get; init; } = SandboxDesktopPlan.Default;
+
     /// <summary>When true the sandbox is presented as RemoteApp/RAIL windows.</summary>
     public bool RailMode { get; init; }
 

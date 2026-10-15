@@ -12,12 +12,13 @@ using Wsm.Engines.Abstractions;
 namespace Wsm.Connection.ContainerDesktop.Internal;
 
 /// <summary>
-/// Default <see cref="IContainerDesktopHost"/>. It orchestrates the measured
-/// pipeline: materialise the in-container agent through the container's
-/// host-visible root, start it detached inside the container, wait for its first
-/// frame, then optionally present it as a window in the interactive session.
+/// <b>Frame buffer</b> container desktop provider (<c>frame-buffer</c>): it
+/// materialises an agent into the container through its host-visible root, starts it
+/// detached inside the container, waits for its first frame and can present it as a
+/// window in the interactive session. One frame = the whole desktop, so it copies
+/// whole frames; it needs no image change. See doc sections 13-14.
 /// </summary>
-internal sealed class ContainerDesktopHost : IContainerDesktopHost, ISingletonDependency
+internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IContainerDesktopRootStop, ISingletonDependency
 {
     private const string AgentResourceName =
         "Wsm.Connection.ContainerDesktop.Agent.container-desktop-agent.ps1";
@@ -28,13 +29,13 @@ internal sealed class ContainerDesktopHost : IContainerDesktopHost, ISingletonDe
     private readonly ISandboxEngineRegistry _registry;
     private readonly ISessionProcessLauncher _launcher;
     private readonly IOptions<ContainerDesktopOptions> _options;
-    private readonly ILogger<ContainerDesktopHost> _logger;
+    private readonly ILogger<FrameBufferDesktopProvider> _logger;
 
-    public ContainerDesktopHost(
+    public FrameBufferDesktopProvider(
         ISandboxEngineRegistry registry,
         ISessionProcessLauncher launcher,
         IOptions<ContainerDesktopOptions> options,
-        ILogger<ContainerDesktopHost> logger)
+        ILogger<FrameBufferDesktopProvider> logger)
     {
         _registry = registry;
         _launcher = launcher;
@@ -45,7 +46,46 @@ internal sealed class ContainerDesktopHost : IContainerDesktopHost, ISingletonDe
     private ContainerDesktopOptions Options => _options.Value;
 
     /// <inheritdoc />
+    public string Id => ContainerDesktopProviderIds.FrameBuffer;
+
+    /// <inheritdoc />
+    public ContainerDesktopKind Kind => ContainerDesktopKind.FrameBuffer;
+
+    /// <inheritdoc />
     public bool IsSupported => Options.ShouldEnable;
+
+    /// <inheritdoc />
+    public Task<ContainerDesktopSession> StartAsync(
+        ContainerDesktopRequest request, CancellationToken cancellationToken = default)
+        => string.IsNullOrWhiteSpace(request.ContainerRoot)
+            ? StartAsync(request.SandboxId, cancellationToken)
+            : AttachAsync(request.ComputeSystemId, request.ContainerRoot, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ContainerDesktopSession?> AttachAsync(
+        ContainerDesktopRequest request, CancellationToken cancellationToken = default)
+    {
+        EnsureSupported();
+        if (string.IsNullOrWhiteSpace(request.ContainerRoot))
+        {
+            return Task.FromResult<ContainerDesktopSession?>(null);
+        }
+
+        // Adopt only: a valid frame header means an agent is already publishing.
+        var directory = AgentDirectoryFor(request.ContainerRoot);
+        var framePath = Path.Combine(directory, Options.FrameFileName);
+        if (TryReadFrameHeader(framePath) is not { } geometry)
+        {
+            return Task.FromResult<ContainerDesktopSession?>(null);
+        }
+
+        var session = new ContainerDesktopSession(
+            request.SandboxId, request.ContainerRoot, directory, framePath, geometry,
+            DateTimeOffset.UtcNow, null, ContainerDesktopProviderIds.FrameBuffer);
+        _sessions[request.SandboxId.Value] = session;
+        _logger.LogInformation("Adopted the running frame buffer desktop for {SandboxId}.", request.SandboxId);
+        return Task.FromResult<ContainerDesktopSession?>(session);
+    }
 
     /// <inheritdoc />
     public IReadOnlyList<ContainerDesktopSession> Sessions => _sessions.Values.ToArray();
@@ -235,16 +275,7 @@ internal sealed class ContainerDesktopHost : IContainerDesktopHost, ISingletonDe
     /// the host at its own <c>C:\wsm</c> instead of the container's.
     /// </summary>
     internal static string ToRelativeContainerPath(string containerDirectory)
-    {
-        var relative = containerDirectory.Replace('/', '\\').TrimStart('\\');
-        var colon = relative.IndexOf(':');
-        if (colon >= 0)
-        {
-            relative = relative[(colon + 1)..];
-        }
-
-        return relative.TrimStart('\\');
-    }
+        => ContainerDesktopPaths.ToRelative(containerDirectory);
 
     private string AgentDirectoryFor(string containerRoot)
         => Path.Combine(containerRoot.TrimEnd('\\'), ToRelativeContainerPath(Options.AgentDirectory));

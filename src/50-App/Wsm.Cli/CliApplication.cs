@@ -698,6 +698,7 @@ public sealed class CliApplication
 
         var id = byComputeSystem ? Guid.Parse(computeSystem!) : RequireGuid(positional, 0);
         var sandboxId = SandboxInstanceId.From(id);
+        var recipe = await DesktopRecipeAsync(id, byComputeSystem, options);
 
         if (options.ContainsKey("stop"))
         {
@@ -715,13 +716,22 @@ public sealed class CliApplication
         }
 
         var session = byComputeSystem
-            ? await _containerDesktop.AttachAsync(computeSystem!, containerRoot!)
-            : await _containerDesktop.StartAsync(sandboxId);
+            ? await _containerDesktop.AttachAsync(computeSystem!, containerRoot!, recipe)
+            : await _containerDesktop.StartAsync(sandboxId, recipe);
 
         Console.WriteLine($"Desktop  : {session.SandboxId}");
+        Console.WriteLine($"Provider : {session.ProviderId}");
         Console.WriteLine($"Root     : {session.ContainerRoot}");
         Console.WriteLine($"Frames   : {session.FramePath}");
         Console.WriteLine($"Geometry : {session.Geometry.Width}x{session.Geometry.Height} @ {session.Geometry.Fps}fps");
+        if (session.Windows is { Count: > 0 } windows)
+        {
+            Console.WriteLine($"Windows  : {windows.Count}");
+            foreach (var window in windows.Take(10))
+            {
+                Console.WriteLine($"  - {window.Width}x{window.Height} @({window.X},{window.Y}) {window.Title}");
+            }
+        }
 
         var input = options.GetValueOrDefault("input");
         if (!string.IsNullOrWhiteSpace(input))
@@ -730,13 +740,64 @@ public sealed class CliApplication
             Console.WriteLine($"Input    : sent '{input}'");
         }
 
-        if (options.ContainsKey("attach"))
+        if (session.ViewerProcessId is { } viewer)
         {
-            var presented = await _containerDesktop.PresentAsync(sandboxId);
-            Console.WriteLine($"Viewer   : pid {presented.ViewerProcessId}");
+            Console.WriteLine($"Viewer   : pid {viewer}");
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// The recipe a <c>desktop</c> invocation should use: the sandbox's own manifest,
+    /// with the command line able to override the parts that are per-invocation
+    /// (<c>--provider</c>, <c>--mode</c>, <c>--present</c>/<c>--no-present</c>).
+    /// <para>
+    /// This is the whole point of the manifest seam: which mechanism produces the
+    /// desktop is data (the recipe), not something callers hard-code.
+    /// </para>
+    /// </summary>
+    private async Task<SandboxRecipe> DesktopRecipeAsync(
+        Guid id, bool hasContainerTarget, Dictionary<string, string?> options)
+    {
+        var recipe = SandboxRecipe.Default;
+        if (!hasContainerTarget)
+        {
+            try
+            {
+                recipe = (await _manager.GetAsync(id)).Recipe;
+            }
+            catch (Exception)
+            {
+                // An id that this host does not manage (a container owned by someone
+                // else, or a raw compute system): fall back to the default plan and
+                // let the command line name what it wants.
+            }
+        }
+
+        var plan = recipe.Desktop;
+        if (options.GetValueOrDefault("provider") is { Length: > 0 } provider)
+        {
+            plan = plan with { Provider = provider };
+        }
+
+        if (options.GetValueOrDefault("mode") is { Length: > 0 } mode
+            && Enum.TryParse<ContainerDesktopKind>(mode, ignoreCase: true, out var kind))
+        {
+            plan = plan with { Kind = kind };
+        }
+
+        if (options.ContainsKey("no-present"))
+        {
+            plan = plan with { PresentToInteractiveSession = false };
+        }
+
+        if (options.ContainsKey("present") || options.ContainsKey("attach"))
+        {
+            plan = plan with { PresentToInteractiveSession = true };
+        }
+
+        return recipe with { Desktop = plan };
     }
 
     private int DesktopViewAsync(Dictionary<string, string?> options)
@@ -826,6 +887,7 @@ public sealed class CliApplication
         {
             "import" => await ImageImportAsync(positional, options),
             "desktop" => ImageDesktop(positional),
+            "mirror" => ImageMirror(positional),
             _ => UnknownImageSubcommand(subcommand),
         };
     }
@@ -835,6 +897,7 @@ public sealed class CliApplication
         Console.Error.WriteLine($"Unknown 'wsm image' subcommand '{subcommand}'.");
         Console.Error.WriteLine("Usage: wsm image import <reference> <layerPath> [--desktop]");
         Console.Error.WriteLine("       wsm image desktop <layerPath>");
+        Console.Error.WriteLine("       wsm image mirror <layerPath>");
         return 2;
     }
 
@@ -907,6 +970,37 @@ public sealed class CliApplication
         Console.WriteLine("Containers from this image now boot an interactive console session");
         Console.WriteLine("(winlogon and LogonUI start; the image may still have no shell binary).");
         Console.WriteLine("This does NOT enable RDP: termsrv refuses a listener inside a container.");
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>wsm image mirror &lt;layerPath&gt;</c>: installs the <b>window-mirror</b>
+    /// payload into an image layer - the logon hook (<c>Winlogon\Userinit</c>) and the
+    /// read side that runs inside the container's own session. Containers built from
+    /// the image then publish per-window frames that the host mirrors as real windows
+    /// (sandbox recipe: <c>Desktop.Provider = window-mirror</c>).
+    /// </summary>
+    private int ImageMirror(List<string> positional)
+    {
+        if (positional.Count < 2)
+        {
+            Console.Error.WriteLine("Usage: wsm image mirror <layerPath>");
+            return 2;
+        }
+
+        if (_imageCustomizer is null)
+        {
+            Console.Error.WriteLine("The image customizer is not available in this build.");
+            return 1;
+        }
+
+        var prep = _imageCustomizer.EnableWindowMirror(positional[1]);
+        Console.WriteLine($"Patched hive : {prep.HiveFile}");
+        Console.WriteLine($"Userinit     : {prep.UserinitBefore}  ->  {prep.UserinitAfter}");
+        Console.WriteLine($"Payload      : {string.Join(", ", prep.PayloadFiles)}");
+        Console.WriteLine("Containers from this image now start the window-mirror read side inside their");
+        Console.WriteLine("own session at logon. Restart any container that is already running, then use");
+        Console.WriteLine("Desktop.Provider = 'window-mirror' in the sandbox recipe.");
         return 0;
     }
 

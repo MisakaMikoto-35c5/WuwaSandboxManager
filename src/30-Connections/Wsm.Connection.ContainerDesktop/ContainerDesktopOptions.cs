@@ -32,6 +32,12 @@ public sealed class ContainerDesktopOptions
     /// <summary>Name of the shared-memory frame file inside the agent directory.</summary>
     public string FrameFileName { get; set; } = "frame.shm";
 
+    /// <summary>
+    /// Name of the shared-memory mirror file the window-mirror read side publishes
+    /// (a full desktop frame plus a top-level window table).
+    /// </summary>
+    public string MirrorFileName { get; set; } = "mirror.shm";
+
     /// <summary>Prefix of the one-file-per-command input queue.</summary>
     public string InputFilePrefix { get; set; } = "input-";
 
@@ -62,6 +68,12 @@ public sealed class ContainerDesktopOptions
 
     /// <summary>Arguments template for the viewer; {0} is the frame file path.</summary>
     public string ViewerArguments { get; set; } = "desktop-view --frame \"{0}\"";
+
+    /// <summary>
+    /// Viewer arguments for the window-mirror provider: the viewer creates one host
+    /// window per container window instead of one window for the whole desktop.
+    /// </summary>
+    public string MirrorViewerArguments { get; set; } = "desktop-view --mode windows --frame \"{0}\"";
 
     /// <summary>How long the presented viewer window stays open (0 = until closed).</summary>
     public int ViewerLifetimeSeconds { get; set; }

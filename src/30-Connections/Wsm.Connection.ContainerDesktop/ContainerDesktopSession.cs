@@ -27,6 +27,12 @@ public readonly record struct ContainerDesktopGeometry(int Width, int Height, in
 /// <param name="Geometry">Frame geometry.</param>
 /// <param name="StartedAt">When the channel was started.</param>
 /// <param name="ViewerProcessId">Process id of the presented viewer, when one was started.</param>
+/// <param name="ProviderId">Which provider produced this session.</param>
+/// <param name="Windows">
+/// Top-level windows the read side published, when the provider mirrors windows
+/// (one host window per container window); <c>null</c> means "one frame = the whole
+/// desktop", which is what the frame buffer provider produces.
+/// </param>
 public sealed record ContainerDesktopSession(
     SandboxInstanceId SandboxId,
     string ContainerRoot,
@@ -34,7 +40,9 @@ public sealed record ContainerDesktopSession(
     string FramePath,
     ContainerDesktopGeometry Geometry,
     DateTimeOffset StartedAt,
-    int? ViewerProcessId = null)
+    int? ViewerProcessId = null,
+    string ProviderId = ContainerDesktopProviderIds.FrameBuffer,
+    IReadOnlyList<ContainerDesktopWindow>? Windows = null)
 {
     /// <summary>Host path of the input queue directory.</summary>
     public string InputDirectory => AgentDirectory;

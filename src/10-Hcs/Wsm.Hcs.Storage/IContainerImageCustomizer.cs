@@ -41,7 +41,45 @@ public interface IContainerImageCustomizer
     /// </summary>
     /// <returns>What was changed, for logging/telemetry.</returns>
     ContainerImageSessionPrep EnableInteractiveSession(string layerPath);
+
+    /// <summary>
+    /// Installs the <b>window-mirror</b> payload into a prepared base image layer: the
+    /// logon hook (<c>C:\wsm\wsm-winlogon-wrap.cmd</c>) is appended to
+    /// <c>Winlogon\Userinit</c> in the image's <c>SOFTWARE</c> hive, and the read side
+    /// (<c>C:\wsm\wsm-desktop-read.ps1</c> + its launcher) is copied into
+    /// <c>Files\wsm\</c>.
+    /// <para>
+    /// This is what makes the read side run <b>inside the container's own interactive
+    /// session</b>, which is the only place the container's windows can be enumerated
+    /// and captured: from outside, window stations are not addressable and creating a
+    /// process in the session fails at DLL initialization (<c>0xC0000142</c>). Measured;
+    /// see <c>docs/investigation/13-container-desktop-and-rdp.md</c> sections 16-18.
+    /// </para>
+    /// <para>
+    /// <c>Userinit</c> is used rather than replacing <c>winlogon.exe</c> (e.g. through
+    /// Image File Execution Options) because it is the logon extension point Microsoft
+    /// documents for this, and it cannot break a logon: the hook only starts the read
+    /// side detached and returns immediately.
+    /// </para>
+    /// <para>
+    /// The change is baked into the image, so a container that is already running was
+    /// started before it and must be restarted to pick it up. Requires elevation.
+    /// </para>
+    /// </summary>
+    /// <returns>What was changed, for logging/telemetry.</returns>
+    ContainerImageDesktopPrep EnableWindowMirror(string layerPath);
 }
+
+/// <summary>Result of <see cref="IContainerImageCustomizer.EnableWindowMirror"/>.</summary>
+/// <param name="HiveFile">The <c>SOFTWARE</c> hive that was patched.</param>
+/// <param name="UserinitBefore">The <c>Userinit</c> value before the patch.</param>
+/// <param name="UserinitAfter">The <c>Userinit</c> value after the patch.</param>
+/// <param name="PayloadFiles">Container-side paths of the installed payload files.</param>
+public sealed record ContainerImageDesktopPrep(
+    string HiveFile,
+    string UserinitBefore,
+    string UserinitAfter,
+    IReadOnlyList<string> PayloadFiles);
 
 /// <summary>Result of <see cref="IContainerImageCustomizer.EnableInteractiveSession"/>.</summary>
 /// <param name="HiveFile">The <c>SYSTEM</c> hive that was patched.</param>

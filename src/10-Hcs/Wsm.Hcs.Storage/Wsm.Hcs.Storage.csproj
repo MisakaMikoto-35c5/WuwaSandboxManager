@@ -23,4 +23,14 @@
     </AssemblyAttribute>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Image payload for the window-mirror read side: the logon hook and the read
+         side itself are baked into the base image, because a process-isolated
+         container reads its registry and starts its session before any WSM code can
+         run inside it. -->
+    <EmbeddedResource Include="Images\wsm-winlogon-wrap.cmd" />
+    <EmbeddedResource Include="Images\wsm-desktop-read.cmd" />
+    <EmbeddedResource Include="Images\wsm-desktop-read.ps1" />
+  </ItemGroup>
+
 </Project>

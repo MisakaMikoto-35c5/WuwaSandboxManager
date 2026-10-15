@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using Volo.Abp.DependencyInjection;
 using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Hcs.Storage.Internal;
 
@@ -23,6 +24,26 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     private const string SessionManagerSubKey = @"Control\Session Manager";
     private const string InitialSessionsValue = "NumberOfInitialSessions";
     private const string ControlSetPrefix = "ControlSet";
+
+    /// <summary>Where <c>Userinit</c> lives - the documented logon extension point.</summary>
+    private const string WinlogonSubKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
+
+    /// <summary>The value our logon hook is appended to.</summary>
+    internal const string UserinitValue = "Userinit";
+
+    /// <summary>The value <c>Userinit</c> has when an image sets none.</summary>
+    internal const string DefaultUserinit = @"C:\Windows\system32\userinit.exe";
+
+    /// <summary>Folder inside the container that receives the payload files.</summary>
+    private const string PayloadFolder = "wsm";
+
+    /// <summary>The payload files copied into the image, by file name.</summary>
+    private static readonly string[] PayloadFiles =
+    {
+        "wsm-winlogon-wrap.cmd",
+        "wsm-desktop-read.cmd",
+        "wsm-desktop-read.ps1",
+    };
 
     private readonly ILogger<ContainerImageCustomizer> _logger;
 
@@ -105,5 +126,97 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         throw new SandboxValidationException(
             $"'{root}' is not a prepared WCOW base image layer (no " +
             @"'Files\Windows\System32\config\SYSTEM'). Import a Windows Server image first.");
+    }
+
+    /// <summary>The <c>SOFTWARE</c> hive of a prepared base image layer (same layout rules).</summary>
+    internal static string ResolveSoftwareHive(string layerPath)
+    {
+        var root = Path.GetFullPath(layerPath);
+        var files = Path.Combine(root, "Files", "Windows", "System32", "config", "SOFTWARE");
+        if (File.Exists(files))
+        {
+            return files;
+        }
+
+        var hardLinked = Path.Combine(root, "Hives", "SOFTWARE_BASE");
+        if (File.Exists(hardLinked))
+        {
+            return hardLinked;
+        }
+
+        throw new SandboxValidationException(
+            $"'{root}' is not a prepared WCOW base image layer (no " +
+            @"'Files\Windows\System32\config\SOFTWARE'). Import a Windows Server image first.");
+    }
+
+    /// <inheritdoc />
+    public ContainerImageDesktopPrep EnableWindowMirror(string layerPath)
+    {
+        var hiveFile = ResolveSoftwareHive(layerPath);
+        var payload = InstallPayload(layerPath, out var payloadPaths);
+
+        string before;
+        string after;
+
+        using (var hive = OfflineRegistryHive.Load(hiveFile))
+        {
+            using var root = hive.OpenRoot()
+                ?? throw new SandboxBackendException(
+                    $"The offline hive '{hiveFile}' has no root key.", 0);
+
+            using var winlogon = root.CreateSubKey(WinlogonSubKey, writable: true)
+                ?? throw new SandboxBackendException(
+                    $"Cannot open or create '{WinlogonSubKey}' in '{hiveFile}'.", 0);
+
+            before = winlogon.GetValue(UserinitValue) as string ?? string.Empty;
+            after = AppendUserinit(before, ContainerDesktopPaths.WrapCommand);
+            winlogon.SetValue(UserinitValue, after, RegistryValueKind.String);
+
+            _logger.LogInformation(
+                "Container base image '{Hive}': {Key}\\{Value} '{Before}' -> '{After}'.",
+                hiveFile, WinlogonSubKey, UserinitValue, before, after);
+        }
+
+        _logger.LogInformation(
+            "The base image at '{Layer}' now starts the window-mirror read side inside the container's " +
+            "session at logon ({Payload}); restart any container built from it.",
+            layerPath, string.Join(", ", payloadPaths));
+
+        return new ContainerImageDesktopPrep(hiveFile, before, after, payloadPaths);
+    }
+
+    /// <summary>Appends our hook to the comma-separated <c>Userinit</c> list, idempotently.</summary>
+    internal static string AppendUserinit(string current, string hook)
+    {
+        var entries = (string.IsNullOrWhiteSpace(current) ? DefaultUserinit : current)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        if (!entries.Any(e => string.Equals(e, hook, StringComparison.OrdinalIgnoreCase)))
+        {
+            entries.Add(hook);
+        }
+
+        return string.Join(",", entries);
+    }
+
+    private static string InstallPayload(string layerPath, out IReadOnlyList<string> containerPaths)
+    {
+        var directory = Path.Combine(Path.GetFullPath(layerPath), "Files", PayloadFolder);
+        Directory.CreateDirectory(directory);
+
+        var installed = new List<string>();
+        foreach (var file in PayloadFiles)
+        {
+            var resource = $"Wsm.Hcs.Storage.Images.{file}";
+            using var stream = typeof(ContainerImageCustomizer).Assembly.GetManifestResourceStream(resource)
+                ?? throw new SandboxBackendException($"The embedded image payload '{resource}' is missing.", 0);
+            using var target = File.Create(Path.Combine(directory, file));
+            stream.CopyTo(target);
+            installed.Add($@"C:\{PayloadFolder}\{file}");
+        }
+
+        containerPaths = installed;
+        return directory;
     }
 }

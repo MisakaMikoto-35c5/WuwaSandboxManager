@@ -14,6 +14,18 @@ namespace Wsm.Connection.RdpHost;
 /// </summary>
 public sealed record RdpSessionRequest
 {
+    /// <summary>
+    /// The owning sandbox instance id. Drives the lifecycle controls (power on,
+    /// restart, shutdown) the connector exposes in its toolbar.
+    /// </summary>
+    public Guid SandboxId { get; init; }
+
+    /// <summary>
+    /// True to present the session as seamless RemoteApp (RAIL) windows. Mirrors
+    /// <see cref="RemoteApp"/> but is kept alongside for the lifecycle controls.
+    /// </summary>
+    public SandboxConnectionMode Mode { get; init; } = SandboxConnectionMode.FullDesktop;
+
     /// <summary>The RDPBASE named-pipe endpoint, i.e. <c>\\.\pipe\&lt;VmId&gt;</c>.</summary>
     public required string PipeName { get; init; }
 

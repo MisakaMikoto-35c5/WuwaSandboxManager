@@ -12,6 +12,8 @@
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Environment\Wsm.Host.Environment.csproj" />
     <ProjectReference Include="..\Wsm.Connection.RdpBase\Wsm.Connection.RdpBase.csproj" />
     <ProjectReference Include="..\Wsm.Connection.RdpHost\Wsm.Connection.RdpHost.csproj" />
+    <ProjectReference Include="..\Wsm.Connection.RdpHost.Wpf\Wsm.Connection.RdpHost.Wpf.csproj" />
+    <ProjectReference Include="..\Wsm.Connection.RdpHost.WinUi\Wsm.Connection.RdpHost.WinUi.csproj" />
     <ProjectReference Include="..\Wsm.Connection.Legacy\Wsm.Connection.Legacy.csproj" />
   </ItemGroup>
 

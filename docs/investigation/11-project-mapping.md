@@ -36,6 +36,10 @@
 | gRPC 客户端 / gRPC client | `Wsm.SandboxServer.Client`（`ISandboxServerClient`，`sandbox_core.proto` + 命名管道通道） | `Infrastructure/Grpc/*` |
 | 序列化 / Serialization | `Wsm.Recipe.Serialization`（`ISandboxRecipeSerializer`，`.wsb` XML） | `Infrastructure/Serialization/WsbRecipeXmlSerializer` |
 | RDPBASE 连接器 / connector | `Wsm.Connection.RdpBase`（`IRdpBaseConnectorFactory`、`IRdpBaseConnector`） | `Infrastructure/Connectors/RdpBaseNamedPipeConnector` |
+| RDP 呈现契约与选择 / connector contract & selection | `Wsm.Connection.RdpHost`（`IRdpSessionHost`/`IRdpConnectorHost`/`IRdpSandboxControl`/`IRdpConnectorPreference`、`SelectingRdpSessionHost`） | `Infrastructure/Connectors/*` |
+| mstscax 宿主 / ActiveX host | `Wsm.Connection.RdpHost.Ax`（`RdpClientControl`，TlbImp/AxImp） | `Infrastructure/Connectors/*` |
+| WPF 连接器 / WPF connector | `Wsm.Connection.RdpHost.Wpf`（`WpfRdpConnectorHost`） | （新 / new） |
+| WinUI 3 连接器 / WinUI 3 connector | `Wsm.Connection.RdpHost.WinUi` + `Wsm.Rdp.WinUI`（`WinUiRdpConnectorHost`，独立进程） | （新 / new） |
 | 会话启动 / session launch | `Wsm.Connection.Session`（`ISessionLauncher`） | `Infrastructure/Connectors/WindowsSandboxSessionConnector` |
 | 传统启动器 / legacy launcher | `Wsm.Connection.Legacy`（`ILegacySandboxLauncher`） | （新拆 / new） |
 | 持久化 / Persistence | `Wsm.Persistence`（`ISandboxInstanceRepository`，JSON + `.wsb`） | `Infrastructure/Repositories/*` |
@@ -43,7 +47,7 @@
 | 提权 / Elevation | `Wsm.Host.Elevation`（`IElevationService`） | `Infrastructure/Elevation/*` |
 | 多实例策略 / Multi-instance policy | `Wsm.Host.Policy`（`IMultiInstancePolicy`） | `Infrastructure/Environment/SandboxMultiInstancePolicy` |
 | 本地化 / Localization | `Wsm.Localization`（`WindowsSandboxManagerResource`，ABP JSON `en`/`zh-Hans`） | （新拆 / new） |
-| 表现层 / Presentation | `Wsm.Cli`（`wsm`，`CliModule`）、`Wsm.Ui.WinUI`（WinUI3，`WinUiModule`，`.resw`/`x:Uid`） | `Cli/*`、`App/*` |
+| 表现层 / Presentation | `Wsm.Cli`（`wsm`，`CliModule`）、`Wsm.Ui.WinUI`（WinUI3，`WinUiModule`，`.resw`/`x:Uid`）、`Wsm.Rdp.WinUI`（WinUI3 RDP 连接器进程） | `Cli/*`、`App/*` |
 | 测试 / Tests | `Wsm.Tests`（`TestModule`，49 个测试） | `tests/WindowsSandboxManager.Tests` |
 
 > 旧 `Infrastructure/DependencyInjection.cs` 与 `Application/DependencyInjection.cs`（手写 DI 扩展）
@@ -160,7 +164,7 @@ wsm help                # 显示帮助 / show help
 
 ## 证据 / Evidence
 
-- 解决方案 `WindowsSandboxManager.slnx`：**28 个程序集**，分层文件夹
+- 解决方案 `WindowsSandboxManager.slnx`：**32 个程序集**，分层文件夹
   `/src/00-Core/`、`/src/10-Hcs/`、`/src/20-Engines/`、`/src/30-Connections/`、`/src/40-Host/`、
   `/src/50-App/`、`/tests/90-Tests/`。
 - 旧栈（`src/WindowsSandboxManager.*` 与 `tests/WindowsSandboxManager.Tests`）已由提交 `92c2a08`

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Wsm.Connection.RdpHost.WinUi</RootNamespace>
+    <AssemblyName>Wsm.Connection.RdpHost.WinUi</AssemblyName>
+    <Description>WinUI 3 RDP connector module: launches the dedicated Wsm.Rdp.WinUI connector process and waits for its window to close.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Wsm.Connection.RdpHost\Wsm.Connection.RdpHost.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Volo.Abp.Core" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
+  </ItemGroup>
+
+</Project>

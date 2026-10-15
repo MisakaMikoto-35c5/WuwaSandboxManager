@@ -28,6 +28,9 @@
     <Project Path="src/30-Connections/Wsm.Recipe.Serialization/Wsm.Recipe.Serialization.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.RdpBase/Wsm.Connection.RdpBase.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.RdpHost/Wsm.Connection.RdpHost.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RdpHost.Ax/Wsm.Connection.RdpHost.Ax.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RdpHost.Wpf/Wsm.Connection.RdpHost.Wpf.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RdpHost.WinUi/Wsm.Connection.RdpHost.WinUi.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Session/Wsm.Connection.Session.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Legacy/Wsm.Connection.Legacy.csproj" />
     <Project Path="src/30-Connections/Wsm.Service.Contracts/Wsm.Service.Contracts.csproj" />
@@ -44,6 +47,9 @@
   <Folder Name="/src/50-App/">
     <Project Path="src/50-App/Wsm.Cli/Wsm.Cli.csproj" />
     <Project Path="src/50-App/Wsm.Ui.WinUI/Wsm.Ui.WinUI.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/50-App/Wsm.Rdp.WinUI/Wsm.Rdp.WinUI.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>

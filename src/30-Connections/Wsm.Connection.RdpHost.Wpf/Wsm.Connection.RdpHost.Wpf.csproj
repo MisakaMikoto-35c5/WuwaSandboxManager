@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>Wsm.Connection.RdpHost.Wpf</RootNamespace>
+    <AssemblyName>Wsm.Connection.RdpHost.Wpf</AssemblyName>
+    <Description>WPF desktop RDP connector: a XAML window with quick lifecycle controls, full screen and live resize, hosting the mstscax ActiveX control.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Wsm.Connection.RdpHost\Wsm.Connection.RdpHost.csproj" />
+    <ProjectReference Include="..\Wsm.Connection.RdpHost.Ax\Wsm.Connection.RdpHost.Ax.csproj" />
+    <ProjectReference Include="..\Wsm.Connection.RdpBase\Wsm.Connection.RdpBase.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Localization\Wsm.Localization.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Volo.Abp.Core" />
+    <PackageReference Include="Volo.Abp.Localization" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Wsm.Tests" />
+  </ItemGroup>
+
+</Project>

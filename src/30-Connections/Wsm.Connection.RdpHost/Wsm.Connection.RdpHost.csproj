@@ -2,81 +2,14 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
-    <PlatformTarget>x64</PlatformTarget>
     <RootNamespace>Wsm.Connection.RdpHost</RootNamespace>
     <AssemblyName>Wsm.Connection.RdpHost</AssemblyName>
-    <Description>Hosts the mstscax ActiveX control to present an RDP-over-named-pipe session (full desktop or RAIL/RemoteApp).</Description>
+    <Description>RDP connector abstractions: the session request/contract and the selectable presentation (WPF / WinUI 3).</Description>
   </PropertyGroup>
-
-  <!--
-    The RDP ActiveX control (mstscax.dll) has no NuGet projection, so the COM
-    interop assemblies are generated at build time with the Windows SDK tools
-    (the same approach as the verified PersistentSandboxManager viewer):
-      * TlbImp -> Interop.MSTSCLib.dll   (runtime callable wrapper for MSTSCLib)
-      * AxImp  -> AxInterop.MSTSCLib.dll (WinForms ActiveX host over that RCW)
-    The strongly typed host is required: the late-bound (IDispatch) approach
-    cannot pass the RDPBASE endpoint (ConnectWithEndpoint is a `ref object`) and
-    cannot reach IMsRdpExtendedSettings.
-  -->
-  <PropertyGroup>
-    <MstscAxDll Condition="'$(MstscAxDll)' == ''">$(windir)\System32\mstscax.dll</MstscAxDll>
-    <MstscInteropDir>$(MSBuildProjectDirectory)\obj\MstscInterop\</MstscInteropDir>
-    <InteropMstscLibPath>$(MstscInteropDir)Interop.MSTSCLib.dll</InteropMstscLibPath>
-    <AxInteropMstscLibPath>$(MstscInteropDir)AxInterop.MSTSCLib.dll</AxInteropMstscLibPath>
-  </PropertyGroup>
-
-  <Target Name="GenerateMstscInterop" BeforeTargets="ResolveAssemblyReferences" Condition="'$(GenerateMstscInteropDone)' != 'true'">
-    <PropertyGroup>
-      <ProgramFilesX86>$([System.Environment]::GetEnvironmentVariable('ProgramFiles(x86)'))</ProgramFilesX86>
-      <_MstscInteropMissing Condition="!Exists('$(InteropMstscLibPath)') or !Exists('$(AxInteropMstscLibPath)')">true</_MstscInteropMissing>
-    </PropertyGroup>
-
-    <!-- Windows Kits first, then the .NET Framework SDK tools (both x64), newest last so it wins. -->
-    <ItemGroup>
-      <_MstscTool Include="$(ProgramFilesX86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX * Tools\x64\AxImp.exe" Tool="ax" />
-      <_MstscTool Include="$(ProgramFilesX86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX * Tools\x64\TlbImp.exe" Tool="tlb" />
-      <_MstscTool Include="$(ProgramFilesX86)\Windows Kits\10\bin\*\x64\aximp.exe" Tool="ax" />
-      <_MstscTool Include="$(ProgramFilesX86)\Windows Kits\10\bin\*\x64\tlbimp.exe" Tool="tlb" />
-    </ItemGroup>
-
-    <PropertyGroup>
-      <AxImpPath Condition="'%(_MstscTool.Tool)' == 'ax'">%(_MstscTool.FullPath)</AxImpPath>
-      <TlbImpPath Condition="'%(_MstscTool.Tool)' == 'tlb'">%(_MstscTool.FullPath)</TlbImpPath>
-    </PropertyGroup>
-
-    <MakeDir Directories="$(MstscInteropDir)" Condition="'$(_MstscInteropMissing)' == 'true'" />
-
-    <Error Condition="'$(_MstscInteropMissing)' == 'true' and ('$(AxImpPath)' == '' or '$(TlbImpPath)' == '')"
-           Text="Could not find AxImp.exe / TlbImp.exe under '$(ProgramFilesX86)\Windows Kits\10\bin\*\x64' or the .NET Framework SDK tools. Install the Windows SDK / .NET Framework developer tools. Missing: AxImp='$(AxImpPath)' TlbImp='$(TlbImpPath)'." />
-
-    <Exec Condition="'$(_MstscInteropMissing)' == 'true'"
-          Command="&quot;$(TlbImpPath)&quot; &quot;$(MstscAxDll)&quot; /out:&quot;$(InteropMstscLibPath)&quot; /namespace:MSTSCLib /nologo /silent"
-          StandardOutputImportance="low" StandardErrorImportance="low" />
-
-    <Exec Condition="'$(_MstscInteropMissing)' == 'true'"
-          Command="&quot;$(AxImpPath)&quot; &quot;$(MstscAxDll)&quot; /out:&quot;$(AxInteropMstscLibPath)&quot; /rcw:&quot;$(InteropMstscLibPath)&quot; /nologo /silent"
-          StandardOutputImportance="low" StandardErrorImportance="low" />
-
-    <PropertyGroup>
-      <GenerateMstscInteropDone>true</GenerateMstscInteropDone>
-    </PropertyGroup>
-  </Target>
-
-  <ItemGroup>
-    <Reference Include="Interop.MSTSCLib">
-      <HintPath>$(InteropMstscLibPath)</HintPath>
-      <Private>true</Private>
-    </Reference>
-    <Reference Include="AxInterop.MSTSCLib">
-      <HintPath>$(AxInteropMstscLibPath)</HintPath>
-      <Private>true</Private>
-    </Reference>
-  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\00-Core\Wsm.Domain\Wsm.Domain.csproj" />
-    <ProjectReference Include="..\Wsm.Connection.RdpBase\Wsm.Connection.RdpBase.csproj" />
+    <ProjectReference Include="..\..\40-Host\Wsm.Persistence\Wsm.Persistence.csproj" />
   </ItemGroup>
 
   <ItemGroup>

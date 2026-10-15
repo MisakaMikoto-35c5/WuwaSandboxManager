@@ -50,14 +50,15 @@ build 一致（Windows Server 2022/2025 镜像例外），故通常需先 `wsm i
 ## 架构（ABP 模块化 · 一模块一程序集）
 
 仓库为 **Volo.Abp.Core 模块化单体**：每个程序集恰好一个 `AbpModule` 派生类，公共契约 `public`、
-实现 `internal`；`.slnx` 用**解决方案文件夹**按职责分层（组织用途）。共 **28 个程序集**
+实现 `internal`；`.slnx` 用**解决方案文件夹**按职责分层（组织用途）。共 **32 个程序集**
 （全部已实现；P5 的 4 个预留空壳已在第三个引擎落地时补齐）。命名空间根 **== 程序集名**（`Wsm.*`）；旧的
 `WindowsSandboxManager.*` 命名空间已全部消除。
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 表示层 Presentation  /src/50-App/                                       │
-│   Wsm.Cli (CliModule, `wsm`)      Wsm.Ui.WinUI (WinUiModule, .resw/x:Uid)│
+│   Wsm.Cli (CliModule, `wsm`)   Wsm.Ui.WinUI (WinUiModule, .resw/x:Uid)  │
+│   Wsm.Rdp.WinUI (WinUI3 连接器 / connector process)                     │
 └──────────────┬────────────────────────────────┬────────────────────────┘
                │ ISandboxManager                │ IAppLocalizer / ResourceLoader
 ┌──────────────▼────────────────────────────────▼────────────────────────┐
@@ -78,6 +79,8 @@ build 一致（Windows Server 2022/2025 镜像例外），故通常需先 `wsm i
 │                      Process / Network                                  │
 │ /src/30-Connections/ Wsm.SandboxServer.Client / Wsm.Recipe.Serialization│
 │                      Wsm.Connection.RdpBase / Session / Legacy          │
+│                      Wsm.Connection.RdpHost (契约) / .Ax (mstscax) /    │
+│                      .Wpf / .WinUi (可选择的连接器模块 / selectable)     │
 │ /src/40-Host/        Wsm.Persistence / Wsm.Host.Environment / Elevation │
 │                      / Policy / Wsm.Localization                        │
 └──────────────┬──────────────────────────────────────────────────────────┘
@@ -88,6 +91,32 @@ build 一致（Windows Server 2022/2025 镜像例外），故通常需先 `wsm i
 │   Checkpoint · 值对象 · 领域事件                                        │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## RDP 连接器（可选择的 WPF / WinUI 3 重写）
+
+会话呈现由**可选择的连接器模块**承担，二者实现同一契约、互不影响：
+
+| 模块 | 技术 | 进程模型 |
+| --- | --- | --- |
+| `Wsm.Connection.RdpHost.Wpf`（默认） | WPF XAML 窗口 + `WindowsFormsHost` 承载 `mstscax` | 在承载进程内（`wsm connect`） |
+| `Wsm.Connection.RdpHost.WinUi` + `Wsm.Rdp.WinUI` | WinUI 3 窗口，`mstscax` 以子 HWND 承载 | 独立连接器进程（参考 Windows Sandbox 的 WinUI 应用） |
+
+- 选择方式：`ui-settings.json` 的 `RdpConnector` 字段（GUI「设置」对话框可选），或 `WSM_RDP_CONNECTOR` 环境
+  变量覆盖（`wpf` / `winui`）；缺省 WPF。`Wsm.Connection.RdpHost` 只保留契约与选择器
+  （`IRdpSessionHost`/`IRdpConnectorHost`/`IRdpSandboxControl`），`Wsm.Connection.RdpHost.Ax` 共享
+  `mstscax` 互操作与 WinForms 宿主控件。
+- **快捷控制按钮**：发送 Ctrl+Alt+Del（`IMsRdpClientNonScriptable.SendKeys`）、重启、正常关机、强制关机、开机。
+  生命周期均为 VM 级：重启 = 先 `StopAsync` 再 `StartAsync`；关机 / 强制关机 = `StopAsync`（引擎自身会从
+  ACPI 优雅关机升级为 terminate）；开机 = `StartAsync`。操作经 `IRdpSandboxControl`（应用层）执行。
+- **全屏模式**：工具栏切换（WPF 为无边框最大化 + F11/Esc；WinUI 3 用 `AppWindow` 的 `FullScreenPresenter`）。
+- **窗口缩放**：RDP 表面随窗口自适应（控制填充 + `SmartSizing`，并在缩放后同步 `DesktopWidth/Height`），修复了
+  之前改变窗口大小内容尺寸不变的问题。
+
+> 注意：`mstscax` 是 ActiveX 控件，WinUI 3 **没有**原生的 ActiveX 承载能力；WinUI 3 连接器把
+> `mstscax`（经 `Wsm.Connection.RdpHost.Ax` 的 WinForms 控件）作为子 HWND 挂到 WinUI 窗口上。这依赖
+> 非官方支持的 HWND 承载（airspace：子窗口始终覆盖其所在区域），因此生命周期/确认对话框会先隐藏该子窗口。
 
 ---
 
@@ -269,6 +298,10 @@ mstsc /v:172.21.83.79   # 用户名 WDAGUtilityAccount；密码为确定性口�
 - `WindowsSandboxServer` gRPC 契约与 `RDPBASE`/`computecore`/`cmclient` 接口属**非公开**接口，可能随版本变化。
 - `ISandboxEnvironment.PackageInstallPath` 在非提权下可能为 `null`。
 - WinUI3 项目需 `x64`。
+- **WinUI 3 RDP 连接器依赖非官方支持的 HWND 承载**：`mstscax` 子窗口始终覆盖其所在区域（airspace），
+  因此工具栏以外的浮层（对话框）需先隐藏该子窗口。
+- 连接器工具栏的生命周期按钮经进程内 `ISandboxManager` 执行；在代理服务模式下由连接器进程内引擎直接操作
+  （HCS compute system 以名称定位，可跨进程停止/启动），尚未改为经代理 gRPC 转发。
 
 ---
 

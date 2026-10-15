@@ -34,12 +34,13 @@ module/project dependency graph):
 
 ## 2. 程序集清单 / Assembly inventory
 
-**中文**：下表是**最终** 28 个程序集的完整清单（P8b 之后，第三个引擎落地后）。P5 引入的 4 个
-**预留空壳**（容器 JSON / 进程 / 网络 / 容器引擎）现均已实现为 **核心**，因此 28 个程序集全部为已实现。
+**中文**：下表是**最终** 32 个程序集的完整清单（P8b、第三个引擎与可选择的 RDP 连接器落地后）。P5 引入的 4 个
+**预留空壳**（容器 JSON / 进程 / 网络 / 容器引擎）现均已实现为 **核心**，因此全部为已实现。
 
-**English**: The table lists the complete **final** inventory of 28 assemblies (after P8b and after the
-third engine landed). The four **reserved shells** introduced in P5 (container JSON, process, network,
-container engine) are now implemented as **Core**, so all 28 assemblies are implemented.
+**English**: The table lists the complete **final** inventory of 32 assemblies (after P8b, the third
+engine and the selectable RDP connector landed). The four **reserved shells** introduced in P5
+(container JSON, process, network, container engine) are now implemented as **Core**, so all are
+implemented.
 
 | 程序集 Assembly | 模块 Module | 公共契约 / 职责 Contract / responsibility | 状态 Status |
 |---|---|---|---|
@@ -61,6 +62,10 @@ container engine) are now implemented as **Core**, so all 28 assemblies are impl
 | `Wsm.SandboxServer.Client` | `SandboxServerClientModule` | `ISandboxServerClient`（命名管道 gRPC）/ named-pipe gRPC client | 核心 Core |
 | `Wsm.Recipe.Serialization` | `WsbRecipeSerializationModule` | `ISandboxRecipeSerializer`（`.wsb` XML）/ `.wsb` XML codec | 核心 Core |
 | `Wsm.Connection.RdpBase` | `RdpBaseModule` | `IRdpBaseConnectorFactory`、`IRdpBaseConnector` | 核心 Core |
+| `Wsm.Connection.RdpHost` | `RdpHostModule` | `IRdpSessionHost`/`IRdpConnectorHost`/`IRdpSandboxControl`/`IRdpConnectorPreference`、`SelectingRdpSessionHost`（连接器契约与选择）/ connector contract & selection | 核心 Core |
+| `Wsm.Connection.RdpHost.Ax` | （无模块 / no module） | `RdpClientControl`（`mstscax` 互操作 + WinForms 宿主）/ shared ActiveX host | 核心 Core |
+| `Wsm.Connection.RdpHost.Wpf` | `WpfRdpHostModule` | `WpfRdpConnectorHost`（默认 WPF 连接器）/ default WPF connector | 核心 Core |
+| `Wsm.Connection.RdpHost.WinUi` | `WinUiRdpHostModule` | `WinUiRdpConnectorHost`（启动 WinUI3 连接器进程）/ launches the WinUI3 connector | 核心 Core |
 | `Wsm.Connection.Session` | `SessionLaunchModule` | `ISessionLauncher` | 核心 Core |
 | `Wsm.Connection.Legacy` | `LegacyLauncherModule` | `ILegacySandboxLauncher` | 核心 Core |
 | `Wsm.Host.Environment` | `HostEnvironmentModule` | `ISandboxEnvironment`（特性探测/管道名）/ `ISandboxEnvironment` | 核心 Core |
@@ -157,12 +162,12 @@ runtime culture switch the window/page must be rebuilt (WinUI has no automatic r
 ## 6. 命名空间规则 / Namespace rule
 
 **中文**：**命名空间根 == 程序集名**（允许根下子命名空间，如 `*.Internal` / `*.Mapping`）。
-全部 28 个程序集均使用 `Wsm.*` 命名空间。迁移期间 `Wsm.Domain` 曾暂时保留
+全部 32 个程序集均使用 `Wsm.*` 命名空间。迁移期间 `Wsm.Domain` 曾暂时保留
 `WindowsSandboxManager.Domain*`（过渡债），**已在 P8b（`92c2a08`）重命名并消除**；仓库内
 `WindowsSandboxManager.*` 命名空间**全部消除**（守卫 grep 为空）。
 
 **English**: **Namespace root == assembly name** (sub-namespaces such as `*.Internal` / `*.Mapping` are
-allowed). All 28 assemblies now use `Wsm.*` namespaces. During the migration `Wsm.Domain` temporarily kept
+allowed). All 32 assemblies now use `Wsm.*` namespaces. During the migration `Wsm.Domain` temporarily kept
 `WindowsSandboxManager.Domain*` (accepted transition debt); it was **renamed and eliminated in P8b
 (`92c2a08`)**, and every `WindowsSandboxManager.*` namespace is now **gone** (the guard grep is empty).
 
@@ -214,21 +219,21 @@ later recovery. During the migration the old stack was untouched and the new sta
 → `06d4abb` → `b01311d` → `92c2a08`（HEAD）。
 
 **最终守卫 / Final guards**（P8b，全部通过 / all green）：
-- **命名空间根 == 程序集名**：全部 28 个程序集满足；`WindowsSandboxManager.*` 命名空间守卫 grep 为空。
+- **命名空间根 == 程序集名**：全部 32 个程序集满足；`WindowsSandboxManager.*` 命名空间守卫 grep 为空。
 - **旧栈删除**：`src/WindowsSandboxManager.*` 与 `tests/WindowsSandboxManager.Tests` 不复存在；
   旧 `Infrastructure/Hcs`、手写 DI 扩展、`Domain.Abstractions`（`Ports.cs`、
   `SandboxBackendCapabilities.cs`）全部删除。
 - **无悬空引用**：`ISandboxBackend`、Domain 副本 `ISandboxRecipeSerializer` 等旧端口零引用。
 - **全绿**：`dotnet build WindowsSandboxManager.slnx` 0 错误；`Wsm.Tests` 49 个测试通过。
 
-**English**: Namespace roots equal assembly names for all 28 assemblies and the `WindowsSandboxManager.*`
+**English**: Namespace roots equal assembly names for all 32 assemblies and the `WindowsSandboxManager.*`
 namespaces are gone; the legacy projects, `Infrastructure/Hcs`, hand-written DI extensions and
 `Domain.Abstractions` ports were deleted; no dangling references to the old ports remain; the build is
 clean and all 49 tests pass.
 
 ## 证据 / Evidence
 
-- 解决方案：`WindowsSandboxManager.slnx`（**28 个程序集**；`/src/00-Core|10-Hcs|20-Engines|30-Connections|40-Host|50-App/`、`/tests/90-Tests/`）。
+- 解决方案：`WindowsSandboxManager.slnx`（**32 个程序集**；`/src/00-Core|10-Hcs|20-Engines|30-Connections|40-Host|50-App/`、`/tests/90-Tests/`）。
 - 引擎契约：`src/00-Core/Wsm.Engines.Abstractions/{ISandboxEngine,ISandboxEngineRegistry,Internal/SandboxEngineRegistry}.cs`。
 - 选择器：`src/00-Core/Wsm.Application.EngineSelection/Internal/EngineSelector.cs`。
 - 引擎实现：`src/20-Engines/Wsm.Engine.Hcs/`、`Wsm.Engine.WindowsSandbox/`、`Wsm.Engine.WindowsContainer/WindowsContainerEngine.cs`。

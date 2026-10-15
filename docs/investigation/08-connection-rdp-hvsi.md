@@ -83,3 +83,26 @@ named-pipe transport is its modern equivalent (see [03 WDAG](03-wdag.md)).
 - `smourier/WinformsSandbox`、`M2Team/NanaBox` 的 `RDPBASE`/`IRDPENCNamedPipeDirectConnector` 用法与 GUID。
 - `WindowsSandboxClient.exe` 字符串：`RDPBASE_CreateInstance`、`RailMode`、`HiDefRemoteAppContainerGUID`。
 - 相关模块：[01 Windows Sandbox](01-windows-sandbox.md)、[03 WDAG](03-wdag.md)、[09 网络与 vSMB](09-networking-and-vsmb.md)。
+
+## 9. 本仓库的连接器实现 / This repository's connector
+
+**中文**：呈现层由**可选择的连接器模块**承担，二者实现同一契约（`IRdpSessionHost` 选择器 + `IRdpConnectorHost`）：
+
+- `Wsm.Connection.RdpHost`：仅契约与选择（`RdpSessionRequest`、`RdpSessionRequestFactory`、`IRdpConnectorHost`、
+  `IRdpSandboxControl`、`IRdpConnectorPreference`、`SelectingRdpSessionHost`）。
+- `Wsm.Connection.RdpHost.Ax`：共享的 `mstscax` 互操作（TlbImp/AxImp）与 WinForms 宿主控件 `RdpClientControl`
+  （连接、`SendKeys` 发 Ctrl+Alt+Del、缩放同步）。
+- `Wsm.Connection.RdpHost.Wpf`（默认）：WPF XAML 窗口 + `WindowsFormsHost`，进程内呈现。
+- `Wsm.Connection.RdpHost.WinUi` + `Wsm.Rdp.WinUI`：WinUI 3 窗口，`mstscax` 作为子 HWND 承载，独立进程。
+
+选择：`ui-settings.json` 的 `RdpConnector` 或 `WSM_RDP_CONNECTOR`（缺省 WPF）。工具栏提供发送 Ctrl+Alt+Del、
+重启、正常/强制关机、开机；并支持全屏与窗口缩放。
+
+**English**: Presentation is provided by **selectable connector modules** behind one contract
+(`IRdpSessionHost` selector + `IRdpConnectorHost`): the shared abstractions
+(`Wsm.Connection.RdpHost`), the shared ActiveX host/interop (`Wsm.Connection.RdpHost.Ax`), the default
+WPF connector (`Wsm.Connection.RdpHost.Wpf`), and the WinUI 3 connector
+(`Wsm.Connection.RdpHost.WinUi` + `Wsm.Rdp.WinUI`, an out-of-process window embedding `mstscax` as a
+child HWND). Selection comes from `ui-settings.json` (`RdpConnector`) or `WSM_RDP_CONNECTOR`. The
+toolbar exposes Ctrl+Alt+Del, restart, shutdown, force shutdown and power on, plus full screen and
+live resize.

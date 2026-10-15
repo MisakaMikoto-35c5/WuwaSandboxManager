@@ -1,12 +1,20 @@
 using System.Text.Json;
+using Wsm.Domain.ValueObjects;
 
 namespace Wsm.Persistence;
 
-/// <summary>Small, user-scoped UI preferences (the chosen UI language and the config &amp; data folder).</summary>
+/// <summary>Small, user-scoped UI preferences (the chosen UI language, the config &amp; data folder and the RDP connector).</summary>
 public sealed record UiSettings
 {
     /// <summary>The chosen UI culture name (for example <c>zh-Hans</c>), or null for the system default.</summary>
     public string? CultureName { get; init; }
+
+    /// <summary>
+    /// The presentation technology used for RDP sessions, or null for the
+    /// default (<see cref="RdpConnectorKind.Wpf"/>). The
+    /// <c>WSM_RDP_CONNECTOR</c> environment variable overrides it when set.
+    /// </summary>
+    public RdpConnectorKind? RdpConnector { get; init; }
 
     /// <summary>
     /// The user-selectable config &amp; data folder, or null for the default

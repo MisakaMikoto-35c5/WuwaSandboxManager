@@ -1,14 +1,13 @@
 using Volo.Abp.Modularity;
-using Wsm.Connection.RdpBase;
 
 namespace Wsm.Connection.RdpHost;
 
 /// <summary>
-/// ABP module for the RDP ActiveX host. Registers <see cref="IRdpSessionHost"/>,
-/// the WinForms presenter that acquires the RDPBASE named-pipe endpoint on an STA
-/// thread and feeds it into the strongly typed <c>mstscax</c> control.
+/// ABP module for the RDP connector abstractions and the presentation selector.
+/// <see cref="IRdpSessionHost"/> resolves to
+/// <c>SelectingRdpSessionHost</c>, which delegates to the registered connector
+/// module chosen by <see cref="IRdpConnectorPreference"/> (WPF by default).
 /// </summary>
-[DependsOn(typeof(RdpBaseModule))]
 public sealed class RdpHostModule : AbpModule
 {
 }

@@ -328,6 +328,29 @@
                         </ComboBox>
                     </StackPanel>
 
+                    <!-- RDP connector -->
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Uid="RdpConnectorLabel"
+                                   Text="RDP connector"
+                                   Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="RdpConnectorCombo"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding RdpConnectors}"
+                                  SelectedItem="{Binding SelectedRdpConnector, Mode=TwoWay}"
+                                  SelectionChanged="OnRdpConnectorChanged">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RdpConnectorOption">
+                                    <TextBlock Text="{x:Bind DisplayName}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock x:Uid="RdpConnectorHint"
+                                   Text="Which presentation shows RDP sessions: the WPF window, or the WinUI 3 connector (its own process). Changing it restarts the app."
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </StackPanel>
+
                     <!-- Config & data folder -->
                     <StackPanel Spacing="6">
                         <TextBlock x:Uid="ConfigDataFolderLabel"

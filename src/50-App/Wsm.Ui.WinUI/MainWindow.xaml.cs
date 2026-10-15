@@ -8,6 +8,7 @@ using Windows.Graphics;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 using Wsm.Application;
+using Wsm.Domain.ValueObjects;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engines.Abstractions;
 using Wsm.Hcs.Storage;
@@ -36,6 +37,7 @@ public sealed partial class MainWindow : Window
     private bool _initialized;
     private bool _languageReady;
     private string _appliedCulture;
+    private RdpConnectorKind _appliedRdpConnector;
 
     public MainWindow(IServiceProvider services, string? openManifestPath)
     {
@@ -70,6 +72,8 @@ public sealed partial class MainWindow : Window
             _localizer,
             services.GetRequiredService<IContainerImageImporter>(),
             services.GetRequiredService<IContainerIsolationPolicy>());
+
+        _appliedRdpConnector = ViewModel.SelectedRdpConnector?.Kind ?? RdpConnectorKind.Wpf;
 
         Root.DataContext = ViewModel;
 
@@ -141,13 +145,29 @@ public sealed partial class MainWindow : Window
         PersistAndRelaunch(option.CultureName);
     }
 
+    private void OnRdpConnectorChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_languageReady || sender is not ComboBox { SelectedItem: RdpConnectorOption option })
+        {
+            return;
+        }
+
+        if (option.Kind == _appliedRdpConnector)
+        {
+            return;
+        }
+
+        _appliedRdpConnector = option.Kind;
+        PersistAndRelaunch(rdpConnector: option.Kind);
+    }
+
     /// <summary>
     /// Persists the chosen language and/or config &amp; data folder and restarts the
     /// process. A non-packaged WinUI app caches its XAML resource context, so
     /// rebuilding the window in the same process does not reliably re-resolve
     /// <c>x:Uid</c>; a full restart does. The other persisted setting is preserved.
     /// </summary>
-    private void PersistAndRelaunch(string? cultureName = null, string? configDataFolder = null)
+    private void PersistAndRelaunch(string? cultureName = null, string? configDataFolder = null, RdpConnectorKind? rdpConnector = null)
     {
         try
         {
@@ -156,6 +176,7 @@ public sealed partial class MainWindow : Window
             {
                 CultureName = cultureName ?? current.CultureName,
                 ConfigDataFolder = configDataFolder ?? current.ConfigDataFolder,
+                RdpConnector = rdpConnector ?? current.RdpConnector,
             });
         }
         catch (Exception ex)

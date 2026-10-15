@@ -1,0 +1,1 @@
+﻿& 'C:\Users\User\Documents\WindowsSandboxManager\src\50-App\Wsm.Cli\bin\Debug\net10.0-windows\wsm.exe' host 609cfaee-1162-41e6-91a4-59988cde9b63 *> 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\sdbx4-host.out'

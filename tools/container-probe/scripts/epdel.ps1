@@ -1,0 +1,9 @@
+﻿& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/1ad26981-1beb-4475-87ea-689ba8f1d39f' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/fc69c602-3c2d-4f70-9f6a-7791348e4645' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/594cece3-4b56-403a-9e3c-cbfeac4a8415' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/e88cc491-bfc7-4cea-8ac2-519d0cf06eca' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/c550deb2-c321-42d1-902a-1416a23c88bd' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/105dcb81-fc7d-4702-9bcd-81bf1e992b90' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/1dc897f8-3036-4abf-b0e8-bd6a6bb76857' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/97060b20-0792-438f-a123-33cac295fa1e' '' *> $null
+& 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' hns DELETE '/endpoints/bd484dae-b95f-4d73-8150-023d3aa72ce7' '' *> $null

@@ -1,0 +1,1 @@
+cmd.exe /c netsh advfirewall firewall delete rule name=WsmRdp3389 & netsh advfirewall firewall add rule name=WsmRdp3389 protocol=TCP dir=in localport=3389 action=allow & netsh advfirewall show allprofiles state & echo ==== & netstat -ano & echo ==== & qwinsta & echo ==== & sc query TermService & sc query UmRdpService

@@ -1,0 +1,1 @@
+cmd.exe /c reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v EditionID & reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v ProductName & reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Server\ServerLevels" & echo ==== & reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v InstallationType

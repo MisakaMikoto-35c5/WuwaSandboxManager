@@ -1,0 +1,1 @@
+﻿cd 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag'; $env:WSMPROBE_HOLD=5; & 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\HcsProbe\bin\Release\net10.0-windows\hcsprobe.exe' argonnet2 aaaaaaaa-bbbb-cccc-dddd-eeeeeeee00b4 C:\wsmprobe\ws22n2 C:\wsmprobe\img\base1  *> 'C:\Users\User\AppData\Local\Temp\opencode\wsmdiag\ws22n2.log'

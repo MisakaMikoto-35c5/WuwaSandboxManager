@@ -1,0 +1,1 @@
+cmd.exe /c qwinsta & echo ---- & sc query TermService & sc query UmRdpService & echo ---- & reg query "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v ContainerMode & echo ---- & netstat -ano & echo ---- & tasklist

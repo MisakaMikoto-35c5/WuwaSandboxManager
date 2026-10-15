@@ -1,0 +1,1 @@
+cmd.exe /c qwinsta & echo ---- & reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v AllowListenersInsideArgonContainer & echo ---- & reg query "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v AllowListenersInsideArgonContainer

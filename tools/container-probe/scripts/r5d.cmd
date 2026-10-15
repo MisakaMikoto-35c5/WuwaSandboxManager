@@ -1,0 +1,1 @@
+cmd.exe /c sc query termdd & sc query RDPDR & sc query RdpVideoMiniport & echo ==== & dir C:\Windows\System32\tdtcp.dll C:\Windows\System32\tssecsrv.dll C:\Windows\System32\termsrv.dll C:\Windows\System32\drivers\tdtcp.sys

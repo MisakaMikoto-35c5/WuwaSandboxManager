@@ -1,0 +1,1 @@
+cmd.exe /c qwinsta & echo ---- & reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion" /v EditionID & echo ---- & reg query "HKLM\SYSTEM\CurrentControlSet\Control\Hvsi" & echo ---- & sc query TermService & sc query UmRdpService

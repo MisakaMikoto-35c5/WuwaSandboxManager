@@ -1,0 +1,1 @@
+cmd.exe /c wevtutil qe "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational" /c:40 /rd:true /f:text & echo ==== & wevtutil qe "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational" /c:40 /rd:true /f:text

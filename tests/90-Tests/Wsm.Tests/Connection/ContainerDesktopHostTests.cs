@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text;
 using Wsm.Connection.ContainerDesktop;
 using Wsm.Connection.ContainerDesktop.Internal;
 using Wsm.Domain.Exceptions;
@@ -128,6 +129,94 @@ public sealed class ContainerDesktopProviderTests
     [InlineData("Wsm.Hcs.Storage.Images.wsm-desktop-read.ps1")]
     public void The_window_mirror_payload_is_embedded(string resourceName)
         => Assert.NotNull(typeof(ContainerImageCustomizer).Assembly.GetManifestResourceStream(resourceName));
+
+    [Fact]
+    public void The_mirror_layout_round_trips()
+    {
+        // The layout is the contract between the read side (PowerShell, inside the
+        // container) and the host readers - pin it down.
+        var geometry = new ContainerDesktopGeometry(64, 32, 64 * 4, 4);
+        var buffer = new byte[ContainerDesktopMirror.Capacity(geometry)];
+
+        Write(buffer, 0, ContainerDesktopMirror.Magic);
+        Write(buffer, 4, 1);
+        Write(buffer, 8, geometry.Width);
+        Write(buffer, 12, geometry.Height);
+        Write(buffer, 16, geometry.Stride);
+        Write(buffer, 20, geometry.Fps);
+        WriteLong(buffer, 24, 7L);
+        Write(buffer, 40, 2);
+        var table = ContainerDesktopMirror.PixelOffset + (geometry.Stride * geometry.Height);
+        WriteLong(buffer, table, 0x1234L);
+        Write(buffer, table + 8, 11);
+        Write(buffer, table + 12, 22);
+        Write(buffer, table + 16, 33);
+        Write(buffer, table + 20, 44);
+        WriteLong(buffer, table + 24, 7L);
+        Write(buffer, table + 32, 0);
+        Write(buffer, table + 36, 5);
+        var first = Encoding.Unicode.GetBytes("First");
+        first.CopyTo(buffer.AsSpan(table + ContainerDesktopMirror.WindowTableBytes));
+
+        var second = table + ContainerDesktopMirror.WindowEntrySize;
+        WriteLong(buffer, second, 0x5678L);
+        Write(buffer, second + 8, 55);
+        Write(buffer, second + 12, 66);
+        Write(buffer, second + 16, 77);
+        Write(buffer, second + 20, 88);
+        WriteLong(buffer, second + 24, 7L);
+        Write(buffer, second + 32, ContainerDesktopMirror.TitleSlotBytes);
+        Write(buffer, second + 36, 6);
+        var secondTitle = Encoding.Unicode.GetBytes("Second");
+        secondTitle.CopyTo(buffer.AsSpan(table + ContainerDesktopMirror.WindowTableBytes + ContainerDesktopMirror.TitleSlotBytes));
+
+        var path = Path.Combine(Path.GetTempPath(), $"wsm-mirror-{Guid.NewGuid():N}.shm");
+        try
+        {
+            File.WriteAllBytes(path, buffer);
+
+            var read = ContainerDesktopMirror.TryReadHeader(path, out var count, out var sequence);
+            Assert.NotNull(read);
+            Assert.Equal(geometry, read!.Value);
+            Assert.Equal(2, count);
+            Assert.Equal(7L, sequence);
+
+            var windows = ContainerDesktopMirror.ReadWindows(path, read.Value, count);
+            Assert.Equal(2, windows.Count);
+            Assert.Equal("First", windows[0].Title);
+            Assert.Equal(0x1234L, windows[0].Id);
+            Assert.Equal((11, 22, 33, 44), (windows[0].X, windows[0].Y, windows[0].Width, windows[0].Height));
+            Assert.Equal("Second", windows[1].Title);
+            Assert.Equal((55, 66, 77, 88), (windows[1].X, windows[1].Y, windows[1].Width, windows[1].Height));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void A_foreign_file_is_not_mistaken_for_a_mirror()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"wsm-mirror-{Guid.NewGuid():N}.shm");
+        try
+        {
+            File.WriteAllBytes(path, new byte[ContainerDesktopMirror.PixelOffset]);
+
+            Assert.Null(ContainerDesktopMirror.TryReadHeader(path, out var count, out _));
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static void Write(byte[] buffer, int offset, int value)
+        => BitConverter.GetBytes(value).CopyTo(buffer, offset);
+
+    private static void WriteLong(byte[] buffer, int offset, long value)
+        => BitConverter.GetBytes(value).CopyTo(buffer, offset);
 
     private static ContainerDesktopProviderRegistry CreateRegistry(bool windowMirrorSupported = true)
         => new(

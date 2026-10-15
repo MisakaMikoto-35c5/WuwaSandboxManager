@@ -34,7 +34,8 @@ param(
     [int] $Width = 1024,
     [int] $Height = 768,
     [int] $Fps = 4,
-    [int] $Seconds = 86400
+    [int] $Seconds = 86400,
+    [string] $TitleFilter = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -135,6 +136,14 @@ function Invoke-InputLine([string] $line) {
         Send-Keys ($line -replace '^keys\s+', '')
     } elseif ($line -like 'text *') {
         Send-Text $line.Substring('text '.Length)
+    } elseif ($line -like 'movewindow *') {
+        # The mirror window was dragged on the host side: move the real window.
+        $rest = ($line -replace '^movewindow\s+', '') -split '\s+'
+        $xy = $rest[1] -split ','
+        $moved = [WsmMirrorWindows]::Move([int64]$rest[0], [int]$xy[0], [int]$xy[1])
+        Log ("movewindow 0x{0:X} -> ({1},{2}) ok={3}" -f [int64]$rest[0], [int]$xy[0], [int]$xy[1], $moved)
+    } elseif ($line -like 'activate *') {
+        [void][WsmMirrorWindows]::Activate([int64]($line -replace '^activate\s+', ''))
     }
 }
 
@@ -151,18 +160,23 @@ public static class WsmMirrorWindows {
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lparam);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder t, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder t, int max);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern IntPtr GetPropW(IntPtr h, string name);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
-    public static List<Entry> List() {
+    public static List<Entry> List(string titleFilter) {
         var list = new List<Entry>();
         EnumWindows(delegate(IntPtr h, IntPtr l) {
             if (!IsWindowVisible(h)) return true;
             if (IsIconic(h)) return true;
             if ((GetWindowLong(h, -20) & 0x00000080) != 0) return true; // WS_EX_TOOLWINDOW
+            if (GetPropW(h, "WSM_MIRROR_HOST") != IntPtr.Zero) return true; // never mirror a mirror
             var sb = new StringBuilder(512);
             GetWindowTextW(h, sb, sb.Capacity);
             if (sb.Length == 0) return true;
+            if (titleFilter != null && titleFilter.Length > 0 &&
+                sb.ToString().IndexOf(titleFilter, StringComparison.OrdinalIgnoreCase) < 0) return true;
             RECT r; GetWindowRect(h, out r);
             int w = r.R - r.L, hh = r.B - r.T;
             if (w < 24 || hh < 24) return true;
@@ -172,6 +186,21 @@ public static class WsmMirrorWindows {
             return true;
         }, IntPtr.Zero);
         return list;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    /// <summary>Moves a window without resizing, restacking or activating it.</summary>
+    public static bool Move(long id, int x, int y) {
+        const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+        return SetWindowPos(new IntPtr(id), IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    /// <summary>Brings a window to the foreground (a click on a mirrored window).</summary>
+    public static bool Activate(long id) {
+        const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002;
+        return SetWindowPos(new IntPtr(id), new IntPtr(-1), 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
     }
 }
 '@
@@ -233,7 +262,7 @@ while ((Get-Date) -lt $deadline) {
         $marshal::WriteInt32($base, 32, 1)   # busy
         $graphics.CopyFromScreen(0, 0, 0, 0, $size)
 
-        $windows = [WsmMirrorWindows]::List()
+        $windows = [WsmMirrorWindows]::List($TitleFilter)
         $sequence++
         $count = [Math]::Min($windows.Count, [int](8192 / 40))
         $marshal::WriteInt32($base, 40, $count)

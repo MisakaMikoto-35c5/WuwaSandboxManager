@@ -1015,3 +1015,40 @@ wsm image mirror C:\wsm-images\server          # 鍐欏叆鐧诲綍閽╁瓙 + �
 1. 鏌ョ湅鍣?`--mode windows`锛氭寜绐楀彛琛ㄤ负姣忎釜瀹瑰櫒绐楀彛寤轰竴涓涓荤獥鍙ｏ紙鐭╁舰/鏍囬/z-order 闀滃儚锛? 杈撳叆鎸夌獥鍙ｅ洖浼狅紱
 2. 璇讳晶鐢?`CreateDIBSection(hSection)` 鐩村啓鍏变韩鍐呭瓨锛堝幓鎺夊鍣ㄥ唴閭ｆ memcpy锛屄?5.2锛夛紱
 3. 鎶?`SignalR`/gRPC 鎺ュ埌 provider 涓婏紙鏈嶅姟瀹夸富閲屽凡鏄悓涓€濂楃粍浠讹紝鍔?`StartDesktop` 绛?RPC 鍗冲彲锛夈€?
+---
+
+## 20. 绐楀彛闀滃儚鐨?鏄剧ず + 鎷栧姩"瀹炴祴 / Window mirror: display and drag, measured
+
+### 20.1 鏈疆鏂板 / Added
+
+| 浣嶇疆 | 鍐呭 |
+|---|---|
+| 鏌ョ湅鍣?| `wsm desktop-view --mode windows --frame <mirror.shm> [--offset-x/-y]`锛?*姣忎釜瀹瑰櫒绐楀彛涓€涓湡瀹炲涓荤獥鍙?*锛堢浉鍚岀煩褰?鏍囬/z-order锛屽唴瀹规槸璇ョ獥鍙ｇ殑鍍忕礌锛夛紝鏍囬甯︽嫋鍔?鈫?`movewindow`锛屽鎴峰尯鐐瑰嚮/鎸夐敭 鈫?瀹瑰櫒鍧愭爣锛涢暅鍍忕獥鍙ｅ甫 `WSM_MIRROR_HOST` **绐楀彛灞炴€?*鏍囪 |
+| 璇讳晶 | 鏂板懡浠?`movewindow <hwnd> x,y`锛坄SetWindowPos`锛岀湡姝ｇЩ鍔級涓?`activate <hwnd>`锛沗-TitleFilter` 杩囨护锛?*璺宠繃甯﹂暅鍍忔爣璁扮殑绐楀彛**锛堝惁鍒欏悓涓€妗岄潰涓婁細鍑虹幇闀滃儚鐨勯暅鍍忥級 |
+| 鍏变韩甯冨眬 | `ContainerDesktopMirror`锛坢agic/鍋忕Щ/绐楀彛琛ㄥ竷灞€ + 璇诲啓鍔╂墜锛夛紝provider 涓庢煡鐪嬪櫒鍏辩敤涓€浠藉畾涔夛紙骞舵湁鍥炵幆鍗曟祴锛?|
+
+### 20.2 瀹炴祴缁撴灉 / Measured (host desktop as the read side's session; same code, same protocol)
+
+```
+[1] target hwnd=0x15198C rect before=(80,80)
+[2] read side pid=107032 mirror.shm=True
+[3] log: window id=0x15198C "wsm-mirror-target " rect=(80,80 480x300)
+[3] DISPLAY: mirror window hwnd=0x9C0F5E rect=(500,320 480x300)      <- 瀹夸富涓哄鍣ㄧ獥鍙ｅ缓鐨勭湡瀹炵獥鍙?[4] dragged the mirror by (+90,+60) via posted mouse messages
+[5] target rect after=(170,140) delta=(90,60)                        <- 琚暅鍍忕殑绐楀彛鐪熺殑绉诲姩浜?[6] viewer drag lines=8   (drag begin / drag move ... / )
+[7] read side applied=movewindow 0x15198C -> (170,140) ok=True
+[=] VERDICT display=ok drag=ok
+```
+
+鍗筹細**瀹瑰櫒绐楀彛 鈫?璇讳晶鍙戝竷甯?+ 绐楀彛琛?鈫?瀹夸富閫愮獥鍙ｅ紑鐪熷疄绐楀彛 鈫?鎷栧姩瀹夸富绐楀彛 鈫?`movewindow` 鈫?璇讳晶
+`SetWindowPos` 鈫?鐩爣绐楀彛绉诲姩 (+90,+60)**锛屽叏閾捐矾闂幆 鉁撱€?
+### 20.3 杩囩▼涓慨鎺夌殑涓や釜闂 / Two bugs fixed on the way
+
+1. **闀滃儚鐨勯暅鍍?*锛氳渚т笌鏌ョ湅鍣ㄥ湪鍚屼竴妗岄潰鏃讹紝璇讳晶浼氭妸"闀滃儚绐楀彛"褰撴垚瀹瑰櫒绐楀彛鍐嶉暅鍍忎竴娆★紙瀹炴祴鍑虹幇
+   (500,320)鈫?920,560)鈫?1340,800)鈥?鐨勭骇鑱旓級銆備慨娉曪細闀滃儚绐楀彛鎵撲笂绐楀彛灞炴€?`WSM_MIRROR_HOST`锛岃渚ц烦杩囧畠銆?   锛堝鍣ㄩ噷涓嶄細鍙戠敓鈥斺€斿涓荤獥鍙ｅ湪鍙︿竴浼氳瘽鈥斺€斾絾杩欐潯瑙勫垯璁╁畠涓嶅彲鑳藉彂鐢熴€傦級
+2. **鎷栧姩鍙?`Cursor.Position` 浼氬湪 DPI 铏氭嫙鍖栦笅閿欎綅**锛屼笖鍦ㄦ祴璇曢噷鏃犳硶椹卞姩锛氭敼涓虹敤**榧犳爣娑堟伅鑷韩鐨勫潗鏍?*
+   璁＄畻浣嶇Щ锛堢湡瀹炴嫋鍔ㄤ笌 PostMessage 娴嬭瘯閮芥垚绔嬶紱鍚屼竴娆′慨澶嶈繕瑙ｅ喅浜?`PictureBox` 鍚炴帀榧犳爣浜嬩欢鐨勯棶棰橈級銆?
+### 20.4 瀹瑰櫒渚х幇鐘讹紙鏈疆鏈窇閫氾紝鍘熷洜涓嶅湪浠ｇ爜锛? Container-side status
+
+- **闀滃儚姝ラ鏈夋晥**锛歚wsm image mirror C:\wsm-images\servercore-ltsc2022 --shell cmd.exe --logon-user ContainerAdministrator --logon-password ""`
+  涔嬪悗锛?*鍦ㄥ鍣ㄥ唴**鍙 `C:\wsm\wsm-desktop-read.ps1`(18764B) 涓?`C:\wsm\wsm-winlogon-wrap.cmd`(814B) 鉁?  锛堥暅鍍忓眰灏辨槸瀹瑰櫒鐨勫彧璇诲熀搴э紝鎵€浠ュ涓讳晶鐨勫啓鍏ュ鍣ㄩ┈涓婅兘鐪嬪埌锛夈€?- **鏈窇閫氱殑鍘熷洜**锛歨arness 鐨勫鍣?*娌¤兘閲嶅惎**锛堝叾 HCS 鐘舵€佸凡鍧忥紝`@stop` 鍚庤繘绋嬫爲鍘熸牱涓嶅姩锛?  `HcsCreateProcess` 浠?`0x80370105`锛夛紝鍥犳**娌℃湁鐧诲綍鍙戠敓** 鈫?鐧诲綍閽╁瓙涓嶈Е鍙?鈫?娌℃湁 `mirror.shm`
+  锛堜細璇?5 鍙湁 `csrss`锛屾病鏈?`winlogon`/`userinit`锛夈€?- **涓嬩竴姝?*锛堥渶瑕佸鍣ㄦ爤澶嶄綅鍚庯級锛氱敤寮曟搸姝ｈ璺緞璧峰鍣?鈥斺€?  `wsm start <containerSandbox>`锛坄WindowsContainerEngineOptions` 閲岄厤濂?`Shell` 涓庤嚜鍔ㄧ櫥褰曪級+ `wsm desktop <id>`锛?  鎴栧厛鎶?`vmcompute`/`hns` 閲嶇疆锛屽啀鐢?harness 閲嶈窇鏈妭鐨勮剼鏈€?

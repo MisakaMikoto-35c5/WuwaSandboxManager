@@ -811,7 +811,15 @@ public sealed class CliApplication
 
         var seconds = int.TryParse(options.GetValueOrDefault("seconds"), out var parsed) ? parsed : 0;
         var prefix = options.GetValueOrDefault("input-prefix") ?? "input-";
-        return DesktopViewCommand.Run(frame!, seconds, prefix);
+        var mode = options.GetValueOrDefault("mode") ?? "frame";
+        var offsetX = int.TryParse(options.GetValueOrDefault("offset-x"), out var ox) ? ox : 0;
+        var offsetY = int.TryParse(options.GetValueOrDefault("offset-y"), out var oy) ? oy : 0;
+
+        // "windows" mirrors one host window per container window (doc section 18/19);
+        // anything else shows the whole desktop in a single window.
+        return string.Equals(mode, "windows", StringComparison.OrdinalIgnoreCase)
+            ? DesktopMirrorViewCommand.Run(frame!, seconds, prefix, offsetX, offsetY)
+            : DesktopViewCommand.Run(frame!, seconds, prefix);
     }
 
     private async Task<int> ConnectAsync(List<string> positional, Dictionary<string, string?> options)
@@ -887,7 +895,7 @@ public sealed class CliApplication
         {
             "import" => await ImageImportAsync(positional, options),
             "desktop" => ImageDesktop(positional),
-            "mirror" => ImageMirror(positional),
+            "mirror" => ImageMirror(positional, options),
             _ => UnknownImageSubcommand(subcommand),
         };
     }
@@ -980,11 +988,13 @@ public sealed class CliApplication
     /// the image then publish per-window frames that the host mirrors as real windows
     /// (sandbox recipe: <c>Desktop.Provider = window-mirror</c>).
     /// </summary>
-    private int ImageMirror(List<string> positional)
+    private int ImageMirror(List<string> positional, Dictionary<string, string?> options)
     {
         if (positional.Count < 2)
         {
-            Console.Error.WriteLine("Usage: wsm image mirror <layerPath>");
+            Console.Error.WriteLine(
+                "Usage: wsm image mirror <layerPath> [--shell <program>] [--logon-user <user>] " +
+                "[--logon-password <password>]");
             return 2;
         }
 
@@ -994,10 +1004,24 @@ public sealed class CliApplication
             return 1;
         }
 
-        var prep = _imageCustomizer.EnableWindowMirror(positional[1]);
+        var prep = _imageCustomizer.EnableWindowMirror(
+            positional[1],
+            new ContainerImageDesktopOptions(
+                Shell: options.GetValueOrDefault("shell"),
+                AutoLogonUser: options.GetValueOrDefault("logon-user"),
+                AutoLogonPassword: options.GetValueOrDefault("logon-password")));
         Console.WriteLine($"Patched hive : {prep.HiveFile}");
         Console.WriteLine($"Userinit     : {prep.UserinitBefore}  ->  {prep.UserinitAfter}");
         Console.WriteLine($"Payload      : {string.Join(", ", prep.PayloadFiles)}");
+        if (prep.Shell is { Length: > 0 } shell)
+        {
+            Console.WriteLine($"Shell        : {shell}");
+        }
+
+        if (prep.AutoLogonUser is { Length: > 0 } user)
+        {
+            Console.WriteLine($"Auto logon   : {user}");
+        }
         Console.WriteLine("Containers from this image now start the window-mirror read side inside their");
         Console.WriteLine("own session at logon. Restart any container that is already running, then use");
         Console.WriteLine("Desktop.Provider = 'window-mirror' in the sandbox recipe.");

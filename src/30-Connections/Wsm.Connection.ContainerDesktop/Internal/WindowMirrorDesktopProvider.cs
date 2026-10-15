@@ -30,20 +30,8 @@ namespace Wsm.Connection.ContainerDesktop.Internal;
 internal sealed class WindowMirrorDesktopProvider
     : IContainerDesktopProvider, IContainerDesktopRootStop, ISingletonDependency
 {
-    /// <summary>Magic of the mirror file: <c>'WSMM'</c>.</summary>
-    private const int MirrorMagic = 0x4D4D5357;
-
-    /// <summary>Frame header size; the pixel buffer starts here.</summary>
-    private const int PixelOffset = 64;
-
-    /// <summary>Bytes per window table entry: id(8) x(4) y(4) w(4) h(4) seq(8) titleOffset(4) titleLength(4).</summary>
-    private const int WindowEntrySize = 40;
-
-    /// <summary>Bytes reserved for the window table (before the title blob).</summary>
-    private const int WindowTableBytes = 8192;
-
-    /// <summary>Bytes reserved for window titles, after the table.</summary>
-    private const int TitleBlobBytes = 16384;
+    /// <summary>Magic of the mirror file: <c>'WSMM'</c>. See <see cref="ContainerDesktopMirror"/>.</summary>
+    private const int FrameOffset = ContainerDesktopMirror.PixelOffset;
 
     private readonly ConcurrentDictionary<Guid, ContainerDesktopSession> _sessions = new();
     private readonly ISandboxEngineRegistry _registry;
@@ -104,7 +92,7 @@ internal sealed class WindowMirrorDesktopProvider
 
         var geometry = TryReadGeometry(mirrorPath)
             ?? await WaitForMirrorAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
-        var windows = TryReadWindows(mirrorPath, geometry) ?? Array.Empty<ContainerDesktopWindow>();
+        var windows = ReadWindows(mirrorPath);
 
         var session = new ContainerDesktopSession(
             request.SandboxId, request.ContainerRoot, directory, mirrorPath, geometry,
@@ -140,7 +128,7 @@ internal sealed class WindowMirrorDesktopProvider
             return Task.FromResult<ContainerDesktopSession?>(null);
         }
 
-        var windows = TryReadWindows(mirrorPath, geometry) ?? Array.Empty<ContainerDesktopWindow>();
+        var windows = ReadWindows(mirrorPath);
         var session = new ContainerDesktopSession(
             request.SandboxId, request.ContainerRoot, directory, mirrorPath, geometry,
             DateTimeOffset.UtcNow, null, ContainerDesktopProviderIds.WindowMirror, windows);
@@ -255,106 +243,15 @@ internal sealed class WindowMirrorDesktopProvider
             "restarted afterwards - a container that booted before the patch cannot have it.", 0);
     }
 
-    /// <summary>Reads the shared header (same layout as the frame buffer, different magic).</summary>
+    /// <summary>Reads the shared header through the shared mirror layout.</summary>
     private static ContainerDesktopGeometry? TryReadGeometry(string mirrorPath)
-    {
-        try
-        {
-            if (!File.Exists(mirrorPath))
-            {
-                return null;
-            }
+        => ContainerDesktopMirror.TryReadHeader(mirrorPath, out _, out _);
 
-            using var stream = new FileStream(mirrorPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            Span<byte> header = stackalloc byte[PixelOffset];
-            if (stream.Read(header) < PixelOffset)
-            {
-                return null;
-            }
-
-            return BitConverter.ToInt32(header[..4]) == MirrorMagic && BitConverter.ToInt32(header.Slice(8, 4)) > 0
-                ? new ContainerDesktopGeometry(
-                    BitConverter.ToInt32(header.Slice(8, 4)),
-                    BitConverter.ToInt32(header.Slice(12, 4)),
-                    BitConverter.ToInt32(header.Slice(16, 4)),
-                    BitConverter.ToInt32(header.Slice(20, 4)))
-                : null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>Reads the published window table, if the read side has written one.</summary>
-    private static IReadOnlyList<ContainerDesktopWindow>? TryReadWindows(
-        string mirrorPath, ContainerDesktopGeometry geometry)
-    {
-        try
-        {
-            using var stream = new FileStream(mirrorPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            Span<byte> header = stackalloc byte[48];
-            if (stream.Read(header) < 48)
-            {
-                return null;
-            }
-
-            var count = BitConverter.ToInt32(header.Slice(40, 4));
-            if (count <= 0)
-            {
-                return Array.Empty<ContainerDesktopWindow>();
-            }
-
-            count = Math.Min(count, WindowTableBytes / WindowEntrySize);
-
-            var tableStart = (long)PixelOffset + (long)geometry.Stride * geometry.Height;
-            var titles = tableStart + WindowTableBytes;
-
-            var entry = new byte[WindowEntrySize];
-            var windows = new List<ContainerDesktopWindow>(count);
-            for (var i = 0; i < count; i++)
-            {
-                stream.Position = tableStart + (long)i * WindowEntrySize;
-                if (stream.Read(entry) < WindowEntrySize)
-                {
-                    break;
-                }
-
-                var id = BitConverter.ToInt64(entry.AsSpan(0, 8));
-                var titleOffset = BitConverter.ToInt32(entry.AsSpan(32, 4));
-                var titleLength = BitConverter.ToInt32(entry.AsSpan(36, 4));
-                var title = string.Empty;
-                if (titleLength is > 0 and <= 512)
-                {
-                    var buffer = new byte[titleLength * 2];
-                    stream.Position = titles + titleOffset;
-                    if (stream.Read(buffer) == buffer.Length)
-                    {
-                        title = Encoding.Unicode.GetString(buffer);
-                    }
-                }
-
-                windows.Add(new ContainerDesktopWindow(
-                    id,
-                    title,
-                    BitConverter.ToInt32(entry.AsSpan(8, 4)),
-                    BitConverter.ToInt32(entry.AsSpan(12, 4)),
-                    BitConverter.ToInt32(entry.AsSpan(16, 4)),
-                    BitConverter.ToInt32(entry.AsSpan(20, 4)),
-                    BitConverter.ToInt64(entry.AsSpan(24, 8))));
-            }
-
-            return windows;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            return null;
-        }
-    }
+    /// <summary>Reads the published window table through the shared mirror layout.</summary>
+    private static IReadOnlyList<ContainerDesktopWindow> ReadWindows(string mirrorPath)
+        => ContainerDesktopMirror.TryReadHeader(mirrorPath, out var count, out _) is { } geometry
+            ? ContainerDesktopMirror.ReadWindows(mirrorPath, geometry, count)
+            : Array.Empty<ContainerDesktopWindow>();
 
     private ContainerDesktopSession Require(SandboxInstanceId id)
         => Get(id) ?? throw new SandboxBackendException(

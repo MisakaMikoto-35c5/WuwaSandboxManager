@@ -34,6 +34,14 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     /// <summary>The value <c>Userinit</c> has when an image sets none.</summary>
     internal const string DefaultUserinit = @"C:\Windows\system32\userinit.exe";
 
+    /// <summary>The shell <c>winlogon</c> starts after logon.</summary>
+    private const string ShellValue = "Shell";
+
+    /// <summary>Auto-logon switch, user and password values under the same key.</summary>
+    private const string AutoAdminLogonValue = "AutoAdminLogon";
+    private const string DefaultUserNameValue = "DefaultUserName";
+    private const string DefaultPasswordValue = "DefaultPassword";
+
     /// <summary>Folder inside the container that receives the payload files.</summary>
     private const string PayloadFolder = "wsm";
 
@@ -150,10 +158,11 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     }
 
     /// <inheritdoc />
-    public ContainerImageDesktopPrep EnableWindowMirror(string layerPath)
+    public ContainerImageDesktopPrep EnableWindowMirror(
+        string layerPath, ContainerImageDesktopOptions? options = null)
     {
         var hiveFile = ResolveSoftwareHive(layerPath);
-        var payload = InstallPayload(layerPath, out var payloadPaths);
+        InstallPayload(layerPath, out var payloadPaths);
 
         string before;
         string after;
@@ -172,6 +181,25 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
             after = AppendUserinit(before, ContainerDesktopPaths.WrapCommand);
             winlogon.SetValue(UserinitValue, after, RegistryValueKind.String);
 
+            if (!string.IsNullOrWhiteSpace(options?.Shell))
+            {
+                winlogon.SetValue(ShellValue, options!.Shell!, RegistryValueKind.String);
+                _logger.LogInformation("The base image will start the shell '{Shell}' after logon.", options.Shell);
+            }
+
+            if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser))
+            {
+                // A read side that starts at logon needs a logon; these are the same
+                // values the engine writes at container start, baked into the image
+                // instead (so a container that is not started by WSM still works).
+                winlogon.SetValue(AutoAdminLogonValue, "1", RegistryValueKind.String);
+                winlogon.SetValue(DefaultUserNameValue, options.AutoLogonUser!, RegistryValueKind.String);
+                winlogon.SetValue(DefaultPasswordValue, options.AutoLogonPassword ?? string.Empty, RegistryValueKind.String);
+                _logger.LogInformation(
+                    "The base image will log on '{User}' automatically (blank password: {Blank}).",
+                    options.AutoLogonUser, string.IsNullOrEmpty(options.AutoLogonPassword));
+            }
+
             _logger.LogInformation(
                 "Container base image '{Hive}': {Key}\\{Value} '{Before}' -> '{After}'.",
                 hiveFile, WinlogonSubKey, UserinitValue, before, after);
@@ -182,7 +210,8 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
             "session at logon ({Payload}); restart any container built from it.",
             layerPath, string.Join(", ", payloadPaths));
 
-        return new ContainerImageDesktopPrep(hiveFile, before, after, payloadPaths);
+        return new ContainerImageDesktopPrep(
+            hiveFile, before, after, payloadPaths, options?.Shell, options?.AutoLogonUser);
     }
 
     /// <summary>Appends our hook to the comma-separated <c>Userinit</c> list, idempotently.</summary>

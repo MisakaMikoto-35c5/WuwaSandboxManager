@@ -67,8 +67,22 @@ public interface IContainerImageCustomizer
     /// </para>
     /// </summary>
     /// <returns>What was changed, for logging/telemetry.</returns>
-    ContainerImageDesktopPrep EnableWindowMirror(string layerPath);
+    ContainerImageDesktopPrep EnableWindowMirror(
+        string layerPath, ContainerImageDesktopOptions? options = null);
 }
+
+/// <summary>Optional logon settings for <see cref="IContainerImageCustomizer.EnableWindowMirror"/>.</summary>
+/// <param name="Shell">
+/// The shell <c>winlogon</c> starts after logon. Images ship no
+/// <c>explorer.exe</c>, so point this at something that exists (e.g. <c>cmd.exe</c>)
+/// when the container should actually present a desktop.
+/// </param>
+/// <param name="AutoLogonUser">User to log on automatically (null = do not touch auto-logon).</param>
+/// <param name="AutoLogonPassword">That user's password (empty string for a blank one).</param>
+public sealed record ContainerImageDesktopOptions(
+    string? Shell = null,
+    string? AutoLogonUser = null,
+    string? AutoLogonPassword = null);
 
 /// <summary>Result of <see cref="IContainerImageCustomizer.EnableWindowMirror"/>.</summary>
 /// <param name="HiveFile">The <c>SOFTWARE</c> hive that was patched.</param>
@@ -79,7 +93,9 @@ public sealed record ContainerImageDesktopPrep(
     string HiveFile,
     string UserinitBefore,
     string UserinitAfter,
-    IReadOnlyList<string> PayloadFiles);
+    IReadOnlyList<string> PayloadFiles,
+    string? Shell = null,
+    string? AutoLogonUser = null);
 
 /// <summary>Result of <see cref="IContainerImageCustomizer.EnableInteractiveSession"/>.</summary>
 /// <param name="HiveFile">The <c>SYSTEM</c> hive that was patched.</param>

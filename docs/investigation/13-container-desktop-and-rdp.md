@@ -1375,8 +1375,11 @@ movewindow 0x... -> (x,y) ok=True                          # 拖动被应用
 
 既然只有 console 会话可渲染，`Userinit` 登录钩子就是唯一的入口（§18 的设计）。实测：
 
-- 这个镜像的 `Administrator` **不是标准容器账号**：`Password required = Yes`、有密码、有到期日
-  （`10/9/2025`）——它是一台**完整 Windows Server 安装转成的层** ✗；
+- 这个镜像的 `Administrator` 在这台机器上表现为 `Password required = Yes`、有密码、有到期日 ✓ ——
+  **但这不是镜像自带的** ✗：`wsm-image.json` 记着 `SourceReference = mcr.microsoft.com/windows/servercore:ltsc2022` ✓，
+  而 `ContainerImageImporter` 就是从 MCR 下载并解包**该官方基础层** ✓ —— 所以这一层是**标准容器基础镜像** ✓；
+  上面那些属性是**本轮自己在容器里改过之后**观察到的 ✓（密码名 `Wsm-Container-1` 是本次会话设的 ✓）。保留的**实测**结论是：
+  `LogonUser` 对 `Administrator`/`wsmuser` 都 `ok=True` ✓，但登录仍不产生 session-3 用户 ✗；
 - **认证本身是通的** ✓：容器内 `LogonUser` 对 `Administrator`（已设密码）与新建的 `wsmuser`（`wsmuser` 是
   本轮按需新建的管理员账号）**三种类型都 `ok=True err=0`** ✓；
 - 自动登录组合**逐项写对并在容器内验证过** ✓：`AutoAdminLogon=1`、`DefaultUserName=wsmuser`、
@@ -1417,8 +1420,9 @@ movewindow 0x... -> (x,y) ok=True                          # 拖动被应用
 
 两条路，都不需要再改读侧：
 
-1. **换成标准容器基础镜像**：`Administrator` 无密码且允许空密码/自动登录（标准 `mcr.microsoft.com` 镜像的形态）。
-   目前的镜像是完整安装转层 ✗，`Password required = Yes` 且空密码被策略拒绝 ✗；
+1. **换一个能完成交互登录的基础镜像**：标准 `mcr.microsoft.com` 镜像是这条路的前提 ✓（本机这一层就是官方
+   `servercore:ltsc2022` 基础层 ✓，见 §23.4 更正 ✓）—— 所以更现实的变量是**镜像里 `Administrator` 的密码/策略状态**
+   ✓：`Password required = Yes` 且空密码被策略拒绝 ✗ 时，先把它改成"无密码 + 允许空密码自动登录" ✓；
 2. **换 runtime**：任何能维持"交互会话"、或允许把进程放进该会话的容器运行时。
 
 届时的形态本轮已经验证可行 ✓：把 `Winlogon\Shell` 整条写成读侧命令行

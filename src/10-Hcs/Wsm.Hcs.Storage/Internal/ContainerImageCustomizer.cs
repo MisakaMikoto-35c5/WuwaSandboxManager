@@ -240,8 +240,11 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         }
 
         _logger.LogInformation(
-            "The base image at '{Layer}' now starts the window-mirror read side inside the container's " +
-            "session at logon ({Payload}); restart any container built from it.",
+            "The base image at '{Layer}' now carries the window-mirror read side ({Payload}). The " +
+            "image's logon hook starts it, which needs a container that can complete an interactive " +
+            "logon - measured NOT to happen for process-isolated containers on this host (see " +
+            "docs/investigation/13-container-desktop-and-rdp.md section 23.4). Start it directly in " +
+            "the container's session instead; restart any container built from this image.",
             layerPath, string.Join(", ", payloadPaths));
 
         return new ContainerImageDesktopPrep(

@@ -1425,3 +1425,125 @@ movewindow 0x... -> (x,y) ok=True                          # 拖动被应用
 （`powershell.exe … wsm-desktop-read.ps1 -Detached … -StartProgram <要镜像的程序>`）——**读侧就是该容器的
 "桌面会话"** ✓，会话活多久它就活多久（`cmd.exe` 做 Shell 时会立刻 EOF 退出 ✗，从而导致会话被拆 ✗，这是本轮
 t+100s 现象的成因之一 ✓）。
+
+
+## 24. 容器侧像素通道：把每一种可能都测完 / Container-side pixels: every option measured
+
+本轮先修了读侧一个**真 bug**，然后把"能不能从容器里拿到像素"这件事**穷尽地**测完，最后修掉一个环境/产品两侧都存在的层生命周期缺陷 ✓。
+
+### 24.1 读侧的真 bug：`Paint` 因为窗口不可见而直接放弃 / The gate that made every paint fail
+
+`WsmMirrorWindows.Paint` 的第一行是：
+
+```csharp
+if (!IsWindowVisible(hwnd)) return false;      // ✗ 容器窗口永不置 WS_VISIBLE（§23 已测）
+```
+
+而 §23 恰好测到**容器窗口永不携带 `WS_VISIBLE`** ✓ —— 于是每一帧的每个窗口都在**尝试任何绘制之前**返回失败 ✗，
+日志里就是 `paint failed` ✗。也就是说：这条路径**从来没有真正被试过**，看起来像"PrintWindow 在容器里没用" ✗，
+实际上是我们自己挡住了 ✓。
+
+修法：把捕获做成一个**策略菜单**（`PrintWindow(PW_RENDERFULLCONTENT)` / `PrintWindow(0)` / `WM_PRINT` /
+`WM_PRINTCLIENT` / 子窗口逐个 `WM_PRINTCLIENT` / `RedrawWindow+BitBlt` / `windowDC+BitBlt`），并且**实测**哪一条
+真的产生像素，而不是假定某一条能行 ✓：
+
+```
+zero the region -> paint with one strategy -> GdiFlush -> measure non-black samples
+```
+
+两处工程细节：
+* **`GdiFlush` 必须有** ✓ —— GDI 会批处理绘制 ✓，不 flush 就读共享缓冲，读到的可能还是空的 ✓；
+* 目标也分两种 ✓：**直接画进共享 section DIB**（旧路径 ✓）或**先画进私有 DIB、再整帧一次搬过去** ✓
+  （共享缓冲与私有 DIB 几何/stride 完全一致 ✓ → 每帧**一次**连续 `RtlMoveMemory` ✓，符合"减少内存拷贝"的要求 ✓）。
+
+### 24.2 实测：2 个目标 × 7 个策略，全部为 0 / The measured matrix
+
+容器 service 会话（`HCS ExecuteAsync` 建进程的会话）里，对一个真实的 Notepad 窗口（`768x555` ✓）：
+
+| 目标 | 策略 | 调用返回 | 实测 ink |
+|---|---|---|---|
+| shared-DIB | PrintWindow(PW_RENDERFULLCONTENT) | True | **0%** |
+| shared-DIB | PrintWindow(0) | True | **0%** |
+| shared-DIB | WM_PRINT | True | **0%** |
+| shared-DIB | WM_PRINTCLIENT | True | **0%** |
+| shared-DIB | child-sweep WM_PRINTCLIENT | True | **0%** |
+| shared-DIB | RedrawWindow+BitBlt | **False** | 0% |
+| shared-DIB | windowDC+BitBlt | **False** | 0% |
+| private-DIB+copy | PrintWindow(PW_RENDERFULLCONTENT) | True | **0%** |
+| private-DIB+copy | PrintWindow(0) | True | **0%** |
+| private-DIB+copy | WM_PRINT | True | **0%** |
+| private-DIB+copy | WM_PRINTCLIENT | True | **0%** |
+| private-DIB+copy | child-sweep WM_PRINTCLIENT | True | **0%** |
+| private-DIB+copy | RedrawWindow+BitBlt | **False** | 0% |
+| private-DIB+copy | windowDC+BitBlt | **False** | 0% |
+
+两条关键读数 ✓：
+* `PrintWindow`/`WM_PRINT` 系列**返回成功但一个像素都没有** ✓（它们只是把消息投递出去 ✓，不保证画到东西 ✓）；
+* `any BitBlt` 系列**连调用都失败** ✓ —— 因为 `GetWindowDC(hwnd)` 返回 **0** ✓✓ ——
+  也就是说**这个会话里窗口没有 GDI 表面** ✓。
+
+### 24.3 对照实验：GDI 本身没问题，缺的是"表面" / The control experiment
+
+同一个会话里（`gditest.ps1` ✓）：
+
+| 检查 | 结果 | 说明 |
+|---|---|---|
+| `CreateDIBSection(private 256x256)` | `dib!=0 bits!=0` ✓ | 私有 DIB 正常创建 ✓ |
+| `CreateCompatibleDC(0)` | 非 0 ✓ | 内存 DC 可用 ✓ |
+| `PatBlt(WHITENESS)` 画进私有 DIB | `byte0=0xFF`，16384/16384 采样非零 ✓ | **GDI 能画** ✓ |
+| `BitBlt(screen -> private DIB)` | **False** ✗ | 屏幕没有可读表面 ✓ |
+| `CopyFromScreen`（托管路径） | 抛 "The handle is invalid" ✗ | 同上 ✓（§23） |
+| `ShowWindowAsync(SW_SHOW)` + `SetWindowPos(SWP_SHOWWINDOW)` | 之后 `visible` 仍为 **False** ✓ | 窗口永远不置 `WS_VISIBLE` ✓ |
+
+⇒ 结论（现在是穷尽实测，而不是推断）✓：**service 会话既没有屏幕表面、也没有窗口表面** ✓，只有纯内存 DC 能用 ✓。
+而 `PrintWindow`/`WM_PRINT` 需要窗口表面才能工作 ✓ → 在这一会话里**没有任何路径能拿到应用窗口的像素** ✓。
+
+（顺带记录两个自己的坑 ℹ：`GdiFlush` 必须调用 ✓；PS 5.1 里 `[UIntPtr]64` 会**抛异常** ✗ ——
+我第一版对照脚本因此静默失败了 ✓，这解释了当时"user-mode 写不进去"的假象 ✓。）
+
+### 24.4 环境侧的真问题：orphaned scratch layer / A layer that can never be released
+
+本轮容器**一开始起不来** ✗：HCS 拒绝文档 ✓（`0xC037010D: 字段 "Path" 的值无效` ✗），因为探针算出的
+`Storage.Path` 是空串 ✓。逐层测下来 ✓：
+
+| 调用（对 scratch 目录） | HR | 含义 |
+|---|---|---|
+| `DestroyLayer` | `0x80070020` | **sharing violation** ✗ |
+| `CreateSandboxLayer` | `0x80070020` | 同上 ✓ |
+| `ActivateLayer` | `0x80070020` | 同上 ✓ |
+| `PrepareLayer` | `0x80070015` | `ERROR_NOT_READY` ✓ |
+| `GetLayerMountPath` | 长度 0 | → HCS 收到空 `Path` ✓ |
+
+佐证 ✓：`sandbox.vhdx` **无法独占打开、也无法删除** ✗（"being used by another process" ✓）；
+宿主上**没有任何** attach 的卷（`Get-Volume`/`Get-Disk` 干净 ✓）、没有残留的 compute system ✓
+（`HcsEnumerateComputeSystems` 只剩 CmService 模板 ✓）、没有残留探针进程 ✓；
+重启 `vmcompute`（和 `CmService`）**无效** ✗。
+
+根因 ✓：容器进程被**杀**（而不是优雅停止）后 ✓，该层的 VHDX 仍被 HCS/层驱动视为**在用** ✓，
+于是 `Deactivate`/`Destroy` 互相锁死 ✗ —— 对这一条路径**本轮开机内不可恢复** ✓
+（也解释了 §22 里那个卸载不掉的 `HKLM\WSMTEST` 与被钉住的镜像副本 ✓）。
+出路 ✓：HCS 的层 id 是**路径的哈希** ✓ → 换一个目录就是另一个层 ✓ → 实测 `C:\wsmprobe\dd4` 全部 HR=0 ✓
+且拿到 `\\?\Volume{04a4f83d-…}` ✓ 正常起容器 ✓。
+
+**产品修复** ✓（新文件 `src/20-Engines/Wsm.Engine.WindowsContainer/ScratchLayerProvisioner.cs` ✓）：
+1. 启动前先尽力释放（`Unprepare` → `Deactivate` ✓，与 `StopAsync` 现有清理一致 ✓）；
+2. 释放不掉时**换路径重试** ✓：`<scratch>` → `<scratch>-2` … `<scratch>-5` ✓，任何一次成功就用它的卷 ✓；
+3. 五次都失败才抛错 ✓，错误里带上每次的原因（含 sharing violation ✓）。
+
+配 7 个单测（`ScratchLayerProvisionerTests` ✓：正常路径 ✓ / orphaned 回退 ✓ / 全部失败报原因 ✓ /
+"准备好但没有挂载点"也算失败 ✓ / 回退命名规则 ✓）。全套 315 个测试通过 ✓。
+
+### 24.5 判定与出路（未变）/ Verdict and the remaining exits
+
+* **service 会话**：拿不到像素 ✓（§24.2/24.3 穷尽实测 ✓）；
+* **console 会话（3）**：**能渲染** ✓，但**进不去** ✗（§23.2：窗口站全部 `err 5` ✓、跨会话建进程全部 `err 3/2` ✓）；
+* **登录**：认证通 ✓、值全对 ✓，但 `winlogon/LogonUI` 约 100 秒后退出 ✗、`userinit` 从不执行 ✗（§23.4 ✓）。
+
+⇒ 进程隔离（HCS Argon）容器在这台机器上**给不出可镜像的桌面** ✓ ——
+要突破只能换**标准容器基础镜像**（能完成交互登录 ✓）或换**允许进入该会话的 runtime** ✓。
+宿主侧契约完好 ✓：同一套代码在宿主上 `capture=ok display=ok drag=ok` ✓。
+
+读侧的**行为现在是诚实的** ✓：找不到任何能出像素的策略时，它只发布**窗口表**（id/rect/title ✓）
+并在 `read.log` 里留下完整的策略矩阵 ✓，宿主侧显示的就是空白窗口 ✓（而不是假装有内容 ✓）。
+`container-steps.ps1 -Step 5` 也据此更新 ✓：矩阵里的 `ink=0%` 行是**证据** ✓，判定看的是
+`capture chosen` 是否存在 ✓ 与最好 ink 是否 > 0 ✓。

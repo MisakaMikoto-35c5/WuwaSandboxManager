@@ -102,6 +102,10 @@ public static class WsmMirrorNative {
     [DllImport("kernel32.dll")] public static extern void RtlMoveMemory(IntPtr dest, IntPtr src, UIntPtr length);
     [DllImport("msvcrt.dll", EntryPoint = "memcmp", CallingConvention = CallingConvention.Cdecl)]
     public static extern int memcmp(IntPtr a, IntPtr b, UIntPtr count);
+    [DllImport("msvcrt.dll", EntryPoint = "memset", CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr memset(IntPtr dest, int value, UIntPtr count);
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern bool GdiFlush();
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, IntPtr extra);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
@@ -292,25 +296,129 @@ public static class WsmMirrorWindows {
     [DllImport("gdi32.dll", SetLastError = true)] static extern bool SetViewportOrgEx(IntPtr dc, int x, int y, IntPtr previous);
     [DllImport("gdi32.dll", SetLastError = true)] static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, int rop);
 
+    // ---- capture strategies ------------------------------------------------------------------
+    // A container window is a real window with real content, but two things are true there that
+    // are not true on a normal desktop (measured, doc sections 23 and 24):
+    //   * it never carries WS_VISIBLE, and
+    //   * the service session has no display device, so neither PrintWindow nor a window-DC
+    //     BitBlt has a painted surface to copy.
+    // What still works is asking the window to paint itself into a DC we own, because that needs
+    // neither visibility nor a surface. Which of the strategies does that varies with the app,
+    // so capture is a MENU and the caller measures which entry produces ink instead of assuming
+    // one - the old "PrintWindow only, and only for a visible window" version returned nothing at
+    // all in a container.
+    public const int StrategyPrintWindowFull = 0;
+    public const int StrategyPrintWindow = 1;
+    public const int StrategyWmPrint = 2;
+    public const int StrategyWmPrintClient = 3;
+    public const int StrategyChildSweep = 4;
+    public const int StrategyRedrawBitBlt = 5;
+    public const int StrategyWindowDcBitBlt = 6;
+
+    public static readonly string[] StrategyNames = new string[] {
+        "PrintWindow(PW_RENDERFULLCONTENT)", "PrintWindow(0)", "WM_PRINT",
+        "WM_PRINTCLIENT", "child-sweep WM_PRINTCLIENT", "RedrawWindow+BitBlt", "windowDC+BitBlt"
+    };
+
+    const int WM_PRINT = 0x0317;
+    const int WM_PRINTCLIENT = 0x0318;
+    const uint PRF_NONCLIENT = 0x0002, PRF_CLIENT = 0x0004, PRF_ERASEBKGND = 0x0008,
+               PRF_CHILDREN = 0x0010, PRF_OWNED = 0x0020;
+    const uint RDW_INVALIDATE = 0x0001, RDW_ALLCHILDREN = 0x0080, RDW_UPDATENOW = 0x0100;
+    const uint SMTO_ABORTIFHUNG = 0x0002;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern IntPtr SendMessageTimeout(IntPtr h, int msg, IntPtr wparam, IntPtr lparam, uint flags, uint timeout, out IntPtr result);
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool RedrawWindow(IntPtr h, IntPtr rect, IntPtr region, uint flags);
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool IsWindow(IntPtr h);
+    delegate bool ChildProc(IntPtr h, IntPtr lparam);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, ChildProc proc, IntPtr lparam);
+
     /// <summary>
-    /// Paints one window into a DC whose viewport is shifted to the window's place on
-    /// the desktop, so a single desktop-sized DIB section covers every window.
-    /// PrintWindow is preferred (it asks the window to render itself and needs no screen
-    /// DC - the container's service session has none); BitBlt from the window DC is the
-    /// fallback.
+    /// Paints one window into <paramref name="dc"/> with one strategy, with the DC's viewport
+    /// shifted to the window's place on the desktop so a single desktop-sized DIB section covers
+    /// every window. Never requires WS_VISIBLE.
     /// </summary>
-    public static bool Paint(IntPtr dc, long id, int x, int y, int w, int h) {
+    public static bool Paint(IntPtr dc, long id, int x, int y, int w, int h, int strategy) {
         var hwnd = new IntPtr(id);
-        if (!IsWindowVisible(hwnd)) return false;
+        if (!IsWindow(hwnd)) return false;
         int saved = SaveDC(dc);
         try {
             SetViewportOrgEx(dc, x, y, IntPtr.Zero);
-            if (PrintWindow(hwnd, dc, 0x2)) return true;
-            var src = GetWindowDC(hwnd);
-            if (src == IntPtr.Zero) return false;
-            try { return BitBlt(dc, 0, 0, w, h, src, 0, 0, 0x00CC0020); }
-            finally { ReleaseDC(hwnd, src); }
+            switch (strategy) {
+                case StrategyPrintWindowFull:
+                    return PrintWindow(hwnd, dc, 0x2);            // PW_RENDERFULLCONTENT
+                case StrategyPrintWindow:
+                    return PrintWindow(hwnd, dc, 0x0);
+                case StrategyWmPrint:
+                    return Ask(hwnd, WM_PRINT, dc, PrintFlags());
+                case StrategyWmPrintClient:
+                    return Ask(hwnd, WM_PRINTCLIENT, dc, PrintFlags());
+                case StrategyChildSweep:
+                    return SweepChildren(hwnd, dc, x, y);
+                case StrategyRedrawBitBlt:
+                    RedrawWindow(hwnd, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+                    return BlitWindow(hwnd, dc, w, h);
+                default:
+                    return BlitWindow(hwnd, dc, w, h);
+            }
         } finally { RestoreDC(dc, saved); }
+    }
+
+    /// <summary>Kept for the plain call site: strategy 0.</summary>
+    public static bool Paint(IntPtr dc, long id, int x, int y, int w, int h) {
+        return Paint(dc, id, x, y, w, h, StrategyPrintWindowFull);
+    }
+
+    /// <summary>PRF_* without PRF_CHECKVISIBLE: a hidden window must print anyway.</summary>
+    static uint PrintFlags() {
+        return PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN | PRF_OWNED;
+    }
+
+    static IntPtr FlagBits(uint flags) { return new IntPtr(unchecked((int)flags)); }
+
+    /// <summary>SendMessageTimeout: a window that does not answer must not park the read side.</summary>
+    static bool Ask(IntPtr hwnd, int msg, IntPtr dc, uint flags) {
+        IntPtr result;
+        return SendMessageTimeout(hwnd, msg, dc, FlagBits(flags), SMTO_ABORTIFHUNG, 2000, out result) != IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Paints every descendant control on its own, at its own place. Last-resort strategy for
+    /// frames whose own WM_PRINT handler does nothing (the controls below them still answer
+    /// WM_PRINTCLIENT - that is how toolkits draw offscreen).
+    /// </summary>
+    static bool SweepChildren(IntPtr parent, IntPtr dc, int x, int y) {
+        RECT parentRect; GetWindowRect(parent, out parentRect);
+        bool any = false;
+        EnumChildWindows(parent, delegate(IntPtr child, IntPtr lparam) {
+            if (!IsWindowVisible(child) && (GetWindowLong(child, -20) & 0x00000080) != 0) return true;
+            RECT r; if (!GetWindowRect(child, out r)) return true;
+            int cw = r.R - r.L, ch = r.B - r.T;
+            if (cw <= 0 || ch <= 0) return true;
+            int saved = SaveDC(dc);
+            try {
+                SetViewportOrgEx(dc, x + (r.L - parentRect.L), y + (r.T - parentRect.T), IntPtr.Zero);
+                IntPtr result;
+                // Client-only: a child's frame is the parent's business, and PRF_CHECKVISIBLE is
+                // deliberately absent.
+                if (SendMessageTimeout(child, WM_PRINTCLIENT, dc, FlagBits(PRF_CLIENT | PRF_ERASEBKGND),
+                        SMTO_ABORTIFHUNG, 2000, out result) != IntPtr.Zero) {
+                    any = true;
+                }
+            } finally { RestoreDC(dc, saved); }
+            return true;
+        }, IntPtr.Zero);
+        return any;
+    }
+
+    static bool BlitWindow(IntPtr hwnd, IntPtr dc, int w, int h) {
+        var src = GetWindowDC(hwnd);
+        if (src == IntPtr.Zero) return false;
+        try { return BitBlt(dc, 0, 0, w, h, src, 0, 0, 0x00CC0020); }   // SRCCOPY
+        finally { ReleaseDC(hwnd, src); }
     }
 
     /// <summary>Moves a window without resizing, restacking or activating it.</summary>
@@ -561,6 +669,21 @@ public static class WsmMirrorDib {
 
     /// <summary>Creates a top-down 32bpp DIB whose pixels are <paramref name="section"/> at <paramref name="offset"/>.</summary>
     public static IntPtr Create(int width, int height, IntPtr section, uint offset, out int error) {
+        IntPtr bits;
+        return CreateCore(width, height, section, offset, out bits, out error);
+    }
+
+    /// <summary>
+    /// Creates a top-down 32bpp DIB with <b>private</b> memory (no file mapping) and hands back
+    /// its pixels. Measured: GDI in a container's service session accepts a paint into a section
+    /// backed DIB and leaves it empty, but renders normally into a private one - so the read side
+    /// paints here and moves the result across in one copy.
+    /// </summary>
+    public static IntPtr CreatePrivate(int width, int height, out IntPtr bits, out int error) {
+        return CreateCore(width, height, IntPtr.Zero, 0, out bits, out error);
+    }
+
+    static IntPtr CreateCore(int width, int height, IntPtr section, uint offset, out IntPtr bits, out int error) {
         var info = new BITMAPINFO();
         info.header.biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER));
         info.header.biWidth = width;
@@ -568,7 +691,6 @@ public static class WsmMirrorDib {
         info.header.biPlanes = 1;
         info.header.biBitCount = 32;
         info.header.biCompression = 0;    // BI_RGB
-        IntPtr bits;
         var dib = CreateDIBSection(IntPtr.Zero, ref info, 0, out bits, section, offset);
         error = Marshal.GetLastWin32Error();
         return dib;
@@ -606,6 +728,22 @@ if ($memoryDc -eq [IntPtr]::Zero) {
 [void][WsmMirrorDib]::SelectObject($memoryDc, $dib)
 Log ("DIB section over shared memory ready (dc=$memoryDc dib=$dib)")
 
+# A second DIB with PRIVATE pixels, for the sessions where GDI takes a paint call and leaves a
+# section-backed DIB empty (measured in a container's service session, doc section 24). The two
+# have the same geometry and stride, so moving a band between them is one contiguous copy.
+$privateBits = [IntPtr]::Zero
+$privateError = 0
+$privateDib = [WsmMirrorDib]::CreatePrivate($Width, $Height, [ref]$privateBits, [ref]$privateError)
+$privateDc = [IntPtr]::Zero
+if ($privateDib -ne [IntPtr]::Zero) {
+    $privateDc = [WsmMirrorDib]::CreateCompatibleDC([IntPtr]::Zero)
+    if ($privateDc -eq [IntPtr]::Zero) { $privateDc = [WsmMirrorDib]::CreateCompatibleDC($memoryDc) }
+    if ($privateDc -ne [IntPtr]::Zero) { [void][WsmMirrorDib]::SelectObject($privateDc, $privateDib) }
+    Log ("private DIB ready (dc=$privateDc dib=$privateDib bits=$privateBits)")
+} else {
+    Log ("private DIB could not be created (err " + $privateError + "); only the shared DIB is available")
+}
+
 # The screen is read into a normal managed bitmap and moved into the shared DIB in one call:
 # this is the capture path that was proven to work inside a container (doc section 13), while
 # drawing directly into a DIB section over a file mapping failed there.
@@ -613,6 +751,47 @@ $captureBounds = New-Object Drawing.Rectangle(0, 0, $Width, $Height)
 $captureSize = New-Object Drawing.Size($Width, $Height)
 $captureBitmap = New-Object Drawing.Bitmap($Width, $Height, [Drawing.Imaging.PixelFormat]::Format32bppRgb)
 $captureGraphics = [Drawing.Graphics]::FromImage($captureBitmap)
+
+# ---- per-window capture strategy, chosen by measurement --------------------------
+# Capture has two axes: WHERE the window paints (straight into the shared section-backed DIB, or
+# into a private DIB that is then copied over) and HOW it is asked to (see WsmMirrorWindows).
+# Both axes are measured, because the answers differ per session: on a desktop the first entry
+# of the first row wins, in a container's service session every "paint into the shared DIB"
+# entry reports success and leaves it empty. read.log keeps the whole matrix - it is the
+# evidence for which combination this session actually supports.
+$strategyNames = [WsmMirrorWindows]::StrategyNames
+$strategyCount = $strategyNames.Count
+$targetNames = @('shared-DIB', 'private-DIB+copy')
+$chosenStrategy = -1
+$chosenTarget = -1
+$probed = $false
+
+function Clear-Region([IntPtr] $target, [int] $x, [int] $y, [int] $w, [int] $h) {
+    for ($ry = 0; $ry -lt $h; $ry++) {
+        [void][WsmMirrorNative]::memset([IntPtr]::Add($target, ($y + $ry) * $stride + $x * 4), 0, [UIntPtr]([uint64]($w * 4)))
+    }
+}
+
+# One contiguous move for a horizontal band: both DIBs are top-down with the same stride.
+function Copy-Band([int] $y, [int] $h) {
+    [WsmMirrorNative]::RtlMoveMemory(
+        [IntPtr]::Add($pixelSection, $y * $stride),
+        [IntPtr]::Add($privateBits, $y * $stride),
+        [UIntPtr]([uint64]($h * $stride)))
+}
+
+function Measure-Ink([int] $x, [int] $y, [int] $w, [int] $h) {
+    $nonBlack = 0; $sampled = 0
+    for ($ry = 0; $ry -lt $h; $ry += 4) {
+        for ($rx = 0; $rx -lt $w; $rx += 4) {
+            $px = [IntPtr]::Add($pixelSection, (($y + $ry) * $stride) + (($x + $rx) * 4))
+            $sampled++
+            if ($marshal::ReadByte($px) -gt 8 -or $marshal::ReadByte($px, 1) -gt 8 -or $marshal::ReadByte($px, 2) -gt 8) { $nonBlack++ }
+        }
+    }
+    if ($sampled -eq 0) { return 0.0 }
+    return [Math]::Round(100 * $nonBlack / $sampled, 1)
+}
 
 Log ("read side started pid=$PID ${Width}x${Height} stride=$stride fps=$Fps seconds=$Seconds mirror=$mirrorPath")
 
@@ -649,7 +828,51 @@ while ((Get-Date) -lt $deadline) {
         } catch {
             if ($sequence -eq 1) { Log ('screen capture failed: ' + $_.Exception.Message) }
         }
-        if (-not $captured -and $sequence -eq 1) { Log 'falling back to per-window PrintWindow' }
+        if (-not $captured -and $sequence -eq 1) { Log 'falling back to per-window capture' }
+
+        # Which combination actually produces pixels here? Answer it once, on the biggest window,
+        # by zeroing the region and measuring what each (target, strategy) pair leaves behind.
+        # GdiFlush matters: GDI batches, and without it the bits can still be empty when we look.
+        # Asked once only: a session where nothing works must not spend every frame on this.
+        if (-not $captured -and -not $probed -and $count -gt 0) {
+            $probed = $true
+            $probeIndex = 0; $probeArea = 0
+            for ($i = 0; $i -lt $count; $i++) {
+                $pw0 = [Math]::Min($Width, $windows[$i].X + $windows[$i].W) - [Math]::Max(0, $windows[$i].X)
+                $ph0 = [Math]::Min($Height, $windows[$i].Y + $windows[$i].H) - [Math]::Max(0, $windows[$i].Y)
+                if ($pw0 -ge 64 -and $ph0 -ge 64 -and ($pw0 * $ph0) -gt $probeArea) { $probeArea = $pw0 * $ph0; $probeIndex = $i }
+            }
+            $probe = $windows[$probeIndex]
+            $px = [Math]::Max(0, $probe.X); $py = [Math]::Max(0, $probe.Y)
+            $pw = [Math]::Min($Width, $probe.X + $probe.W) - $px
+            $ph = [Math]::Min($Height, $probe.Y + $probe.H) - $py
+            [void][WsmMirrorWindows]::Show($probe.Id)
+            Start-Sleep -Milliseconds 300
+            Log ("capture probe: window 0x{0:X} [{1}] rect=({2},{3} {4}x{5})" -f [int64]$probe.Id, $probe.Title, $px, $py, $pw, $ph)
+            foreach ($t in 0, 1) {
+                if ($t -eq 1 -and $privateDc -eq [IntPtr]::Zero) { continue }
+                $targetDc = $memoryDc
+                if ($t -eq 1) { $targetDc = $privateDc }
+                for ($s = 0; $s -lt $strategyCount; $s++) {
+                    Clear-Region $pixelSection $px $py $pw $ph
+                    if ($t -eq 1) { Clear-Region $privateBits $px $py $pw $ph }
+                    $ok = [WsmMirrorWindows]::Paint($targetDc, $probe.Id, $px, $py, $pw, $ph, $s)
+                    [void][WsmMirrorNative]::GdiFlush()
+                    if ($t -eq 1) { Copy-Band $py $ph }
+                    $ink = Measure-Ink $px $py $pw $ph
+                    Log ("  {0} + {1} -> call={2} ink={3}%" -f $targetNames[$t], $strategyNames[$s], $ok, $ink)
+                    if ($ink -gt 0.0) { $chosenTarget = $t; $chosenStrategy = $s; break }
+                }
+                if ($chosenStrategy -ge 0) { break }
+            }
+            if ($chosenStrategy -ge 0) {
+                Log ("capture chosen: " + $targetNames[$chosenTarget] + " + '" + $strategyNames[$chosenStrategy] + "'")
+            } else {
+                Log 'no capture strategy produced any ink for this window; publishing the window table only'
+            }
+            Clear-Region $pixelSection $px $py $pw $ph
+            if ($t -eq 1) { Clear-Region $privateBits $px $py $pw $ph }
+        }
 
         for ($i = 0; $i -lt $count; $i++) {
             $w = $windows[$i]
@@ -658,9 +881,13 @@ while ((Get-Date) -lt $deadline) {
             $cw = $right - $x; $ch = $bottom - $y
 
             $painted = $captured
-            if (-not $captured -and $cw -gt 0 -and $ch -gt 0) {
+            if (-not $captured -and $chosenStrategy -ge 0 -and $cw -gt 0 -and $ch -gt 0) {
                 if ($sequence -le 2) { [void][WsmMirrorWindows]::Show($w.Id) }
-                $painted = [WsmMirrorWindows]::Paint($memoryDc, $w.Id, $x, $y, $cw, $ch)
+                $strategy = $chosenStrategy
+                $paintDc = $memoryDc
+                if ($strategy -lt 0) { $strategy = [WsmMirrorWindows]::StrategyPrintWindowFull }
+                if ($chosenTarget -eq 1) { $paintDc = $privateDc }
+                $painted = [WsmMirrorWindows]::Paint($paintDc, $w.Id, $x, $y, $cw, $ch, $strategy)
             }
 
             $entry = $tableOffset + $i * 40
@@ -675,23 +902,27 @@ while ((Get-Date) -lt $deadline) {
             $marshal::Copy($titleBytes, 0, [IntPtr]::Add($base, $titleOffset + $i * 512), $titleBytes.Length)
             $marshal::WriteInt32($base, $entry + 32, $i * 512)
             $marshal::WriteInt32($base, $entry + 36, [int]($titleBytes.Length / 2))
-            if (-not $painted) { Log ("paint failed for 0x{0:X}" -f [int64]$w.Id) }
+            if (-not $painted) { Log ("paint call failed for 0x{0:X} (strategy '{1}')" -f [int64]$w.Id, $strategyNames[$strategy]) }
+        }
 
-            # On the first pass, report how much of the window actually came back: this is
-            # the container-side question ("does PrintWindow give content in a session with
-            # no display device?"), and it is answerable from read.log alone.
-            if ($sequence -eq 1 -and $painted -and $cw -gt 16 -and $ch -gt 16) {
-                $nonBlack = 0; $sampled = 0
-                for ($ry = 0; $ry -lt $ch; $ry += 4) {
-                    for ($rx = 0; $rx -lt $cw; $rx += 4) {
-                        $px = [IntPtr]::Add($pixelSection, (($y + $ry) * $stride) + (($x + $rx) * 4))
-                        $sampled++
-                        if ($marshal::ReadByte($px) -gt 8 -or $marshal::ReadByte($px, 1) -gt 8 -or $marshal::ReadByte($px, 2) -gt 8) { $nonBlack++ }
-                    }
+        # Painting into the private DIB only counts once its pixels are in the shared buffer: one
+        # contiguous move per pass covers every window, whatever painted them (doc section 24).
+        if (-not $captured -and $chosenTarget -eq 1) {
+            [void][WsmMirrorNative]::GdiFlush()
+            [WsmMirrorNative]::RtlMoveMemory($pixelSection, $privateBits, [UIntPtr]([uint64]($stride * $Height)))
+        }
+
+        # On the first pass, report how much of each window actually came back: this is the
+        # container-side question ("does anything give content in a session with no display
+        # device?"), and it is answerable from read.log alone. Measured after the copy above.
+        if ($sequence -eq 1) {
+            for ($i = 0; $i -lt $count; $i++) {
+                $w = $windows[$i]
+                $x = [Math]::Max(0, $w.X); $y = [Math]::Max(0, $w.Y)
+                $cw = [Math]::Min($Width, $w.X + $w.W) - $x; $ch = [Math]::Min($Height, $w.Y + $w.H) - $y
+                if ($cw -gt 16 -and $ch -gt 16) {
+                    Log ("first paint 0x{0:X} rect=({1},{2} {3}x{4}) ink={5}%" -f [int64]$w.Id, $x, $y, $cw, $ch, (Measure-Ink $x $y $cw $ch))
                 }
-                $inkPercent = 0
-                if ($sampled -gt 0) { $inkPercent = [Math]::Round(100 * $nonBlack / $sampled, 1) }
-                Log ("first paint 0x{0:X} rect=({1},{2} {3}x{4}) ink={5}%" -f [int64]$w.Id, $x, $y, $cw, $ch, $inkPercent)
             }
         }
 

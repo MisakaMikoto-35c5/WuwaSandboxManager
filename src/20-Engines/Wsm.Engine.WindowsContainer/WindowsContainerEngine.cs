@@ -189,13 +189,28 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             ? recipe.Storage.StoragePath!
             : _layout.GetStorageDirectory(key);
         var scratchPath = Path.Combine(storageDirectory, "scratch");
-        Directory.CreateDirectory(scratchPath);
 
+        // A previous run of this container may have left its scratch layer mounted: a process
+        // killed instead of stopped never runs the release path below, and the layer then belongs
+        // to a compute system that no longer exists. Releasing it first turns the ordinary
+        // restart case into a clean provision; when even that is refused (an orphaned layer),
+        // ProvisionScratchLayer steps to a fresh path (see its remarks for the measurement).
+        await ReleaseScratchAsync(scratchPath, baseLayers);
+
+        string mountPath;
         try
         {
-            _layers.CreateScratchLayer(scratchPath, baseLayers);
-            _layers.Activate(scratchPath);
-            _layers.Prepare(scratchPath, baseLayers);
+            var provisioned = ScratchLayerProvisioner.Provision(_layers, scratchPath, baseLayers, out var attempts);
+            scratchPath = provisioned.Path;
+            mountPath = provisioned.MountPath;
+            if (attempts.Count > 1)
+            {
+                _logger.LogWarning(
+                    "The scratch layer for {SandboxId} moved to '{Scratch}' after: {Reasons}",
+                    id,
+                    scratchPath,
+                    string.Join("; ", attempts.Take(attempts.Count - 1).Select(a => $"{a.Path}: {a.Reason}")));
+            }
         }
         catch (Exception ex)
         {
@@ -203,14 +218,6 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             await CleanupNetworkingQuietlyAsync(namespaceId, endpointId);
             throw new SandboxBackendException(
                 $"Failed to provision the container scratch layer for {id}: {ex.Message}", 0, ex);
-        }
-
-        var mountPath = _layers.GetMountPath(scratchPath);
-        if (string.IsNullOrWhiteSpace(mountPath))
-        {
-            await CleanupNetworkingQuietlyAsync(namespaceId, endpointId);
-            throw new SandboxBackendException(
-                $"The container scratch layer for {id} was prepared but has no mount path.", 0);
         }
 
         if (!mountPath.EndsWith('\\'))

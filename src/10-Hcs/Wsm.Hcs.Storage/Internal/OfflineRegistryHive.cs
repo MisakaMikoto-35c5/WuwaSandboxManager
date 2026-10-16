@@ -85,13 +85,16 @@ internal sealed class OfflineRegistryHive : IDisposable
     public RegistryKey? OpenSubKey(string subKey, bool writable)
         => Registry.LocalMachine.OpenSubKey($"{MountName}\\{subKey}", writable);
 
-    /// <summary>The mounted hive's root key (read-only).</summary>
-    public RegistryKey? OpenRoot() => Registry.LocalMachine.OpenSubKey(MountName);
+    /// <summary>The mounted hive's root key.</summary>
+    public RegistryKey? OpenRoot(bool writable = false)
+        => Registry.LocalMachine.OpenSubKey(MountName, writable);
 
     /// <summary>
-    /// Opens a subkey writable, creating it when it is missing. The creation path matters:
-    /// <c>RegistryKey.CreateSubKey(name, writable: true)</c> hands back a <b>read-only</b> handle,
-    /// so writes through it fail with "Cannot write to the registry key".
+    /// Opens a subkey writable, creating it when it is missing. The path is relative to the
+    /// hive's root (the hive <i>is</i> e.g. SOFTWARE, so <c>Microsoft\Windows NT\...</c>, never
+    /// <c>SOFTWARE\Microsoft\...</c>). Creation has to go through a <b>writable</b> root handle:
+    /// creating through the read-only root throws "Cannot write to the registry key", and
+    /// <c>CreateSubKey(name, writable: true)</c> hands back a read-only handle as well.
     /// </summary>
     public RegistryKey? OpenOrCreateSubKey(string subKey)
     {
@@ -101,7 +104,7 @@ internal sealed class OfflineRegistryHive : IDisposable
             return existing;
         }
 
-        using var root = OpenRoot();
+        using var root = OpenRoot(writable: true);
         if (root is null)
         {
             return null;

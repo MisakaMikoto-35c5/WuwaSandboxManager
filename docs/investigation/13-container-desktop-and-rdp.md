@@ -1334,3 +1334,94 @@ movewindow 0x... -> (x,y) ok=True                          # 拖动被应用
 | 6 | 宿主逐窗口显示 | 找到属于 `wsm.exe` 的镜像窗口 |
 | 7 | 拖动 → 容器窗口是否真的移动 | `read.log` 有 `movewindow … ok=True` 且发布 rect 变化 ≥ 60 px |
 | 8 | 集成：产品路径 `wsm desktop --provider window-mirror` | 退出码 0 + 已发布 + 出现镜像窗口 |
+
+
+## 23. 容器侧本轮实测：三条硬边界与读侧的修复 / Container side this round: three hard walls and the read-side fixes
+
+### 23.1 结论先行 / Conclusion first
+
+在这台机器上，**进程隔离（HCS Argon）容器无法提供可被镜像的桌面**。这不是读侧的缺陷：读侧已经能在容器里正确
+发布窗口表（3 个测试容器里都能看到容器自己的 Notepad 窗口，id/rect/title 都对），同一套代码在**宿主**上的
+"逐窗口显示 + 拖动"也已证明可用（§20：`capture=ok display=ok drag=ok`）。挡住的是容器平台本身，三条互相独立的
+实测边界如下。
+
+### 23.2 边界一：容器的 service 会话没有可渲染的桌面 / Wall 1
+
+`HCS ExecuteAsync` 创建的进程落在 service 会话（本机为 session 2）。在那里：
+
+- `GetDC(0)` 返回非 0（日志 `screenDC=ok`），但 `Graphics.CopyFromScreen` 抛 **"The handle is invalid"** ✗；
+  从文件映射上的 DIB section 直接 `BitBlt` 也失败 ✗；
+- 容器里创建的窗口**永远不置 `WS_VISIBLE`**（`ShowWindow`/`ShowWindowAsync` + `SetWindowPos(SWP_SHOWWINDOW)`
+  都试过），因此 `PrintWindow` 拿不到内容 ✗（`paint failed`）。
+
+结论：**service 会话既没有可用的屏幕 DC，也没有被绘制过的窗口** ✗——从它出发不可能拿到像素 ✗。
+
+### 23.3 边界二：窗口站与跨会话被整体拒绝 / Wall 2
+
+读侧启动时会枚举本会话可见的窗口站并尝试附着（这也是一个好的产品行为：哪里窗口多就用哪个）：
+
+- `EnumWindowStations` 能列出 6～11 个站（含 `WinSta0` 与若干个 `Service-0x0-…$`）✓；
+- 但 `OpenWindowStation` 对**每一个**站都返回 `err 5 = ACCESS_DENIED` ✗——**包括读侧自己所在的那个站** ✗。
+  把请求权限降到最小（`WINSTA_ENUMDESKTOPS|READATTRIBUTES|ENUMERATE = 0x0103`）也一样 ✗；
+- 于是改用"令牌复制 + 跨会话建进程"：在容器内以 **SYSTEM**（一次性计划任务）身份运行，五个特权全部启用
+  （`SeDebug` / `SeImpersonate` / `SeAssignPrimaryToken` / `SeIncreaseQuota` / `SeTcb`）✓，
+  依次取 `conhost`/`csrss`/`fontdrvhost`/`LogonUI`/`winlogon`（都在 session 3）以及自己的令牌，
+  复制成主令牌后 `CreateProcessAsUser` 的每个变体（`lpDesktop=winsta0\default`、继承桌面、显式
+  `lpApplicationName`）**全部失败** ✗：`err 3 (ERROR_PATH_NOT_FOUND)` / `err 2`。
+
+结论：**容器进程无法进入（也无法在）console 会话** ✗，这与 §16/§17 测到的"窗口站不可寻址"一致。
+
+### 23.4 边界三：交互登录走不完 / Wall 3
+
+既然只有 console 会话可渲染，`Userinit` 登录钩子就是唯一的入口（§18 的设计）。实测：
+
+- 这个镜像的 `Administrator` **不是标准容器账号**：`Password required = Yes`、有密码、有到期日
+  （`10/9/2025`）——它是一台**完整 Windows Server 安装转成的层** ✗；
+- **认证本身是通的** ✓：容器内 `LogonUser` 对 `Administrator`（已设密码）与新建的 `wsmuser`（`wsmuser` 是
+  本轮按需新建的管理员账号）**三种类型都 `ok=True err=0`** ✓；
+- 自动登录组合**逐项写对并在容器内验证过** ✓：`AutoAdminLogon=1`、`DefaultUserName=wsmuser`、
+  `DefaultDomainName=wsmprobe`、`DefaultPassword=…`、`ForceAutoLogon=1`、
+  `Lsa\LimitBlankPasswordUse=0`（REG_DWORD ✓），`Userinit` 也确实带着
+  `C:\Windows\system32\userinit.exe,C:\wsm\wsm-winlogon-wrap.cmd` ✓；
+- 重启后**紧贴启动采样**（t+0/5s…）：`session 3` 一开始有 `winlogon`、`LogonUI`、`conhost`、`csrss` ✓，
+  但在 **~100 秒后 `winlogon` 与 `LogonUI` 一起退出** ✗，会话随之消失 ✗；
+- 把钩子改成"先写证据再干活"（写进**一定可写**的 `C:\Windows\Temp`）后确认：
+  **`Userinit` 的第二段程序从未执行** ✗（没有任何痕迹），`read.log`/`mirror.shm` 也没有 ✗。
+
+结论：**平台的交互登录不完成**（能认证、但不建立用户会话、不跑 `userinit`）✗，因此"登录钩子"这条路在这台机器
+的进程隔离容器里不可用 ✗。另外要注意：配置了自动登录反而会让 console 会话更早消失 ✗（winlogon 试完就退出），
+所以产品在**没有**明确要求登录时应当**清掉**这些值 ✓（本轮已实现）。
+
+### 23.5 本轮真正修好的东西（读侧与镜像侧）/ What got fixed
+
+| 位置 | 修复 | 为什么 |
+|---|---|---|
+| 读侧 | **自脱离** `-Detached`（父进程 `Start-Process` 后立刻退出） | 旧启动器用 `cmd start`，会让 HCS 建进程卡到 10 分钟超时 |
+| 读侧 | 日志提到最前 + 整体 try/`FATAL:` | 之前 C# 编译错会在写第一行日志前就死掉，从宿主看"像是没启动" |
+| 读侧 | 桌面枚举 + 最小权限 + **delegate 封送修复** | 名字曾被 ANSI/Unicode 混封送成单字符（`W`/`S`），导致必然 `err 2` |
+| 读侧 | `-StartProgram`（子进程继承本进程桌面） | 实测：runner 起的 notepad 读侧看不见，读侧自己起的就在眼前 |
+| 读侧 | 捕获回退链：`CopyFromScreen` → 托管位图 → **一次 `RtlMoveMemory` 进共享 DIB**；逐窗口 `PrintWindow` 保留为后备 | 容器里 DIB section 直接 `BitBlt` 失败；这条是 §13 证明过能用的路 |
+| 读侧 | 不再要求 `WS_VISIBLE`；**绝不镜像自己** | 容器窗口天生不置 `WS_VISIBLE` |
+| 镜像侧 | **相对蜂巢路径**（真 bug：`WinlogonSubKey` 多带了 `SOFTWARE\` 前缀） | 路径找不到 → 走"创建"分支 → 只读根句柄 → `Cannot write to the registry key.` |
+| 镜像侧 | Winlogon/LSA 值改用 **`reg.exe`** 写入 | 托管写入被离线蜂巢继承的 ACL 拒绝，`reg.exe` 能写（手工验证过） |
+| 镜像侧 | `Lsa\LimitBlankPasswordUse` 用 **REG_DWORD** | 写成 REG_SZ 时 LSA 不理它 |
+| 镜像侧 | payload 文件被占用时**只警告不中断** | 一个被钉住的文件不该让整个注册表补丁失败 |
+| 镜像侧 | 无 `--logon-user` 时**清除**自动登录值 | 见 §23.4 末尾 |
+| 工具 | `elevx.ps1`（不 `-Wait`，`.done` 标记判定完成）+ `container-steps.ps1 -Step N` 阶梯 | 之前"卡住几十分钟"其实是 `Start-Process -Verb RunAs -Wait` 永不返回 |
+
+新增：`wsm-session-launcher.ps1`（镜像 payload）——把程序发射进另一个会话的启动器（先以 SYSTEM 计划任务自举、
+启用特权、复制目标会话进程的令牌、`CreateProcessAsUser`）。**本平台的容器拒绝它** ✗（§23.3），留着给允许它的
+环境（如普通 Windows、非 silo 场景）用。
+
+### 23.6 什么时候这条链就能通 / What would unblock it
+
+两条路，都不需要再改读侧：
+
+1. **换成标准容器基础镜像**：`Administrator` 无密码且允许空密码/自动登录（标准 `mcr.microsoft.com` 镜像的形态）。
+   目前的镜像是完整安装转层 ✗，`Password required = Yes` 且空密码被策略拒绝 ✗；
+2. **换 runtime**：任何能维持"交互会话"、或允许把进程放进该会话的容器运行时。
+
+届时的形态本轮已经验证可行 ✓：把 `Winlogon\Shell` 整条写成读侧命令行
+（`powershell.exe … wsm-desktop-read.ps1 -Detached … -StartProgram <要镜像的程序>`）——**读侧就是该容器的
+"桌面会话"** ✓，会话活多久它就活多久（`cmd.exe` 做 Shell 时会立刻 EOF 退出 ✗，从而导致会话被拆 ✗，这是本轮
+t+100s 现象的成因之一 ✓）。

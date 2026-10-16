@@ -27,7 +27,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     private const string ControlSetPrefix = "ControlSet";
 
     /// <summary>Where <c>Userinit</c> lives - the documented logon extension point.</summary>
-    private const string WinlogonSubKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
+    private const string WinlogonSubKey = @"Microsoft\Windows NT\CurrentVersion\Winlogon";
 
     /// <summary>The value our logon hook is appended to.</summary>
     internal const string UserinitValue = "Userinit";
@@ -42,6 +42,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     private const string AutoAdminLogonValue = "AutoAdminLogon";
     private const string DefaultUserNameValue = "DefaultUserName";
     private const string DefaultPasswordValue = "DefaultPassword";
+    private const string ForceAutoLogonValue = "ForceAutoLogon";
 
     /// <summary>The LSA switch that permits auto-logon with a blank password.</summary>
     private const string LimitBlankPasswordValue = "LimitBlankPasswordUse";
@@ -184,46 +185,44 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
             before = winlogon.GetValue(UserinitValue) as string ?? string.Empty;
             after = AppendUserinit(before, ContainerDesktopPaths.WrapCommand);
 
-            try
+            // Write through reg.exe, always. The managed write is refused even for SYSTEM
+            // ("Cannot write to the registry key." - the loaded hive keeps its own key security),
+            // while reg.exe writes the same values successfully. Measured on this very hive, so
+            // there is no reason to keep a path that silently refuses the patch.
+            WriteWithRegExe(hive.MountName, WinlogonSubKey, UserinitValue, after);
+
+            if (!string.IsNullOrWhiteSpace(options?.Shell))
             {
-                winlogon.SetValue(UserinitValue, after, RegistryValueKind.String);
-
-                if (!string.IsNullOrWhiteSpace(options?.Shell))
-                {
-                    winlogon.SetValue(ShellValue, options!.Shell!, RegistryValueKind.String);
-                    _logger.LogInformation("The base image will start the shell '{Shell}' after logon.", options.Shell);
-                }
-
-                if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser))
-                {
-                    // A read side that starts at logon needs a logon; these are the same
-                    // values the engine writes at container start, baked into the image
-                    // instead (so a container that is not started by WSM still works).
-                    winlogon.SetValue(AutoAdminLogonValue, "1", RegistryValueKind.String);
-                    winlogon.SetValue(DefaultUserNameValue, options.AutoLogonUser!, RegistryValueKind.String);
-                    winlogon.SetValue(DefaultPasswordValue, options.AutoLogonPassword ?? string.Empty, RegistryValueKind.String);
-                    _logger.LogInformation(
-                        "The base image will log on '{User}' automatically (blank password: {Blank}).",
-                        options.AutoLogonUser, string.IsNullOrEmpty(options.AutoLogonPassword));
-                }
+                WriteWithRegExe(hive.MountName, WinlogonSubKey, ShellValue, options!.Shell!);
+                _logger.LogInformation("The base image will start the shell '{Shell}' after logon.", options.Shell);
             }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
-            {
-                // The managed write can be refused even for SYSTEM (the keys carry ACLs that
-                // honour the offline hive's own security), while reg.exe writes the same values
-                // successfully - verified on the same hive.
-                _logger.LogWarning(ex, "Managed write to {Key} failed; retrying through reg.exe.", WinlogonSubKey);
-                WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", UserinitValue, after);
-                if (!string.IsNullOrWhiteSpace(options?.Shell))
-                {
-                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", ShellValue, options!.Shell!);
-                }
 
-                if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser))
+            if (!string.IsNullOrWhiteSpace(options?.AutoLogonUser))
+            {
+                // A read side that starts at logon needs a logon; these are the same values the
+                // engine writes at container start, baked into the image instead (so a container
+                // that is not started by WSM still works).
+                WriteWithRegExe(hive.MountName, WinlogonSubKey, AutoAdminLogonValue, "1");
+                WriteWithRegExe(hive.MountName, WinlogonSubKey, DefaultUserNameValue, options.AutoLogonUser!);
+                WriteWithRegExe(hive.MountName, WinlogonSubKey, DefaultPasswordValue, options.AutoLogonPassword ?? string.Empty);
+                // Force it on every pass: without it winlogon can stay at LogonUI after the first
+                // try (and in a container there is nobody to type credentials).
+                WriteWithRegExe(hive.MountName, WinlogonSubKey, ForceAutoLogonValue, "1");
+                _logger.LogInformation(
+                    "The base image will log on '{User}' automatically (blank password: {Blank}).",
+                    options.AutoLogonUser, string.IsNullOrEmpty(options.AutoLogonPassword));
+            }
+            else
+            {
+                // No logon settings asked for: remove what an earlier patch may have left behind.
+                // Auto-logon that cannot complete is worse than none - the container's winlogon
+                // then exits after the failed attempt instead of sitting at LogonUI (measured).
+                foreach (var name in new[]
+                         {
+                             AutoAdminLogonValue, DefaultUserNameValue, DefaultPasswordValue, ForceAutoLogonValue,
+                         })
                 {
-                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", AutoAdminLogonValue, "1");
-                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", DefaultUserNameValue, options.AutoLogonUser!);
-                    WriteWithRegExe(hive.MountName, @"Microsoft\Windows NT\CurrentVersion\Winlogon", DefaultPasswordValue, options.AutoLogonPassword ?? string.Empty);
+                    RemoveWithRegExe(hive.MountName, WinlogonSubKey, name);
                 }
             }
 
@@ -250,12 +249,39 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     }
 
     /// <summary>
+    /// Deletes one value from a loaded offline hive through <c>reg.exe</c>, ignoring the case
+    /// where the value was never there.
+    /// </summary>
+    private static void RemoveWithRegExe(string mountName, string subKey, string name)
+    {
+        var arguments = $@"delete ""HKLM\{mountName}\{subKey}"" /v ""{name}"" /f";
+        var startInfo = new ProcessStartInfo("reg.exe", arguments)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return;
+        }
+
+        process.StandardOutput.ReadToEnd();
+        process.StandardError.ReadToEnd();
+        process.WaitForExit();
+    }
+
+    /// <summary>
     /// Writes one value into a loaded offline hive through <c>reg.exe</c>. Measured: this works
     /// where the managed write is refused, even for SYSTEM - including inside the LSA key.
     /// </summary>
-    private static void WriteWithRegExe(string mountName, string subKey, string name, string value)
+    private static void WriteWithRegExe(
+        string mountName, string subKey, string name, string value, string type = "REG_SZ")
     {
-        var arguments = $@"add ""HKLM\{mountName}\{subKey}"" /v ""{name}"" /t REG_SZ /d ""{value}"" /f";
+        var arguments = $@"add ""HKLM\{mountName}\{subKey}"" /v ""{name}"" /t {type} /d ""{value}"" /f";
         var startInfo = new ProcessStartInfo("reg.exe", arguments)
         {
             UseShellExecute = false,
@@ -291,8 +317,10 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
                      .Where(name => name.StartsWith(ControlSetPrefix, StringComparison.OrdinalIgnoreCase)))
         {
             // reg.exe, for the same reason as above: the LSA key refuses the managed write.
+            // REG_DWORD matters - LSA ignores a string value and would keep refusing a
+            // blank-password logon.
             WriteWithRegExe(
-                hive.MountName, $@"{controlSet}\Control\Lsa", LimitBlankPasswordValue, "0");
+                hive.MountName, $@"{controlSet}\Control\Lsa", LimitBlankPasswordValue, "0", "REG_DWORD");
             _logger.LogInformation(
                 "The base image '{Hive}': {Set}\\Control\\Lsa\\{Value} -> 0 (blank-password auto-logon).",
                 hiveFile, controlSet, LimitBlankPasswordValue);

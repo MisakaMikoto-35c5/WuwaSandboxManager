@@ -6,6 +6,7 @@ using Windows.UI;
 using Wsm.Domain;
 using Wsm.Domain.ValueObjects;
 using Wsm.Application;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Ui.WinUI.Localization;
 
 namespace Wsm.Ui.WinUI.ViewModels;
@@ -152,6 +153,15 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     /// <summary>Primary action is Start when idle, Connect when running.</summary>
     public bool IsPrimaryEnabled => State is not (SandboxState.Starting or SandboxState.Rebooting);
 
+    /// <summary>True when this instance runs on the process-isolation (container) engine.</summary>
+    public bool IsContainerEngine => Engine == SandboxEngineKind.WindowsContainer;
+
+    /// <summary>
+    /// Container desktop actions are offered for a running container: a container
+    /// has no RDP listener, so its desktop only exists once the channel is started.
+    /// </summary>
+    public bool ShowContainerDesktop => IsContainerEngine && IsRunning;
+
     public string PrimaryActionLabel => IsRunning
         ? _l["PrimaryConnectButton.Content"]
         : _l["PrimaryStartButton.Content"];
@@ -234,6 +244,8 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         OnPropertyChanged(nameof(PrimaryActionLabel));
         OnPropertyChanged(nameof(StateBrush));
         OnPropertyChanged(nameof(CanMapAtRuntime));
+        OnPropertyChanged(nameof(IsContainerEngine));
+        OnPropertyChanged(nameof(ShowContainerDesktop));
     }
 
     partial void OnStateChanged(SandboxState value)
@@ -245,6 +257,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         OnPropertyChanged(nameof(IsPrimaryEnabled));
         OnPropertyChanged(nameof(PrimaryActionLabel));
         OnPropertyChanged(nameof(StateBrush));
+        OnPropertyChanged(nameof(ShowContainerDesktop));
     }
 
     partial void OnRailModeChanged(bool value)
@@ -453,6 +466,48 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
                 _userDisconnected = false;
                 Status = _l.Get("Status.LaunchedProgram.Text", program.Path);
             }
+        });
+    }
+
+    // --------------------- Container desktop ---------------------
+
+    /// <summary>Opens the container's whole desktop in a single viewer window (frame buffer).</summary>
+    [RelayCommand]
+    private async Task OpenContainerDesktopAsync()
+        => await OpenContainerDesktopCoreAsync(ContainerDesktopProviderIds.FrameBuffer);
+
+    /// <summary>Mirrors every container window as a real host window (RAIL-like).</summary>
+    [RelayCommand]
+    private async Task OpenContainerWindowsAsync()
+        => await OpenContainerDesktopCoreAsync(ContainerDesktopProviderIds.WindowMirror);
+
+    /// <summary>
+    /// Starts (or adopts) the container desktop channel, then presents it with a
+    /// <c>wsm desktop-view</c> child process. The channel runs wherever the
+    /// container does — the agent when one answered, this process otherwise (see
+    /// <see cref="ContainerDesktopConnector"/>); only the viewer is launched here.
+    /// </summary>
+    private async Task OpenContainerDesktopCoreAsync(string providerId)
+    {
+        await GuardAsync(async () =>
+        {
+            Status = _l["Status.DesktopStarting.Text"];
+            _owner.Status = Status;
+
+            var status = await _owner.ContainerDesktop.StartDesktopAsync(Id, BuildRecipe(), providerId);
+
+            var exe = WsmCliLocator.Find();
+            if (exe is null)
+            {
+                Status = _l["Status.CliMissing.Text"];
+                return;
+            }
+
+            // The live channel's provider decides the viewer mode: an adopted
+            // channel may run the other provider than the button asked for.
+            var mode = status.ProviderId == ContainerDesktopProviderIds.WindowMirror ? "windows" : "frame";
+            DesktopViewerLauncher.Launch(exe, status.FramePath, mode);
+            Status = _l["Status.DesktopLaunched.Text"];
         });
     }
 

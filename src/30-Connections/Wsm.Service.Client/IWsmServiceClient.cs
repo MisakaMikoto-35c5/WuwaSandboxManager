@@ -47,6 +47,27 @@ public interface IWsmServiceClient
     Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>
+    /// Starts the container desktop channel for a process-isolated container (or
+    /// adopts the live one) and reports its status. The channel runs in the agent
+    /// process, which owns the container; the caller presents the desktop itself
+    /// by launching a viewer on <see cref="Wsm.Service.Contracts.ContainerDesktopStatus.FramePath"/>
+    /// unless <paramref name="present"/> asks the agent to present it into the
+    /// interactive session.
+    /// </summary>
+    /// <param name="id">The sandbox whose desktop to start.</param>
+    /// <param name="provider">Optional explicit provider id override (e.g. <c>window-mirror</c>).</param>
+    /// <param name="kind">Optional kind override; <c>null</c> = the recipe decides.</param>
+    /// <param name="present">Present the desktop into the interactive session immediately.</param>
+    Task<Wsm.Service.Contracts.ContainerDesktopStatus> StartDesktopAsync(
+        Guid id, string? provider = null, ContainerDesktopKind? kind = null, bool present = false, CancellationToken ct = default);
+
+    /// <summary>Stops the container desktop channel for <paramref name="id"/>; no live channel is a no-op.</summary>
+    Task StopDesktopAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>Reports the container desktop channel's status without changing it.</summary>
+    Task<Wsm.Service.Contracts.ContainerDesktopStatus> GetDesktopStatusAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
     /// Cheap availability probe: attempts a trivial RPC with a short timeout.
     /// Any failure (including no service listening) returns <c>false</c>; never throws.
     /// </summary>

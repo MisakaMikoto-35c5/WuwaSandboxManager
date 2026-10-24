@@ -42,6 +42,31 @@
   <data name="ContainerImageSection.Text" xml:space="preserve"><value>进程隔离镜像</value></data>
   <data name="ContainerImageCaption.Text" xml:space="preserve"><value>进程隔离（HCS 容器）需要镜像；下载一个 Windows Server 镜像即可启用。VM 隔离始终可用。</value></data>
   <data name="ContainerImageDownloadButton.Content" xml:space="preserve"><value>下载镜像</value></data>
+  <data name="ContainerImageCancelButton.Content" xml:space="preserve"><value>取消</value></data>
+  <data name="ContainerImageRedownloadButton.Content" xml:space="preserve"><value>重新下载</value></data>
+  <data name="ContainerImageDeleteButton.Content" xml:space="preserve"><value>删除</value></data>
+  <data name="ContainerImageOccupiedDeleteButton.Content" xml:space="preserve"><value>删除文件夹</value></data>
+  <data name="ContainerImageInstalled.Text" xml:space="preserve"><value>此镜像已下载到上方文件夹。</value></data>
+  <data name="ContainerImageOccupiedHint.Text" xml:space="preserve"><value>此文件夹已存在，且不是已下载的镜像。请选择其他文件夹或将其删除。</value></data>
+  <data name="ContainerImageCancelled.Text" xml:space="preserve"><value>下载已取消，未完成的下载已清除。</value></data>
+  <data name="ContainerImageDeleted.Text" xml:space="preserve"><value>镜像文件夹已删除。</value></data>
+  <data name="ContainerImageDeleteFailed.Text" xml:space="preserve"><value>无法删除镜像文件夹：{0}</value></data>
+  <data name="ContainerImageError.Network.Text" xml:space="preserve"><value>无法下载 {0}。请检查网络连接，并确认该引用在注册表中存在，然后重试。</value></data>
+  <data name="ContainerImageError.FolderNotEmpty.Text" xml:space="preserve"><value>文件夹 {0} 不为空。请选择其他文件夹，或先将其删除。</value></data>
+  <data name="ContainerImageError.Generic.Text" xml:space="preserve"><value>镜像下载失败：{0}</value></data>
+  <data name="ContainerImageStage.ResolvingManifest.Text" xml:space="preserve"><value>正在解析镜像清单…</value></data>
+  <data name="ContainerImageStage.Downloading.Text" xml:space="preserve"><value>正在下载基础层…</value></data>
+  <data name="ContainerImageStage.Extracting.Text" xml:space="preserve"><value>正在解压镜像层…</value></data>
+  <data name="ContainerImageStage.Preparing.Text" xml:space="preserve"><value>正在准备镜像层…</value></data>
+  <data name="ContainerImageStage.Done.Text" xml:space="preserve"><value>完成</value></data>
+  <data name="ContainerImageProgress.Detail.Text" xml:space="preserve"><value>{0} / {1} · {2} · 剩余约 {3}</value></data>
+  <data name="ContainerImageProgress.BytesOnly.Text" xml:space="preserve"><value>已下载 {0}</value></data>
+  <data name="ContainerImageProgress.EtaMinutes.Text" xml:space="preserve"><value>{0} 分钟</value></data>
+  <data name="ContainerImageProgress.EtaSeconds.Text" xml:space="preserve"><value>{0} 秒</value></data>
+  <data name="ContainerImage.Desc.WindowsServer2025" xml:space="preserve"><value>完整 Windows Server 2025 镜像，包含完整的 Server Core API 集。</value></data>
+  <data name="ContainerImage.Desc.WindowsServer2022" xml:space="preserve"><value>完整 Windows Server 2022 镜像，包含完整的 Server Core API 集。</value></data>
+  <data name="ContainerImage.Desc.ServerCore2025" xml:space="preserve"><value>小型 Windows Server 2025 镜像，适用于 .NET Framework 工作负载。</value></data>
+  <data name="ContainerImage.Desc.ServerCore2022" xml:space="preserve"><value>小型 Windows Server 2022 镜像，适用于 .NET Framework 工作负载。</value></data>
   <data name="ContainerImageElevationHint.Text" xml:space="preserve"><value>下载需要管理员权限（请先“以管理员身份重启”）。</value></data>
   <data name="ContainerImageStarting.Text" xml:space="preserve"><value>正在开始…</value></data>
   <data name="Container.Available.Text" xml:space="preserve"><value>进程隔离：可用</value></data>
@@ -220,4 +245,16 @@
   <data name="Status.ImageImporting.Text" xml:space="preserve"><value>正在下载容器镜像…</value></data>
   <data name="Status.ImageImported.Text" xml:space="preserve"><value>容器镜像已就绪：{0}</value></data>
   <data name="Status.SessionAlreadyOpen.Text" xml:space="preserve"><value>该沙箱的会话窗口已打开。</value></data>
+  <!-- Container desktop -->
+  <data name="ContainerDesktopSection.Text" xml:space="preserve"><value>容器桌面</value></data>
+  <data name="ContainerDesktopCaption.Text" xml:space="preserve"><value>打开容器的桌面：整个桌面显示在一个窗口中，或为每个容器窗口镜像一个主机窗口。</value></data>
+  <data name="ContainerDesktopButton.Content" xml:space="preserve"><value>桌面</value></data>
+  <data name="ContainerWindowsButton.Content" xml:space="preserve"><value>窗口 (RAIL)</value></data>
+  <data name="CreateDesktopHeader.Text" xml:space="preserve"><value>容器桌面</value></data>
+  <data name="CreateDesktopPresentBox.Content" xml:space="preserve"><value>沙箱启动时在我的会话中显示桌面</value></data>
+  <data name="DesktopKind.None.Text" xml:space="preserve"><value>无</value></data>
+  <data name="DesktopKind.FrameBuffer.Text" xml:space="preserve"><value>帧缓冲（整个桌面）</value></data>
+  <data name="DesktopKind.WindowMirror.Text" xml:space="preserve"><value>窗口镜像 (RAIL)</value></data>
+  <data name="Status.DesktopStarting.Text" xml:space="preserve"><value>正在启动容器桌面…</value></data>
+  <data name="Status.DesktopLaunched.Text" xml:space="preserve"><value>容器桌面查看器已启动。</value></data>
 </root>

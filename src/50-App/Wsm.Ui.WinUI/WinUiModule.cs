@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Volo.Abp.Modularity;
 using Wsm.Application;
 using Wsm.Application.EngineSelection;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Engine.Hcs;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engine.WindowsSandbox;
@@ -16,9 +17,10 @@ namespace Wsm.Ui.WinUI;
 /// <summary>
 /// Root startup module for the WinUI 3 host. Composes the application layer
 /// (which owns engine selection and persistence), all three sandbox engines,
-/// the WSM agent client (so VM lifecycle can be routed to the resident agent)
-/// and the non-UI localization resource, then exposes the UI through
-/// <c>App</c>/<c>MainWindow</c>.
+/// the WSM agent client (so VM lifecycle can be routed to the resident agent),
+/// the container desktop channel (the in-process fallback for starting container
+/// desktops when no agent answers) and the non-UI localization resource, then
+/// exposes the UI through <c>App</c>/<c>MainWindow</c>.
 /// </summary>
 [DependsOn(
     typeof(SandboxApplicationModule),
@@ -27,6 +29,7 @@ namespace Wsm.Ui.WinUI;
     typeof(WindowsSandboxEngineModule),
     typeof(WindowsContainerEngineModule),
     typeof(WsmServiceClientModule),
+    typeof(WsmConnectionContainerDesktopModule),
     typeof(WsmLocalizationModule))]
 public sealed class WinUiModule : AbpModule
 {

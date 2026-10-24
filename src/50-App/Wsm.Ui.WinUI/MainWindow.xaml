@@ -240,6 +240,29 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- Container desktop: a process-isolated container has no
+                             RDP listener, so its desktop is remoted over the
+                             container desktop channel instead. -->
+                        <Border Style="{StaticResource SectionCard}"
+                                Visibility="{Binding Selected.ShowContainerDesktop, Converter={StaticResource BoolToVisibility}}">
+                            <StackPanel Spacing="10">
+                                <TextBlock x:Uid="ContainerDesktopSection" Text="Container desktop" Style="{StaticResource SectionTitle}" />
+                                <TextBlock x:Uid="ContainerDesktopCaption"
+                                           Text="Open the container's desktop: one window for the whole desktop, or one window per container window."
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Uid="ContainerDesktopButton"
+                                            Content="Desktop"
+                                            Command="{Binding Selected.OpenContainerDesktopCommand}" />
+                                    <Button x:Uid="ContainerWindowsButton"
+                                            Content="Windows (RAIL)"
+                                            Command="{Binding Selected.OpenContainerWindowsCommand}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
                         <!-- At a glance -->
                         <Border Style="{StaticResource SectionCard}">
                             <StackPanel Spacing="10">
@@ -308,7 +331,7 @@
                        Title="Settings"
                        CloseButtonText="Close"
                        DefaultButton="Close">
-            <ScrollViewer MaxHeight="560" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer MaxHeight="640" VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="16" Width="420">
                     <!-- Language -->
                     <StackPanel Spacing="6">
@@ -328,51 +351,115 @@
                         </ComboBox>
                     </StackPanel>
 
-                    <!-- RDP connector -->
+                    <!-- Process-isolation image (Windows Server) -->
                     <StackPanel Spacing="6">
-                        <TextBlock x:Uid="RdpConnectorLabel"
-                                   Text="RDP connector"
+                        <TextBlock x:Uid="ContainerImageSection"
+                                   Text="Process isolation image"
                                    Style="{StaticResource FieldLabel}" />
-                        <ComboBox x:Name="RdpConnectorCombo"
-                                  HorizontalAlignment="Stretch"
-                                  ItemsSource="{Binding RdpConnectors}"
-                                  SelectedItem="{Binding SelectedRdpConnector, Mode=TwoWay}"
-                                  SelectionChanged="OnRdpConnectorChanged">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:RdpConnectorOption">
-                                    <TextBlock Text="{x:Bind DisplayName}" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <TextBlock x:Uid="RdpConnectorHint"
-                                   Text="Which presentation shows RDP sessions: the WPF window, or the WinUI 3 connector (its own process). Changing it restarts the app."
+                        <TextBlock x:Uid="ContainerImageCaption"
+                                   Text="Process isolation (HCS container) needs an image; download a Windows Server image to enable it."
                                    FontSize="11"
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                    </StackPanel>
-
-                    <!-- Config & data folder -->
-                    <StackPanel Spacing="6">
-                        <TextBlock x:Uid="ConfigDataFolderLabel"
-                                   Text="Config &amp; data folder"
-                                   Style="{StaticResource FieldLabel}" />
+                        <TextBlock Text="{Binding ContainerIsolationStatus}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <ComboBox HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding ContainerImageOptions}"
+                                  IsEditable="True"
+                                  Text="{Binding SelectedContainerImageReference, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanDownloadContainerImage}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Padding="0,4" Spacing="1">
+                                        <TextBlock>
+                                            <Run Text="{Binding DisplayName}" />
+                                            <Run Text="{Binding SizeText}"
+                                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding Description}"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBox Text="{Binding ConfigDataFolder, Mode=OneWay}"
-                                     IsReadOnly="True" />
+                            <TextBox Text="{Binding ContainerImageFolder, Mode=TwoWay}"
+                                     IsEnabled="{Binding CanManageContainerImage}" />
                             <Button Grid.Column="1"
                                     x:Uid="BrowseButton"
                                     Content="Browse"
-                                    Click="OnBrowseConfigDataFolder" />
+                                    Click="OnBrowseContainerImageFolder"
+                                    IsEnabled="{Binding CanManageContainerImage}" />
                         </Grid>
-                        <TextBlock x:Uid="ConfigDataFolderHint"
-                                   Text="One subfolder per sandbox; each holds its manifest, recipe and data. Changing it restarts the app."
+                        <StackPanel Spacing="6"
+                                    Visibility="{Binding IsContainerImageInstalled, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock x:Uid="ContainerImageInstalled"
+                                       Text="This image is already downloaded."
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Uid="ContainerImageRedownloadButton"
+                                        Content="Re-download"
+                                        Command="{Binding RedownloadContainerImageCommand}"
+                                        IsEnabled="{Binding CanManageContainerImage}" />
+                                <Button x:Uid="ContainerImageDeleteButton"
+                                        Content="Delete"
+                                        Command="{Binding DeleteContainerImageCommand}"
+                                        IsEnabled="{Binding CanManageContainerImage}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Spacing="6"
+                                    Visibility="{Binding IsContainerImageOccupied, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock x:Uid="ContainerImageOccupiedHint"
+                                       Text="This folder exists and is not a downloaded image. Pick another folder or delete it."
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <Button x:Uid="ContainerImageOccupiedDeleteButton"
+                                    Content="Delete folder"
+                                    HorizontalAlignment="Left"
+                                    Command="{Binding DeleteContainerImageCommand}"
+                                    IsEnabled="{Binding CanManageContainerImage}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Uid="ContainerImageDownloadButton"
+                                    Content="Download image"
+                                    Command="{Binding DownloadContainerImageCommand}"
+                                    IsEnabled="{Binding CanDownloadContainerImage}" />
+                            <Button x:Uid="ContainerImageCancelButton"
+                                    Content="Cancel"
+                                    Command="{Binding CancelContainerImageDownloadCommand}"
+                                    Visibility="{Binding IsContainerImageDownloading, Converter={StaticResource BoolToVisibility}}" />
+                        </StackPanel>
+                        <ProgressBar Maximum="100"
+                                     Value="{Binding ContainerImageProgress, Mode=OneWay}"
+                                     IsIndeterminate="{Binding ContainerImageProgressIndeterminate}"
+                                     Visibility="{Binding IsContainerImageDownloading, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Text="{Binding ContainerImageProgressText}"
                                    FontSize="11"
                                    TextWrapping="Wrap"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="{Binding IsContainerImageDownloading, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock Text="{Binding ContainerImageProgressDetailText}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="{Binding IsContainerImageDownloading, Converter={StaticResource BoolToVisibility}}" />
+                        <TextBlock x:Uid="ContainerImageElevationHint"
+                                   Text="Downloading requires an elevated app (restart elevated first)."
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="{Binding IsElevated, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}" />
                     </StackPanel>
 
                     <!-- Routing engine -->
@@ -425,54 +512,51 @@
                         </ItemsControl>
                     </StackPanel>
 
-                    <!-- Process-isolation image (Windows Server) -->
+                    <!-- RDP connector -->
                     <StackPanel Spacing="6">
-                        <TextBlock x:Uid="ContainerImageSection"
-                                   Text="Process isolation image"
+                        <TextBlock x:Uid="RdpConnectorLabel"
+                                   Text="RDP connector"
                                    Style="{StaticResource FieldLabel}" />
-                        <TextBlock x:Uid="ContainerImageCaption"
-                                   Text="Process isolation (HCS container) needs an image; download a Windows Server image to enable it."
+                        <ComboBox x:Name="RdpConnectorCombo"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding RdpConnectors}"
+                                  SelectedItem="{Binding SelectedRdpConnector, Mode=TwoWay}"
+                                  SelectionChanged="OnRdpConnectorChanged">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RdpConnectorOption">
+                                    <TextBlock Text="{x:Bind DisplayName}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock x:Uid="RdpConnectorHint"
+                                   Text="Which presentation shows RDP sessions: the WPF window, or the WinUI 3 connector (its own process). Changing it restarts the app."
                                    FontSize="11"
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                        <TextBlock Text="{Binding ContainerIsolationStatus}"
-                                   FontSize="12"
-                                   TextWrapping="Wrap"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <ComboBox HorizontalAlignment="Stretch"
-                                  ItemsSource="{Binding ContainerImageReferences}"
-                                  SelectedItem="{Binding SelectedContainerImageReference, Mode=TwoWay}"
-                                  IsEnabled="{Binding CanDownloadContainerImage}" />
+                    </StackPanel>
+
+                    <!-- Config & data folder -->
+                    <StackPanel Spacing="6">
+                        <TextBlock x:Uid="ConfigDataFolderLabel"
+                                   Text="Config &amp; data folder"
+                                   Style="{StaticResource FieldLabel}" />
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBox Text="{Binding ContainerImageFolder, Mode=TwoWay}"
-                                     IsEnabled="{Binding CanDownloadContainerImage}" />
+                            <TextBox Text="{Binding ConfigDataFolder, Mode=OneWay}"
+                                     IsReadOnly="True" />
                             <Button Grid.Column="1"
                                     x:Uid="BrowseButton"
                                     Content="Browse"
-                                    Click="OnBrowseContainerImageFolder"
-                                    IsEnabled="{Binding CanDownloadContainerImage}" />
+                                    Click="OnBrowseConfigDataFolder" />
                         </Grid>
-                        <Button x:Uid="ContainerImageDownloadButton"
-                                Content="Download image"
-                                HorizontalAlignment="Left"
-                                Command="{Binding DownloadContainerImageCommand}" />
-                        <ProgressBar Maximum="100"
-                                     Value="{Binding ContainerImageProgress, Mode=OneWay}"
-                                     Visibility="{Binding IsContainerImageDownloading, Converter={StaticResource BoolToVisibility}}" />
-                        <TextBlock Text="{Binding ContainerImageProgressText}"
+                        <TextBlock x:Uid="ConfigDataFolderHint"
+                                   Text="One subfolder per sandbox; each holds its manifest, recipe and data. Changing it restarts the app."
                                    FontSize="11"
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                        <TextBlock x:Uid="ContainerImageElevationHint"
-                                   Text="Downloading requires an elevated app (restart elevated first)."
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                   Visibility="{Binding IsElevated, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}" />
                     </StackPanel>
 
                     <!-- Environment / about -->
@@ -533,18 +617,25 @@
                     <TextBlock x:Uid="CreateEngineHeader" Text="Engine" Style="{StaticResource FieldLabel}" />
                     <ComboBox HorizontalAlignment="Stretch"
                               ItemsSource="{Binding NewEngineOptions}"
-                              SelectedItem="{Binding NewEngineOption, Mode=TwoWay}">
-                        <ComboBox.ItemContainerStyle>
-                            <Style TargetType="ComboBoxItem">
-                                <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
-                            </Style>
-                        </ComboBox.ItemContainerStyle>
+                              SelectedItem="{Binding NewEngineOption, Mode=TwoWay}"
+                              DropDownOpened="OnNewEngineDropDownOpened">
                         <ComboBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:EngineSelectOption">
                                 <TextBlock Text="{x:Bind DisplayName}" />
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
+                </StackPanel>
+
+                <StackPanel Spacing="6"
+                            Visibility="{Binding IsNewContainerEngine, Converter={StaticResource BoolToVisibility}}">
+                    <TextBlock x:Uid="CreateDesktopHeader" Text="Container desktop" Style="{StaticResource FieldLabel}" />
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding NewDesktopKindOptions}"
+                              SelectedItem="{Binding NewDesktopKindOption, Mode=TwoWay}" />
+                    <CheckBox x:Uid="CreateDesktopPresentBox"
+                              Content="Show the desktop in my session when the sandbox starts"
+                              IsChecked="{Binding NewDesktopPresent, Mode=TwoWay}" />
                 </StackPanel>
 
                 <Expander x:Uid="CreateResourcesExpander" Header="Resources">

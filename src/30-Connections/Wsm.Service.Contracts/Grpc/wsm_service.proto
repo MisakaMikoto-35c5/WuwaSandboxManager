@@ -68,6 +68,34 @@ message IpAddressesReply {
   repeated string ip_addresses = 1;
 }
 
+message StartDesktopRequest {
+  string sandbox_id = 1;
+  // Optional explicit provider id override (e.g. "frame-buffer", "window-mirror");
+  // empty = the sandbox recipe's Desktop plan decides.
+  string provider = 2;
+  // Optional kind override: 0 = not specified (the recipe decides); otherwise the
+  // Wsm.Domain ContainerDesktopKind value (1 = FrameBuffer, 2 = WindowMirror).
+  int32 kind = 3;
+  // Present the desktop into the interactive user session immediately.
+  bool present = 4;
+}
+
+message DesktopStatusReply {
+  bool running = 1;
+  string provider_id = 2;
+  // The live channel's kind as a Wsm.Domain ContainerDesktopKind value
+  // (1 = FrameBuffer, 2 = WindowMirror); 0 = none/unknown.
+  int32 kind = 3;
+  string frame_path = 4;
+  int32 width = 5;
+  int32 height = 6;
+  int32 fps = 7;
+  // Top-level windows the provider mirrors; -1 = "one frame = the whole desktop".
+  int32 window_count = 8;
+  // Process id of the presented viewer; 0 = no viewer.
+  int32 viewer_process_id = 9;
+}
+
 service WsmService {
   rpc Enumerate(google.protobuf.Empty) returns (EnumerateReply);
   rpc Start(StartRequest) returns (RuntimeReply);
@@ -81,6 +109,14 @@ service WsmService {
   rpc Execute(ExecuteRequest) returns (ExecuteReply);
   rpc MapFolder(MapFolderRequest) returns (google.protobuf.Empty);
   rpc GetIpAddresses(SandboxIdRequest) returns (IpAddressesReply);
+  // Starts (or adopts) the container desktop channel for a process-isolated
+  // container and reports its status. The channel lives in this service process
+  // (it owns the running container); presenting/ viewing stays client-side.
+  rpc StartDesktop(StartDesktopRequest) returns (DesktopStatusReply);
+  // Stops the container desktop channel. Idempotent: no running channel is a no-op.
+  rpc StopDesktop(SandboxIdRequest) returns (google.protobuf.Empty);
+  // Reports the container desktop channel's status without changing it.
+  rpc GetDesktopStatus(SandboxIdRequest) returns (DesktopStatusReply);
   // Asks the agent to shut down (used for a standalone console agent; an
   // SCM-installed service is stopped through the Service Control Manager
   // instead). The reply is sent before the process begins its exit.

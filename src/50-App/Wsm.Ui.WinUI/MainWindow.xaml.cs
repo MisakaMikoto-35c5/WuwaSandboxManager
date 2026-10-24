@@ -8,6 +8,7 @@ using Windows.Graphics;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 using Wsm.Application;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Domain.ValueObjects;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engines.Abstractions;
@@ -71,7 +72,9 @@ public sealed partial class MainWindow : Window
             _elevation,
             _localizer,
             services.GetRequiredService<IContainerImageImporter>(),
-            services.GetRequiredService<IContainerIsolationPolicy>());
+            services.GetRequiredService<IContainerIsolationPolicy>(),
+            agentClient,
+            services.GetService<IContainerDesktopHost>());
 
         _appliedRdpConnector = ViewModel.SelectedRdpConnector?.Kind ?? RdpConnectorKind.Wpf;
 
@@ -244,6 +247,34 @@ public sealed partial class MainWindow : Window
         finally
         {
             deferral.Complete();
+        }
+    }
+
+    // An ItemContainerStyle setter does not reach ComboBox items reliably (and
+    // ComboBox has no ContainerContentChanging event), so unavailable engines
+    // are disabled on their realized containers once the drop-down opens.
+    private void OnNewEngineDropDownOpened(object? sender, object e)
+    {
+        if (sender is not ComboBox combo)
+        {
+            return;
+        }
+
+        ApplyEngineOptionState(combo);
+        // The popup realizes its item containers while it lays out; catch any
+        // that were not there yet on the first pass.
+        combo.DispatcherQueue?.TryEnqueue(() => ApplyEngineOptionState(combo));
+    }
+
+    private static void ApplyEngineOptionState(ComboBox combo)
+    {
+        foreach (var item in combo.Items)
+        {
+            if (item is EngineSelectOption option
+                && combo.ContainerFromItem(item) is ComboBoxItem container)
+            {
+                container.IsEnabled = option.IsEnabled;
+            }
         }
     }
 

@@ -275,5 +275,114 @@ public static class WsmServiceMapping
         return reply.IpAddresses.ToArray();
     }
 
+    // ---- Container desktop -----------------------------------------------
+
+    /// <summary>
+    /// Applies a <see cref="StartDesktopRequest"/>'s overrides to a base desktop
+    /// plan (from the sandbox's recipe): an explicit provider id wins over the
+    /// kind, a zero kind means "the recipe decides", and <c>present</c> replaces
+    /// the plan's <see cref="SandboxDesktopPlan.PresentToInteractiveSession"/>.
+    /// Throws <see cref="SandboxValidationException"/> for an undefined kind so a
+    /// malformed request never reaches the channel.
+    /// </summary>
+    public static SandboxDesktopPlan ToDesktopPlan(this StartDesktopRequest request, SandboxDesktopPlan basePlan)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(basePlan);
+
+        var plan = basePlan with { PresentToInteractiveSession = request.Present };
+
+        if (request.Kind.ToContainerDesktopKindOverride() is { } kind)
+        {
+            plan = plan with { Kind = kind };
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Provider))
+        {
+            plan = plan with { Provider = request.Provider };
+        }
+
+        return plan;
+    }
+
+    /// <summary>
+    /// Maps the proto <c>kind</c> override field to a <see cref="ContainerDesktopKind"/>,
+    /// where <c>0</c> means "not specified" (<c>null</c>). Throws
+    /// <see cref="SandboxValidationException"/> for an undefined value.
+    /// </summary>
+    public static ContainerDesktopKind? ToContainerDesktopKindOverride(this int kind)
+    {
+        if (kind == 0)
+        {
+            return null;
+        }
+
+        if (!Enum.IsDefined(typeof(ContainerDesktopKind), kind))
+        {
+            throw new SandboxValidationException(
+                $"'{kind}' is not a valid container desktop kind.");
+        }
+
+        return (ContainerDesktopKind)kind;
+    }
+
+    /// <summary>Maps the wire <c>kind</c> of a <see cref="DesktopStatusReply"/> to the domain enum.</summary>
+    public static ContainerDesktopKind ToContainerDesktopKind(this int kind)
+        => Enum.IsDefined(typeof(ContainerDesktopKind), kind)
+            ? (ContainerDesktopKind)kind
+            : ContainerDesktopKind.None;
+
+    /// <summary>Builds a <see cref="DesktopStatusReply"/> describing a live channel.</summary>
+    public static DesktopStatusReply ToDesktopStatusReply(
+        string providerId,
+        ContainerDesktopKind kind,
+        string framePath,
+        int width,
+        int height,
+        int fps,
+        int? windowCount,
+        int? viewerProcessId)
+    {
+        return new DesktopStatusReply
+        {
+            Running = true,
+            ProviderId = providerId ?? string.Empty,
+            Kind = (int)kind,
+            FramePath = framePath ?? string.Empty,
+            Width = width,
+            Height = height,
+            Fps = fps,
+            // The proto cannot distinguish "no windows" from "not window-based",
+            // so the frame-buffer shape travels as -1 (see the .proto).
+            WindowCount = windowCount ?? -1,
+            ViewerProcessId = viewerProcessId ?? 0,
+        };
+    }
+
+    /// <summary>Builds the status of a sandbox with no live desktop channel.</summary>
+    public static DesktopStatusReply ToNotRunningDesktopStatusReply() => new() { Running = false };
+
+    /// <summary>Maps a <see cref="DesktopStatusReply"/> onto a client-side <see cref="ContainerDesktopStatus"/>.</summary>
+    public static ContainerDesktopStatus ToContainerDesktopStatus(this DesktopStatusReply reply)
+    {
+        ArgumentNullException.ThrowIfNull(reply);
+
+        if (!reply.Running)
+        {
+            return ContainerDesktopStatus.NotRunning;
+        }
+
+        return new ContainerDesktopStatus(
+            Running: true,
+            ProviderId: reply.ProviderId,
+            Kind: reply.Kind.ToContainerDesktopKind(),
+            FramePath: reply.FramePath,
+            Width: reply.Width,
+            Height: reply.Height,
+            Fps: reply.Fps,
+            WindowCount: reply.WindowCount < 0 ? null : reply.WindowCount,
+            ViewerProcessId: reply.ViewerProcessId <= 0 ? null : reply.ViewerProcessId);
+    }
+
     private const string SandboxRuntimeInfoWindowTitleDefault = "Windows Sandbox";
 }

@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
+using Wsm.Domain.Exceptions;
 using Wsm.Domain.ValueObjects;
 using Wsm.Application;
 using Wsm.Engine.WindowsContainer;
@@ -11,6 +13,8 @@ using Wsm.Hcs.Storage;
 using Wsm.Host.Elevation;
 using Wsm.Host.Policy;
 using Wsm.Persistence;
+using Wsm.Service.Client;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Ui.WinUI.Localization;
 
 namespace Wsm.Ui.WinUI.ViewModels;
@@ -39,7 +43,9 @@ public sealed partial class MainViewModel : ObservableObject
         IElevationService elevation,
         IAppLocalizer localizer,
         IContainerImageImporter imageImporter,
-        IContainerIsolationPolicy isolation)
+        IContainerIsolationPolicy isolation,
+        IWsmServiceClient? serviceClient = null,
+        IContainerDesktopHost? containerDesktop = null)
     {
         _manager = manager;
         _registry = registry;
@@ -48,19 +54,35 @@ public sealed partial class MainViewModel : ObservableObject
         _imageImporter = imageImporter;
         _isolation = isolation;
 
+        ContainerDesktop = new ContainerDesktopConnector(
+            serviceClient, containerDesktop, UiSettingsStore.Load().ResolveConfigDataFolder());
+
         IsElevated = elevation.IsElevated;
         BuildBranch = _policy.CurrentBuildBranch ?? "—";
         MultiInstanceAllowed = _policy.AllowsMultipleInstances;
         Status = _l["Status.Ready.Text"];
         ConfigDataFolder = UiSettingsStore.Load().ResolveConfigDataFolder();
 
-        ContainerImageReferences = new ObservableCollection<string>(_imageImporter.SuggestedImages);
-        _selectedContainerImageReference = ContainerImageReferences.FirstOrDefault();
-        _containerImageFolder = DefaultImageFolder(_selectedContainerImageReference);
+        ContainerImageOptions = new ObservableCollection<ContainerImageOption>(
+            _imageImporter.ImageCatalog.Select(info => new ContainerImageOption(info, _l)));
+        // Keep Server Core 2022 the default suggestion: it is the smallest image
+        // and the one the importer falls back to for a bare reference.
+        _selectedContainerImageReference =
+            ContainerImageOptions.FirstOrDefault(
+                option => option.Reference == "mcr.microsoft.com/windows/servercore:ltsc2022")?.Reference
+            ?? ContainerImageOptions.FirstOrDefault()?.Reference;
+        _containerImageFolder = ContainerImagePaths.GetDefaultLayerPath(_selectedContainerImageReference);
+        RefreshContainerImageInstallState();
 
         Instances.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasInstances));
         BuildEngines();
         BuildEngineOptions();
+        NewDesktopKindOptions =
+        [
+            new EnumOption<ContainerDesktopKind>(ContainerDesktopKind.None, _l["DesktopKind.None.Text"]),
+            new EnumOption<ContainerDesktopKind>(ContainerDesktopKind.FrameBuffer, _l["DesktopKind.FrameBuffer.Text"]),
+            new EnumOption<ContainerDesktopKind>(ContainerDesktopKind.WindowMirror, _l["DesktopKind.WindowMirror.Text"]),
+        ];
         UpdateContainerIsolationStatus();
         Languages = LanguageOption.CreateDefaults();
         SelectedLanguage = LanguageOption.Resolve(_l.CurrentCulture.Name);
@@ -130,8 +152,23 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>The engine chosen for a new sandbox; the "Auto" entry has a null kind.</summary>
     [ObservableProperty] private EngineSelectOption? _newEngineOption;
 
+    /// <summary>True when the creation dialog pins the process-isolation (container) engine.</summary>
+    public bool IsNewContainerEngine => NewEngine == SandboxEngineKind.WindowsContainer;
+
+    /// <summary>Container desktop kinds offered when the container engine is pinned.</summary>
+    public IReadOnlyList<EnumOption<ContainerDesktopKind>> NewDesktopKindOptions { get; }
+
+    /// <summary>The desktop kind a new container sandbox gets (<see cref="SandboxRecipe.Desktop"/>).</summary>
+    [ObservableProperty] private EnumOption<ContainerDesktopKind>? _newDesktopKindOption;
+
+    /// <summary>Whether a new container sandbox presents its desktop into the user's session.</summary>
+    [ObservableProperty] private bool _newDesktopPresent = true;
+
     /// <summary>The engine kind pinned for the new sandbox, or <c>null</c> for auto.</summary>
     public SandboxEngineKind? NewEngine => NewEngineOption?.Kind;
+
+    /// <summary>Starts container desktop channels (agent-routed, in-process fallback).</summary>
+    internal ContainerDesktopConnector ContainerDesktop { get; }
 
     public bool HasSelection => Selected is not null;
 
@@ -143,6 +180,8 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnSelectedChanged(SandboxInstanceViewModel? value) => OnPropertyChanged(nameof(HasSelection));
 
     partial void OnNewTypeIndexChanged(int value) => OnPropertyChanged(nameof(IsNewRailMode));
+
+    partial void OnNewEngineOptionChanged(EngineSelectOption? value) => OnPropertyChanged(nameof(IsNewContainerEngine));
 
     public Task InitializeAsync(Guid? selectId = null) => ReloadAsync(selectId);
 
@@ -183,6 +222,8 @@ public sealed partial class MainViewModel : ObservableObject
         NewCpuCores = Math.Max(1, Math.Min(Environment.ProcessorCount / 2, 64));
         NewRailProgram = SandboxRecipe.DefaultRailProgram;
         NewEngineOption = NewEngineOptions.FirstOrDefault();
+        NewDesktopKindOption = NewDesktopKindOptions.FirstOrDefault(o => o.Value == ContainerDesktopKind.FrameBuffer);
+        NewDesktopPresent = true;
     }
 
     /// <summary>
@@ -205,6 +246,15 @@ public sealed partial class MainViewModel : ObservableObject
                 RailMode = NewTypeIndex == 0,
                 RailProgram = string.IsNullOrWhiteSpace(NewRailProgram) ? SandboxRecipe.DefaultRailProgram : NewRailProgram.Trim(),
                 Storage = SandboxStorageOptions.Default,
+                // Only the process-isolation engine has a desktop to plan; other
+                // engines keep the recipe default.
+                Desktop = IsNewContainerEngine
+                    ? new SandboxDesktopPlan
+                    {
+                        Kind = NewDesktopKindOption?.Value ?? ContainerDesktopKind.FrameBuffer,
+                        PresentToInteractiveSession = NewDesktopPresent,
+                    }
+                    : SandboxDesktopPlan.Default,
             };
 
             var name = string.IsNullOrWhiteSpace(NewName) ? null : NewName.Trim();
@@ -293,11 +343,20 @@ public sealed partial class MainViewModel : ObservableObject
         NewEngineOptions.Clear();
         NewEngineOptions.Add(new EngineSelectOption(null, _l["EngineAutoOption.Text"], isEnabled: true));
 
+        var isolation = _isolation.Evaluate();
         foreach (var engine in _registry.Engines.OrderBy(engine => (int)engine.Kind))
         {
-            var display = engine.IsAvailable
-                ? engine.Name
-                : $"{engine.Name} — {_l["EngineUnavailable.Text"]}";
+            var display = engine.Name;
+            if (!engine.IsAvailable)
+            {
+                display = $"{engine.Name} — {_l["EngineUnavailable.Text"]}";
+                // A bare "Unavailable" says nothing; name the reason for the
+                // process-isolation engine (e.g. no compatible image found).
+                if (engine.Kind == SandboxEngineKind.WindowsContainer)
+                {
+                    display += $" ({IsolationReason(isolation)})";
+                }
+            }
 
             NewEngineOptions.Add(new EngineSelectOption(engine.Kind, display, isEnabled: engine.IsAvailable));
         }
@@ -332,10 +391,10 @@ public sealed partial class MainViewModel : ObservableObject
 
     // --------------------- Process-isolation image ---------------------
 
-    /// <summary>Windows Server images offered for process isolation.</summary>
-    public ObservableCollection<string> ContainerImageReferences { get; }
+    /// <summary>Windows Server images offered for process isolation (editable combo entries).</summary>
+    public ObservableCollection<ContainerImageOption> ContainerImageOptions { get; }
 
-    /// <summary>The image reference the download button imports.</summary>
+    /// <summary>The image reference the download button imports; free text is allowed.</summary>
     [ObservableProperty] private string? _selectedContainerImageReference;
 
     /// <summary>Where the imported base layer is written.</summary>
@@ -346,25 +405,68 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Download progress, 0..100.</summary>
     [ObservableProperty] private double _containerImageProgress;
 
+    /// <summary>True outside the download stage, when no fraction is known.</summary>
+    [ObservableProperty] private bool _containerImageProgressIndeterminate;
+
+    /// <summary>The localized stage of the running download.</summary>
     [ObservableProperty] private string _containerImageProgressText = string.Empty;
+
+    /// <summary>Bytes, speed and ETA of the running download.</summary>
+    [ObservableProperty] private string _containerImageProgressDetailText = string.Empty;
+
+    /// <summary>What the target folder currently holds.</summary>
+    [ObservableProperty] private ContainerImageInstallState _containerImageInstallState;
 
     /// <summary>A localized summary of whether process isolation is available and why.</summary>
     [ObservableProperty] private string _containerIsolationStatus = string.Empty;
 
+    /// <summary>Cancels the in-flight download; owned here so it survives the settings dialog.</summary>
+    private CancellationTokenSource? _imageDownloadCts;
+
+    /// <summary>True when the target folder already holds a downloaded image.</summary>
+    public bool IsContainerImageInstalled => ContainerImageInstallState == ContainerImageInstallState.Installed;
+
+    /// <summary>True when the target folder exists with content that is not a downloaded image.</summary>
+    public bool IsContainerImageOccupied => ContainerImageInstallState == ContainerImageInstallState.Occupied;
+
     /// <summary>True when the current image can be used for process isolation.</summary>
     public bool IsProcessIsolationAvailable => _isolation.Evaluate().IsSupported;
 
-    /// <summary>The download needs elevation (the layer APIs require it).</summary>
-    public bool CanDownloadContainerImage => IsElevated && !IsContainerImageDownloading;
+    /// <summary>
+    /// The download needs elevation (the layer APIs require it), no running
+    /// download, and a target folder the importer will accept.
+    /// </summary>
+    public bool CanDownloadContainerImage =>
+        IsElevated && !IsContainerImageDownloading && ContainerImageInstallState == ContainerImageInstallState.Missing;
+
+    /// <summary>Re-download and delete are available whenever no download runs.</summary>
+    public bool CanManageContainerImage => !IsContainerImageDownloading;
 
     partial void OnIsContainerImageDownloadingChanged(bool value)
-        => OnPropertyChanged(nameof(CanDownloadContainerImage));
+    {
+        OnPropertyChanged(nameof(CanDownloadContainerImage));
+        OnPropertyChanged(nameof(CanManageContainerImage));
+    }
 
     partial void OnIsElevatedChanged(bool value)
         => OnPropertyChanged(nameof(CanDownloadContainerImage));
 
+    partial void OnContainerImageInstallStateChanged(ContainerImageInstallState value)
+    {
+        OnPropertyChanged(nameof(CanDownloadContainerImage));
+        OnPropertyChanged(nameof(IsContainerImageInstalled));
+        OnPropertyChanged(nameof(IsContainerImageOccupied));
+    }
+
     partial void OnSelectedContainerImageReferenceChanged(string? value)
-        => ContainerImageFolder = DefaultImageFolder(value);
+        => ContainerImageFolder = ContainerImagePaths.GetDefaultLayerPath(value);
+
+    partial void OnContainerImageFolderChanged(string value)
+        => RefreshContainerImageInstallState();
+
+    /// <summary>Re-reads what the target folder holds (installed / occupied / free).</summary>
+    private void RefreshContainerImageInstallState()
+        => ContainerImageInstallState = ContainerImagePaths.GetInstallState(ContainerImageFolder);
 
     /// <summary>
     /// Downloads and prepares the selected Windows Server base image, then makes
@@ -378,21 +480,71 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
+        await RunImageDownloadAsync(deleteExisting: false);
+    }
+
+    /// <summary>Deletes the installed image and downloads it again.</summary>
+    [RelayCommand]
+    private async Task RedownloadContainerImageAsync()
+    {
+        if (!CanManageContainerImage || string.IsNullOrWhiteSpace(SelectedContainerImageReference))
+        {
+            return;
+        }
+
+        await RunImageDownloadAsync(deleteExisting: true);
+    }
+
+    /// <summary>Cancels the running download; the partial layer is removed.</summary>
+    [RelayCommand]
+    private void CancelContainerImageDownload() => _imageDownloadCts?.Cancel();
+
+    /// <summary>Deletes the image in the target folder (best effort) and refreshes the state.</summary>
+    [RelayCommand]
+    private void DeleteContainerImage()
+    {
+        try
+        {
+            if (Directory.Exists(ContainerImageFolder))
+            {
+                Directory.Delete(ContainerImageFolder, recursive: true);
+            }
+
+            Status = _l["ContainerImageDeleted.Text"];
+        }
+        catch (Exception ex)
+        {
+            Status = _l.Get("ContainerImageDeleteFailed.Text", ex.Message);
+        }
+        finally
+        {
+            RefreshContainerImageInstallState();
+        }
+    }
+
+    private async Task RunImageDownloadAsync(bool deleteExisting)
+    {
         try
         {
             IsContainerImageDownloading = true;
             ContainerImageProgress = 0;
+            ContainerImageProgressIndeterminate = true;
             ContainerImageProgressText = _l["ContainerImageStarting.Text"];
+            ContainerImageProgressDetailText = string.Empty;
             Status = _l["Status.ImageImporting.Text"];
 
-            var progress = new Progress<ContainerImageImportProgress>(report =>
+            if (deleteExisting && Directory.Exists(ContainerImageFolder))
             {
-                ContainerImageProgressText = report.Stage;
-                ContainerImageProgress = report.Fraction is { } fraction ? fraction * 100 : 0;
-            });
+                // A WCOW layer holds reparse points that can be slow to delete;
+                // keep the UI thread free.
+                await Task.Run(() => Directory.Delete(ContainerImageFolder, recursive: true));
+                RefreshContainerImageInstallState();
+            }
 
+            var progress = CreateImageImportProgress();
+            _imageDownloadCts = new CancellationTokenSource();
             var path = await _imageImporter.ImportBaseLayerAsync(
-                SelectedContainerImageReference!, ContainerImageFolder, progress);
+                SelectedContainerImageReference!, ContainerImageFolder, progress, _imageDownloadCts.Token);
 
             // Effective immediately (the engine reads the override at start) and
             // persisted so it survives a restart.
@@ -413,15 +565,112 @@ public sealed partial class MainViewModel : ObservableObject
             UpdateContainerIsolationStatus();
             Status = _l.Get("Status.ImageImported.Text", path);
         }
+        catch (OperationCanceledException) when (_imageDownloadCts is { IsCancellationRequested: true })
+        {
+            Status = _l["ContainerImageCancelled.Text"];
+        }
+        catch (OperationCanceledException)
+        {
+            // Not a user cancel: an HTTP timeout surfaces as TaskCanceledException.
+            Status = _l.Get("ContainerImageError.Network.Text", SelectedContainerImageReference ?? string.Empty);
+        }
+        catch (HttpRequestException)
+        {
+            Status = _l.Get("ContainerImageError.Network.Text", SelectedContainerImageReference ?? string.Empty);
+        }
+        catch (SandboxValidationException)
+        {
+            Status = _l.Get("ContainerImageError.FolderNotEmpty.Text", ContainerImageFolder);
+        }
         catch (Exception ex)
         {
-            Status = ex.Message;
+            Status = _l.Get("ContainerImageError.Generic.Text", ex.Message);
         }
         finally
         {
+            _imageDownloadCts?.Dispose();
+            _imageDownloadCts = null;
             IsContainerImageDownloading = false;
+            ContainerImageProgressIndeterminate = false;
             ContainerImageProgressText = string.Empty;
+            ContainerImageProgressDetailText = string.Empty;
+            RefreshContainerImageInstallState();
         }
+    }
+
+    /// <summary>
+    /// Reports importer progress into the dialog (stage, bar, bytes/speed/ETA)
+    /// and mirrors it into the main window status area, so closing the settings
+    /// dialog neither cancels nor hides the operation. Reopening the dialog
+    /// re-binds to these same properties.
+    /// </summary>
+    private Progress<ContainerImageImportProgress> CreateImageImportProgress()
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var lastSample = stopwatch.Elapsed;
+        long lastBytes = 0;
+        double smoothedBytesPerSecond = 0;
+
+        return new Progress<ContainerImageImportProgress>(report =>
+        {
+            ContainerImageProgressText = _l[$"ContainerImageStage.{report.Stage}.Text"];
+            ContainerImageProgressIndeterminate = report.Fraction is null;
+            if (report.Fraction is { } fraction)
+            {
+                ContainerImageProgress = fraction * 100;
+            }
+
+            if (report is { Stage: ContainerImageImportStage.Downloading, BytesReceived: { } received })
+            {
+                var now = stopwatch.Elapsed;
+                var elapsed = now - lastSample;
+                if (elapsed >= TimeSpan.FromMilliseconds(500))
+                {
+                    // Exponentially smoothed speed so the ETA does not jitter.
+                    var instant = (received - lastBytes) / elapsed.TotalSeconds;
+                    smoothedBytesPerSecond = smoothedBytesPerSecond <= 0
+                        ? instant
+                        : (smoothedBytesPerSecond * 0.7) + (instant * 0.3);
+                    lastBytes = received;
+                    lastSample = now;
+
+                    ContainerImageProgressDetailText = report.TotalBytes is { } totalBytes
+                        ? _l.Get(
+                            "ContainerImageProgress.Detail.Text",
+                            FormatBytes(received),
+                            FormatBytes(totalBytes),
+                            $"{FormatBytes((long)Math.Max(0, smoothedBytesPerSecond))}/s",
+                            FormatEta(totalBytes - received, smoothedBytesPerSecond))
+                        : _l.Get("ContainerImageProgress.BytesOnly.Text", FormatBytes(received));
+                }
+            }
+            else
+            {
+                ContainerImageProgressDetailText = string.Empty;
+            }
+
+            Status = string.IsNullOrEmpty(ContainerImageProgressDetailText)
+                ? ContainerImageProgressText
+                : $"{ContainerImageProgressText} — {ContainerImageProgressDetailText}";
+        });
+    }
+
+    private static string FormatBytes(long bytes)
+        => bytes >= 1L << 30
+            ? $"{bytes / 1073741824.0:0.#} GB"
+            : $"{bytes / 1048576.0:0} MB";
+
+    private string FormatEta(long remainingBytes, double bytesPerSecond)
+    {
+        if (bytesPerSecond <= 0 || remainingBytes <= 0)
+        {
+            return "—";
+        }
+
+        var seconds = remainingBytes / bytesPerSecond;
+        return seconds >= 90
+            ? _l.Get("ContainerImageProgress.EtaMinutes.Text", (int)Math.Ceiling(seconds / 60))
+            : _l.Get("ContainerImageProgress.EtaSeconds.Text", Math.Max(1, (int)Math.Round(seconds)));
     }
 
     /// <summary>Re-evaluates and localizes the process-isolation status line.</summary>
@@ -429,26 +678,15 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var support = _isolation.Evaluate();
         var state = support.IsSupported ? _l["Container.Available.Text"] : _l["Container.Unavailable.Text"];
-        var reason = _l[support.ReasonKey];
         var image = support.ImageBuild?.ToString() ?? "—";
         ContainerIsolationStatus =
-            $"{state} — {reason}{Environment.NewLine}" +
+            $"{state} — {IsolationReason(support)}{Environment.NewLine}" +
             _l.Get("Container.Versions.Text", support.HostBuild, image);
         OnPropertyChanged(nameof(IsProcessIsolationAvailable));
     }
 
-    /// <summary>Default target folder for an image reference under <c>%LOCALAPPDATA%</c>.</summary>
-    private static string DefaultImageFolder(string? reference)
-    {
-        var slug = string.IsNullOrWhiteSpace(reference)
-            ? "image"
-            : reference.Replace(':', '-').Replace('/', '-');
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WindowsSandboxManager",
-            "images",
-            slug);
-    }
+    /// <summary>The localized reason (<c>Container.Reason.*</c>) behind an isolation-policy verdict.</summary>
+    private string IsolationReason(ContainerIsolationSupport support) => _l[support.ReasonKey];
 
     /// <summary>
     /// Routes a session-process exit (raised on a thread-pool thread) to the

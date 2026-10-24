@@ -2,6 +2,7 @@ using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Microsoft.Extensions.Hosting;
 using Wsm.Application;
+using Wsm.Connection.ContainerDesktop;
 using Wsm.Domain.ValueObjects;
 using Wsm.Engines.Abstractions;
 using Wsm.Service.Contracts.Grpc.Generated;
@@ -26,11 +27,16 @@ namespace Wsm.Service.Host.Internal;
 public partial class WsmServiceGrpc : WsmService.WsmServiceBase
 {
     private readonly ISandboxManager _sandboxManager;
+    private readonly IContainerDesktopHost _containerDesktop;
     private readonly IHostApplicationLifetime _lifetime;
 
-    public WsmServiceGrpc(ISandboxManager sandboxManager, IHostApplicationLifetime lifetime)
+    public WsmServiceGrpc(
+        ISandboxManager sandboxManager,
+        IContainerDesktopHost containerDesktop,
+        IHostApplicationLifetime lifetime)
     {
         _sandboxManager = sandboxManager;
+        _containerDesktop = containerDesktop;
         _lifetime = lifetime;
     }
 
@@ -235,6 +241,115 @@ public partial class WsmServiceGrpc : WsmService.WsmServiceBase
 
         return Task.FromResult(new Empty());
     }
+
+    /// <summary>
+    /// Starts the container desktop channel for a process-isolated container, or
+    /// adopts the live one when it is already running, and reports its status.
+    /// </summary>
+    /// <remarks>
+    /// The channel must live in this process: the running container (and the
+    /// engine capability that exposes its filesystem root) belongs to the agent,
+    /// not to the caller. Presenting stays split the same way as RDP
+    /// (<c>PrepareConnect</c>): with <c>present = false</c> the caller reads the
+    /// frame path out of the reply and launches its own viewer.
+    /// </remarks>
+    public override async Task<DesktopStatusReply> StartDesktop(StartDesktopRequest request, ServerCallContext context)
+    {
+        try
+        {
+            var id = request.SandboxId.ToSandboxInstanceId();
+
+            var existing = _containerDesktop.Get(id);
+            if (existing is not null)
+            {
+                // Adopt the live channel; (re-)present only when asked.
+                var adopted = request.Present
+                    ? await _containerDesktop.PresentAsync(id, context.CancellationToken)
+                    : existing;
+                return ToDesktopStatusReply(adopted);
+            }
+
+            var instance = await _sandboxManager.GetAsync(id.Value, context.CancellationToken);
+            var plan = request.ToDesktopPlan(instance.Recipe.Desktop);
+            var session = await _containerDesktop.StartAsync(
+                id, instance.Recipe with { Desktop = plan }, context.CancellationToken);
+            return ToDesktopStatusReply(session);
+        }
+        catch (Exception ex)
+        {
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            throw new RpcException(WsmServiceStatus.ToStatus(ex));
+        }
+    }
+
+    /// <summary>Stops the container desktop channel; no live channel is a no-op.</summary>
+    public override async Task<Empty> StopDesktop(SandboxIdRequest request, ServerCallContext context)
+    {
+        try
+        {
+            var id = request.SandboxId.ToSandboxInstanceId();
+            if (_containerDesktop.Get(id) is not null)
+            {
+                await _containerDesktop.StopAsync(id, context.CancellationToken);
+            }
+
+            return new Empty();
+        }
+        catch (Exception ex)
+        {
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            throw new RpcException(WsmServiceStatus.ToStatus(ex));
+        }
+    }
+
+    /// <summary>Reports the container desktop channel's status without changing it.</summary>
+    public override Task<DesktopStatusReply> GetDesktopStatus(SandboxIdRequest request, ServerCallContext context)
+    {
+        try
+        {
+            var id = request.SandboxId.ToSandboxInstanceId();
+            var session = _containerDesktop.Get(id);
+            return Task.FromResult(session is null
+                ? WsmServiceMapping.ToNotRunningDesktopStatusReply()
+                : ToDesktopStatusReply(session));
+        }
+        catch (Exception ex)
+        {
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            throw new RpcException(WsmServiceStatus.ToStatus(ex));
+        }
+    }
+
+    private static DesktopStatusReply ToDesktopStatusReply(ContainerDesktopSession session)
+        => WsmServiceMapping.ToDesktopStatusReply(
+            session.ProviderId,
+            KindOf(session.ProviderId),
+            session.FramePath,
+            session.Geometry.Width,
+            session.Geometry.Height,
+            session.Geometry.Fps,
+            session.Windows?.Count,
+            session.ViewerProcessId);
+
+    /// <summary>The kind a provider produces, for the wire; unknown providers report <c>None</c>.</summary>
+    private static ContainerDesktopKind KindOf(string providerId) => providerId switch
+    {
+        ContainerDesktopProviderIds.FrameBuffer => ContainerDesktopKind.FrameBuffer,
+        ContainerDesktopProviderIds.WindowMirror => ContainerDesktopKind.WindowMirror,
+        _ => ContainerDesktopKind.None,
+    };
 
     /// <summary>Delay between the Shutdown reply and the process stop. Settable from tests.</summary>
     internal TimeSpan ShutdownReplyDelay { get; set; } = TimeSpan.FromMilliseconds(500);

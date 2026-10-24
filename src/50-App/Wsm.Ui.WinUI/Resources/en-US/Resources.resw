@@ -42,6 +42,31 @@
   <data name="ContainerImageSection.Text" xml:space="preserve"><value>Process isolation image</value></data>
   <data name="ContainerImageCaption.Text" xml:space="preserve"><value>Process isolation (an HCS container) needs an image; download a Windows Server image to enable it. VM isolation is always available.</value></data>
   <data name="ContainerImageDownloadButton.Content" xml:space="preserve"><value>Download image</value></data>
+  <data name="ContainerImageCancelButton.Content" xml:space="preserve"><value>Cancel</value></data>
+  <data name="ContainerImageRedownloadButton.Content" xml:space="preserve"><value>Re-download</value></data>
+  <data name="ContainerImageDeleteButton.Content" xml:space="preserve"><value>Delete</value></data>
+  <data name="ContainerImageOccupiedDeleteButton.Content" xml:space="preserve"><value>Delete folder</value></data>
+  <data name="ContainerImageInstalled.Text" xml:space="preserve"><value>This image is already downloaded to the folder above.</value></data>
+  <data name="ContainerImageOccupiedHint.Text" xml:space="preserve"><value>This folder exists and is not a downloaded image. Pick another folder or delete it.</value></data>
+  <data name="ContainerImageCancelled.Text" xml:space="preserve"><value>Download cancelled; the partial download was removed.</value></data>
+  <data name="ContainerImageDeleted.Text" xml:space="preserve"><value>The image folder was deleted.</value></data>
+  <data name="ContainerImageDeleteFailed.Text" xml:space="preserve"><value>Could not delete the image folder: {0}</value></data>
+  <data name="ContainerImageError.Network.Text" xml:space="preserve"><value>Could not download {0}. Check the internet connection and that the reference exists on the registry, then try again.</value></data>
+  <data name="ContainerImageError.FolderNotEmpty.Text" xml:space="preserve"><value>The folder {0} is not empty. Pick another folder or delete it first.</value></data>
+  <data name="ContainerImageError.Generic.Text" xml:space="preserve"><value>The image download failed: {0}</value></data>
+  <data name="ContainerImageStage.ResolvingManifest.Text" xml:space="preserve"><value>Resolving the image manifest…</value></data>
+  <data name="ContainerImageStage.Downloading.Text" xml:space="preserve"><value>Downloading the base layer…</value></data>
+  <data name="ContainerImageStage.Extracting.Text" xml:space="preserve"><value>Extracting the layer…</value></data>
+  <data name="ContainerImageStage.Preparing.Text" xml:space="preserve"><value>Preparing the layer…</value></data>
+  <data name="ContainerImageStage.Done.Text" xml:space="preserve"><value>Done</value></data>
+  <data name="ContainerImageProgress.Detail.Text" xml:space="preserve"><value>{0} / {1} · {2} · ~{3} left</value></data>
+  <data name="ContainerImageProgress.BytesOnly.Text" xml:space="preserve"><value>{0} downloaded</value></data>
+  <data name="ContainerImageProgress.EtaMinutes.Text" xml:space="preserve"><value>{0} min</value></data>
+  <data name="ContainerImageProgress.EtaSeconds.Text" xml:space="preserve"><value>{0} s</value></data>
+  <data name="ContainerImage.Desc.WindowsServer2025" xml:space="preserve"><value>Full Windows Server 2025 image with the complete Server Core API surface.</value></data>
+  <data name="ContainerImage.Desc.WindowsServer2022" xml:space="preserve"><value>Full Windows Server 2022 image with the complete Server Core API surface.</value></data>
+  <data name="ContainerImage.Desc.ServerCore2025" xml:space="preserve"><value>Small Windows Server 2025 image for .NET Framework workloads.</value></data>
+  <data name="ContainerImage.Desc.ServerCore2022" xml:space="preserve"><value>Small Windows Server 2022 image for .NET Framework workloads.</value></data>
   <data name="ContainerImageElevationHint.Text" xml:space="preserve"><value>Downloading requires an elevated app (restart elevated first).</value></data>
   <data name="ContainerImageStarting.Text" xml:space="preserve"><value>Starting…</value></data>
   <data name="Container.Available.Text" xml:space="preserve"><value>Process isolation: available</value></data>
@@ -220,4 +245,16 @@
   <data name="Status.ImageImported.Text" xml:space="preserve"><value>Container image ready: {0}</value></data>
   <data name="Status.CliMissing.Text" xml:space="preserve"><value>Cannot find the companion CLI (wsm.exe). Build src/50-App/Wsm.Cli first, or place wsm.exe next to this app.</value></data>
   <data name="Status.SessionAlreadyOpen.Text" xml:space="preserve"><value>A session window for this sandbox is already open.</value></data>
+  <!-- Container desktop -->
+  <data name="ContainerDesktopSection.Text" xml:space="preserve"><value>Container desktop</value></data>
+  <data name="ContainerDesktopCaption.Text" xml:space="preserve"><value>Open the container's desktop: one window for the whole desktop, or one window per container window.</value></data>
+  <data name="ContainerDesktopButton.Content" xml:space="preserve"><value>Desktop</value></data>
+  <data name="ContainerWindowsButton.Content" xml:space="preserve"><value>Windows (RAIL)</value></data>
+  <data name="CreateDesktopHeader.Text" xml:space="preserve"><value>Container desktop</value></data>
+  <data name="CreateDesktopPresentBox.Content" xml:space="preserve"><value>Show the desktop in my session when the sandbox starts</value></data>
+  <data name="DesktopKind.None.Text" xml:space="preserve"><value>None</value></data>
+  <data name="DesktopKind.FrameBuffer.Text" xml:space="preserve"><value>Frame buffer (whole desktop)</value></data>
+  <data name="DesktopKind.WindowMirror.Text" xml:space="preserve"><value>Window mirror (RAIL)</value></data>
+  <data name="Status.DesktopStarting.Text" xml:space="preserve"><value>Starting the container desktop…</value></data>
+  <data name="Status.DesktopLaunched.Text" xml:space="preserve"><value>Container desktop viewer launched.</value></data>
 </root>

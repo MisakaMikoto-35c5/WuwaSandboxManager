@@ -41,6 +41,7 @@
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Policy\Wsm.Host.Policy.csproj" />
     <ProjectReference Include="..\..\40-Host\Wsm.Host.Elevation\Wsm.Host.Elevation.csproj" />
     <ProjectReference Include="..\..\30-Connections\Wsm.Service.Client\Wsm.Service.Client.csproj" />
+    <ProjectReference Include="..\..\30-Connections\Wsm.Connection.ContainerDesktop\Wsm.Connection.ContainerDesktop.csproj" />
   </ItemGroup>
 
 </Project>

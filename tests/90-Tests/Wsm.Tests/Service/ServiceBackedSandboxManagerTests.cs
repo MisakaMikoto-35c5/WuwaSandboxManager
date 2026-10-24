@@ -238,6 +238,16 @@ public sealed class ServiceBackedSandboxManagerTests
         public Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken ct = default)
             => throw new NotImplementedException();
 
+        public Task<Wsm.Service.Contracts.ContainerDesktopStatus> StartDesktopAsync(
+            Guid id, string? provider = null, ContainerDesktopKind? kind = null, bool present = false, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task StopDesktopAsync(Guid id, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<Wsm.Service.Contracts.ContainerDesktopStatus> GetDesktopStatusAsync(Guid id, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
         public Task<bool> IsAvailableAsync(CancellationToken ct = default)
             => Task.FromResult(EnsureAvailableResult);
 

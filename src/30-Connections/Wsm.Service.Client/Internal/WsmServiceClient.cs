@@ -29,6 +29,11 @@ internal sealed class WsmServiceClient : IWsmServiceClient, ISingletonDependency
     private static readonly TimeSpan EnumerateDeadline = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan GetIpAddressesDeadline = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ShutdownDeadline = TimeSpan.FromSeconds(5);
+    // The agent waits for the channel's first frame (90 s by default), so a cold
+    // desktop start needs minutes; status/stop are quick and must fail fast.
+    private static readonly TimeSpan StartDesktopDeadline = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DesktopStatusDeadline = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan StopDesktopDeadline = TimeSpan.FromSeconds(30);
 
     private readonly NamedPipeWsmServiceChannelFactory _channelFactory;
     private readonly IStandaloneAgentStarter _starter;
@@ -136,6 +141,47 @@ internal sealed class WsmServiceClient : IWsmServiceClient, ISingletonDependency
             GetIpAddressesDeadline).ConfigureAwait(false);
 
         return reply.ToIpAddresses();
+    }
+
+    public async Task<Wsm.Service.Contracts.ContainerDesktopStatus> StartDesktopAsync(
+        Guid id, string? provider = null, ContainerDesktopKind? kind = null, bool present = false, CancellationToken ct = default)
+    {
+        var request = new StartDesktopRequest
+        {
+            SandboxId = id.ToProto(),
+            Provider = provider ?? string.Empty,
+            Kind = kind is { } kindOverride ? (int)kindOverride : 0,
+            Present = present,
+        };
+
+        var reply = await InvokeAsync(
+            (client, deadline, token) => client.StartDesktopAsync(request, deadline: deadline, cancellationToken: token),
+            ct,
+            StartDesktopDeadline).ConfigureAwait(false);
+
+        return reply.ToContainerDesktopStatus();
+    }
+
+    public async Task StopDesktopAsync(Guid id, CancellationToken ct = default)
+    {
+        var request = new SandboxIdRequest { SandboxId = id.ToProto() };
+
+        await InvokeAsync(
+            (client, deadline, token) => client.StopDesktopAsync(request, deadline: deadline, cancellationToken: token),
+            ct,
+            StopDesktopDeadline).ConfigureAwait(false);
+    }
+
+    public async Task<Wsm.Service.Contracts.ContainerDesktopStatus> GetDesktopStatusAsync(Guid id, CancellationToken ct = default)
+    {
+        var request = new SandboxIdRequest { SandboxId = id.ToProto() };
+
+        var reply = await InvokeAsync(
+            (client, deadline, token) => client.GetDesktopStatusAsync(request, deadline: deadline, cancellationToken: token),
+            ct,
+            DesktopStatusDeadline).ConfigureAwait(false);
+
+        return reply.ToContainerDesktopStatus();
     }
 
     public async Task<bool> IsAvailableAsync(CancellationToken ct = default)

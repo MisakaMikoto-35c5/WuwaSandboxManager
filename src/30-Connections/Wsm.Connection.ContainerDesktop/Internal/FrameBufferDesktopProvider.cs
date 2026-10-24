@@ -23,8 +23,6 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
     private const string AgentResourceName =
         "Wsm.Connection.ContainerDesktop.Agent.container-desktop-agent.ps1";
 
-    private const int FrameMagic = 0x314D5346; // 'FSM1'
-
     private readonly ConcurrentDictionary<Guid, ContainerDesktopSession> _sessions = new();
     private readonly ISandboxEngineRegistry _registry;
     private readonly ISessionProcessLauncher _launcher;
@@ -74,16 +72,18 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         // Adopt only: a valid frame header means an agent is already publishing.
         var directory = AgentDirectoryFor(request.ContainerRoot);
         var framePath = Path.Combine(directory, Options.FrameFileName);
-        if (TryReadFrameHeader(framePath) is not { } geometry)
+        if (ContainerDesktopFrame.TryReadHeader(framePath) is not { } header)
         {
             return Task.FromResult<ContainerDesktopSession?>(null);
         }
 
         var session = new ContainerDesktopSession(
-            request.SandboxId, request.ContainerRoot, directory, framePath, geometry,
+            request.SandboxId, request.ContainerRoot, directory, framePath, header.Geometry,
             DateTimeOffset.UtcNow, null, ContainerDesktopProviderIds.FrameBuffer);
         _sessions[request.SandboxId.Value] = session;
-        _logger.LogInformation("Adopted the running frame buffer desktop for {SandboxId}.", request.SandboxId);
+        _logger.LogInformation(
+            "Adopted the running frame buffer desktop for {SandboxId} ({Mode} mode, writer pid {WriterPid}).",
+            request.SandboxId, header.Mode, header.WriterPid);
         return Task.FromResult<ContainerDesktopSession?>(session);
     }
 
@@ -143,17 +143,26 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         // Adopt a live agent rather than restarting one: a second caller (the
         // service, or another CLI invocation) must not fight the running agent for
         // the frame file. A valid header is the liveness signal.
-        if (TryReadFrameHeader(framePath) is { } adopted)
+        if (ContainerDesktopFrame.TryReadHeader(framePath) is { } adopted)
         {
             var existing = new ContainerDesktopSession(
-                id, containerRoot, directory, framePath, adopted, DateTimeOffset.UtcNow);
+                id, containerRoot, directory, framePath, adopted.Geometry, DateTimeOffset.UtcNow);
             _sessions[value] = existing;
-            _logger.LogInformation("Adopted the running container desktop agent for {SandboxId}.", id);
+            _logger.LogInformation(
+                "Adopted the running container desktop agent for {SandboxId} ({Mode} mode, writer pid {WriterPid}).",
+                id, adopted.Mode, adopted.WriterPid);
             return existing;
         }
 
         Directory.CreateDirectory(directory);
         ResetAgentDirectory(directory);
+
+        // Mode negotiation must land before the agent starts: it reads shm-mode.txt
+        // once at startup and chooses the backing of the frame source from it.
+        var mode = ShmModeNegotiation.Negotiate(
+            ShmModeNegotiation.IsCurrentProcessElevated(), _launcher.CanLaunchIntoInteractiveSession);
+        ShmModeNegotiation.WriteModeFile(directory, mode);
+        _logger.LogInformation("Container desktop mode for {SandboxId}: {Mode}.", id, mode);
 
         var engine = RequireEngine();
         var launcherPath = Path.Combine(Options.AgentDirectory, Options.LauncherFileName); // inside the container
@@ -312,7 +321,12 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         WriteAllText(Path.Combine(directory, Options.LauncherFileName), start);
 
         // Stale state from a previous agent must not be mistaken for the new one.
-        foreach (var stale in new[] { Options.FrameFileName, Options.StopFileName, "agent.out", "agent.log" })
+        foreach (var stale in new[]
+        {
+            Options.FrameFileName, Options.StopFileName, ContainerDesktopPaths.ModeFileName,
+            ViewRequest.FileName, ViewRequest.AckFileName,
+            "agent.out", "agent.log",
+        })
         {
             TryDelete(Path.Combine(directory, stale));
         }
@@ -320,6 +334,16 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         foreach (var input in Directory.EnumerateFiles(directory, Options.InputFilePrefix + "*.txt"))
         {
             TryDelete(input);
+        }
+
+        // Locks a crashed viewer left behind would keep the new agent alive forever.
+        var locks = Path.Combine(directory, ViewerLiveness.LockDirectoryName);
+        if (Directory.Exists(locks))
+        {
+            foreach (var abandoned in Directory.EnumerateFiles(locks, "*" + ViewerLiveness.LockFileExtension))
+            {
+                TryDelete(abandoned);
+            }
         }
     }
 
@@ -330,10 +354,12 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var geometry = TryReadFrameHeader(framePath);
-            if (geometry is { } read)
+            if (ContainerDesktopFrame.TryReadHeader(framePath) is { } header)
             {
-                return read;
+                _logger.LogInformation(
+                    "The container desktop agent is publishing ({Mode} mode, writer pid {WriterPid}).",
+                    header.Mode, header.WriterPid);
+                return header.Geometry;
             }
 
             await Task.Delay(500, cancellationToken).ConfigureAwait(false);
@@ -342,37 +368,6 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         throw new SandboxBackendException(
             $"The container desktop agent did not produce a frame within {Options.FrameTimeoutSeconds}s "
             + $"({Path.Combine(directory, "agent.out")}).", 0);
-    }
-
-    private static ContainerDesktopGeometry? TryReadFrameHeader(string framePath)
-    {
-        try
-        {
-            if (!File.Exists(framePath))
-            {
-                return null;
-            }
-
-            using var stream = new FileStream(framePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            Span<byte> header = stackalloc byte[24];
-            if (stream.Read(header) < header.Length)
-            {
-                return null;
-            }
-
-            var magic = BitConverter.ToInt32(header[..4]);
-            var width = BitConverter.ToInt32(header.Slice(8, 4));
-            var height = BitConverter.ToInt32(header.Slice(12, 4));
-            var stride = BitConverter.ToInt32(header.Slice(16, 4));
-            var fps = BitConverter.ToInt32(header.Slice(20, 4));
-            return magic == FrameMagic && width > 0 && height > 0
-                ? new ContainerDesktopGeometry(width, height, stride, fps)
-                : null;
-        }
-        catch (IOException)
-        {
-            return null; // the agent is mid-write; try again
-        }
     }
 
     private string ResolveViewerCommand()

@@ -19,6 +19,16 @@ public readonly record struct ContainerDesktopGeometry(int Width, int Height, in
 /// mounted scratch volume, so a plain file there is shared memory: both sides map
 /// the same file object and the same cached pages.
 /// </para>
+/// <para>
+/// The frame buffer itself has two modes (<see cref="ContainerDesktopMode"/>, chosen
+/// through <c>shm-mode.txt</c> and published in the header's mode field at offset
+/// 60): in <c>file</c> mode the <c>.shm</c> file carries header and pixels; in
+/// <c>pagefile</c> mode the file is header-sized and the pixels live in a
+/// page-file-backed section of the writer process, which an elevated host reader
+/// maps through handle passthrough (<c>SectionPassthrough</c>) - no NTFS writeback.
+/// The frame layout is <see cref="ContainerDesktopFrame"/>; the mirror layout is
+/// <see cref="ContainerDesktopMirror"/>.
+/// </para>
 /// </summary>
 /// <param name="SandboxId">The sandbox this desktop belongs to.</param>
 /// <param name="ContainerRoot">Host path that is the container's <c>C:\</c>.</param>

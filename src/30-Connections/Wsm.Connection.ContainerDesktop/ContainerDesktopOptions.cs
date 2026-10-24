@@ -53,7 +53,12 @@ public sealed class ContainerDesktopOptions
     /// <summary>Frames per second the agent targets.</summary>
     public int Fps { get; set; } = 5;
 
-    /// <summary>How long a started agent keeps running before it exits by itself.</summary>
+    /// <summary>
+    /// Outer safety bound for the agent's lifetime. The agent normally exits earlier:
+    /// it stays up while at least one viewer lock (<c>viewers\*.lock</c>, see
+    /// <see cref="ViewerLiveness"/>) is live and exits once none has been for ~30 s;
+    /// <c>agent-stop.txt</c> always force-stops it.
+    /// </summary>
     public int AgentLifetimeSeconds { get; set; } = 900;
 
     /// <summary>How long to wait for the agent's first frame.</summary>

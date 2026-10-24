@@ -1,8 +1,9 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
+using Wsm.Connection.ContainerDesktop;
+using Wsm.Connection.ContainerDesktop.Internal;
 
 namespace Wsm.Cli;
 
@@ -13,16 +14,34 @@ namespace Wsm.Cli;
 /// file, and forwards this window's mouse and keyboard back to the container as
 /// one command file per event - the format the in-container agent polls.
 /// <para>
+/// The window is resizable: the frame is drawn scaled into the client area (aspect
+/// kept, letterboxed) and mouse coordinates are transformed back into frame
+/// coordinates (<see cref="FrameViewScaling"/>). Keys go as structured
+/// <c>key vk down|up</c> events, the wheel as <c>wheel</c>, a double-click as a
+/// counted <c>click</c>, and Ctrl+V sends the host clipboard text as a base64
+/// <c>clipboard</c> command. F10 cycles a resolution request
+/// (<see cref="ViewRequest"/>); when the container refuses, the viewer simply keeps
+/// scaling.
+/// </para>
+/// <para>
 /// The window is an ordinary Win32 window, so when the agent service launches it
 /// through <c>WTSQueryUserToken</c> + <c>CreateProcessAsUser</c> it appears on the
 /// interactive user's desktop even though the service runs in session 0. No RDP,
 /// and no listener inside the container, is involved.
 /// </para>
+/// <para>
+/// The frame path is the header file in both sharing modes: in pagefile mode the
+/// frames live in the writer's page-file-backed section and are mapped through
+/// handle passthrough (<see cref="SharedSectionSource"/>), which needs this viewer
+/// to run elevated.
+/// </para>
+/// <para>
+/// While it runs the viewer holds a <see cref="ViewerLiveness"/> lock next to the
+/// frame file; the in-container agent exits once no viewer is attached any more.
+/// </para>
 /// </summary>
 internal static class DesktopViewCommand
 {
-    private const int FrameMagic = 0x314D5346; // 'FSM1'
-
     public static int Run(string framePath, int seconds, string inputPrefix)
     {
         if (!File.Exists(framePath))
@@ -35,9 +54,10 @@ internal static class DesktopViewCommand
         var exitCode = 0;
         var thread = new Thread(() =>
         {
+            FrameView? view = null;
             try
             {
-                using var view = new FrameView(framePath, directory, inputPrefix);
+                view = new FrameView(framePath, directory, inputPrefix);
                 System.Windows.Forms.Application.EnableVisualStyles();
                 var form = view.CreateForm(seconds);
                 System.Windows.Forms.Application.Run(form);
@@ -47,6 +67,10 @@ internal static class DesktopViewCommand
                 Console.Error.WriteLine(ex.Message);
                 exitCode = 1;
             }
+            finally
+            {
+                view?.Dispose();
+            }
         });
         thread.SetApartmentState(ApartmentState.STA); // WinForms requires STA
         thread.IsBackground = false;
@@ -55,78 +79,77 @@ internal static class DesktopViewCommand
         return exitCode;
     }
 
-    /// <summary>Reads the shared frame file and builds the window around it.</summary>
+    /// <summary>The frame the desktop capture starts at; F10 cycles the list.</summary>
+    private static readonly (int Width, int Height)[] Resolutions = [(1024, 768), (1280, 720), (1600, 900)];
+
+    /// <summary>Reads the shared frame source and builds the window around it.</summary>
     private sealed class FrameView : IDisposable
     {
+        private readonly string _framePath;
         private readonly string _directory;
         private readonly string _inputPrefix;
-        private IntPtr _file = new(-1);
-        private IntPtr _mapping;
-        private IntPtr _base;
-        private int _width;
-        private int _height;
-        private int _stride;
+        private readonly string _lockPath;
+        private SharedSectionSource.Mapping _source;
+        private ContainerDesktopFrameHeader _header;
+        private Bitmap _view;           // zero-copy view over the mapping
+        private Bitmap? _snapshot;      // latest completed frame, owned by the canvas
         private long _lastSequence = -1;
-        private DateTime _lastMove = DateTime.UtcNow;
+        private DateTime _lastMove = DateTime.MinValue;
+        private DateTime _lastLockTouch = DateTime.MinValue;
+        private DateTime _requestSentAt = DateTime.MinValue;
+        private (int Width, int Height) _requested;
+        private string? _status;
 
         public FrameView(string framePath, string directory, string inputPrefix)
         {
+            _framePath = framePath;
             _directory = directory;
             _inputPrefix = inputPrefix;
 
-            _file = NativeMethods.CreateFileW(
-                framePath, NativeMethods.GenericRead, NativeMethods.ShareAll, IntPtr.Zero,
-                NativeMethods.OpenExisting, NativeMethods.AttributeNormal, IntPtr.Zero);
-            if (_file == new IntPtr(-1))
-            {
-                throw new IOException($"Cannot open '{framePath}' (error {Marshal.GetLastWin32Error()}).");
-            }
+            _source = Open(out var geometry);
+            _view = CreateView(_source, geometry);
 
-            _mapping = NativeMethods.CreateFileMappingW(_file, IntPtr.Zero, NativeMethods.PageReadOnly, 0, 0, null);
-            if (_mapping == IntPtr.Zero)
-            {
-                throw new IOException($"Cannot map '{framePath}' (error {Marshal.GetLastWin32Error()}).");
-            }
-
-            _base = NativeMethods.MapViewOfFile(_mapping, NativeMethods.FileMapRead, 0, 0, 0);
-            if (_base == IntPtr.Zero)
-            {
-                throw new IOException($"Cannot view '{framePath}' (error {Marshal.GetLastWin32Error()}).");
-            }
-
-            if (Marshal.ReadInt32(_base, 0) != FrameMagic)
-            {
-                throw new IOException("The frame buffer does not carry the container desktop header.");
-            }
-
-            _width = Marshal.ReadInt32(_base, 8);
-            _height = Marshal.ReadInt32(_base, 12);
-            _stride = Marshal.ReadInt32(_base, 16);
+            // The agent stays alive while at least one lock under viewers\ is live.
+            var locks = Path.Combine(directory, ViewerLiveness.LockDirectoryName);
+            Directory.CreateDirectory(locks);
+            _lockPath = Path.Combine(locks, Guid.NewGuid().ToString("N") + ViewerLiveness.LockFileExtension);
+            File.WriteAllText(_lockPath, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
         }
+
+        internal ContainerDesktopGeometry Geometry => _header.Geometry;
+
+        private IntPtr Base => _source.BaseAddress;
 
         public Form CreateForm(int seconds)
         {
-            var pixels = IntPtr.Add(_base, 64);
-            var frame = new Bitmap(_width, _height, _stride, System.Drawing.Imaging.PixelFormat.Format32bppRgb, pixels);
-
-            var picture = new PictureBox
-            {
-                Size = new System.Drawing.Size(_width, _height),
-                Location = new System.Drawing.Point(0, 0),
-                SizeMode = PictureBoxSizeMode.Normal,
-            };
+            var canvas = new FrameCanvas(this);
 
             var form = new Form
             {
-                Text = $"WSM - container desktop ({_width}x{_height})",
-                ClientSize = new System.Drawing.Size(_width, _height),
+                Text = Title(0),
+                ClientSize = new System.Drawing.Size(Geometry.Width, Geometry.Height),
                 StartPosition = FormStartPosition.CenterScreen,
                 KeyPreview = true,
+                BackColor = System.Drawing.Color.Black,
             };
-            form.Controls.Add(picture);
+            form.Controls.Add(canvas);
 
-            form.MouseDown += (_, e) => Send($"click {e.X},{e.Y},{(e.Button == MouseButtons.Right ? 2 : e.Button == MouseButtons.Middle ? 3 : 1)}");
-            form.MouseMove += (_, e) =>
+            canvas.MouseDown += (_, e) =>
+            {
+                if (e.Clicks > 1)
+                {
+                    return; // the second click arrives as MouseDoubleClick
+                }
+
+                var point = FramePoint(e.Location, canvas);
+                Send(MirrorInputCommands.Click(point.X, point.Y, Button(e)));
+            };
+            canvas.MouseDoubleClick += (_, e) =>
+            {
+                var point = FramePoint(e.Location, canvas);
+                Send(MirrorInputCommands.Click(point.X, point.Y, Button(e), 2));
+            };
+            canvas.MouseMove += (_, e) =>
             {
                 if ((DateTime.UtcNow - _lastMove).TotalMilliseconds < 100)
                 {
@@ -134,37 +157,22 @@ internal static class DesktopViewCommand
                 }
 
                 _lastMove = DateTime.UtcNow;
-                Send($"move {e.X},{e.Y}");
+                var point = FramePoint(e.Location, canvas);
+                Send(MirrorInputCommands.MovePointer(point.X, point.Y));
             };
-            form.KeyDown += (_, e) => Send(TranslateKey(e));
+            canvas.MouseWheel += (_, e) => Send(MirrorInputCommands.Wheel(e.Delta));
+
+            form.KeyDown += (_, e) => OnKeyDown(e);
+            form.KeyUp += (_, e) => OnKeyUp(e);
 
             var timer = new System.Windows.Forms.Timer { Interval = 100 };
-            timer.Tick += (_, _) =>
-            {
-                if (Marshal.ReadInt32(_base, 32) != 0)
-                {
-                    return; // the agent is mid-frame
-                }
-
-                var sequence = Marshal.ReadInt64(_base, 24);
-                if (sequence == _lastSequence)
-                {
-                    return;
-                }
-
-                _lastSequence = sequence;
-                var snapshot = new Bitmap(frame);
-                var previous = picture.Image;
-                picture.Image = snapshot;
-                previous?.Dispose();
-                form.Text = $"WSM - container desktop ({_width}x{_height})   frame {sequence}";
-            };
+            timer.Tick += (_, _) => Tick(form, canvas);
             timer.Start();
 
             form.FormClosed += (_, _) =>
             {
                 timer.Stop();
-                frame.Dispose();
+                DeleteLock();
             };
 
             if (seconds > 0)
@@ -181,12 +189,227 @@ internal static class DesktopViewCommand
             return form;
         }
 
-        private static string TranslateKey(KeyEventArgs e)
+        private void Tick(Form form, FrameCanvas canvas)
         {
-            var name = e.KeyCode.ToString().ToUpperInvariant();
-            return e.Alt ? $"keys ALT+{name}" : e.Control ? $"keys CTRL+{name}" : name.Length == 1 && char.IsLetterOrDigit(name[0])
-                ? $"text {name.ToLowerInvariant()}"
-                : $"keys {name}";
+            // The header FILE is authoritative for (re)connect decisions: a restarted
+            // agent or an applied resolution request shows up as a new header.
+            try
+            {
+                if (ContainerDesktopFrame.TryReadHeader(_framePath) is { } current
+                    && ContainerDesktopFrame.RequiresRemap(_header, current))
+                {
+                    Remap();
+                }
+            }
+            catch (IOException)
+            {
+                // The agent is recreating the section; retry on the next tick.
+            }
+
+            if (Marshal.ReadInt32(Base, 32) != 0)
+            {
+                return; // the agent is mid-frame
+            }
+
+            var sequence = Marshal.ReadInt64(Base, 24);
+            if (sequence != _lastSequence)
+            {
+                _lastSequence = sequence;
+                var snapshot = new Bitmap(_view);
+                var previous = _snapshot;
+                _snapshot = snapshot;
+                canvas.Image = snapshot;
+                previous?.Dispose();
+                canvas.Invalidate();
+                form.Text = Title(sequence);
+            }
+
+            if ((DateTime.UtcNow - _lastLockTouch) >= ViewerLiveness.TouchInterval)
+            {
+                _lastLockTouch = DateTime.UtcNow;
+                TouchLock();
+            }
+
+            if (_requestSentAt != DateTime.MinValue)
+            {
+                CheckRequestAck(form);
+            }
+        }
+
+        private void Remap()
+        {
+            var source = Open(out var geometry);
+            var view = CreateView(source, geometry);
+            _source.Dispose();
+            _view.Dispose();
+            _source = source;
+            _view = view;
+            _lastSequence = -1; // a new source restarts the frame watch
+        }
+
+        private SharedSectionSource.Mapping Open(out ContainerDesktopGeometry geometry)
+        {
+            var mapping = SharedSectionSource.Open(_framePath, ContainerDesktopFrame.Magic,
+                header => ContainerDesktopFrame.PixelOffset
+                    + ((long)Marshal.ReadInt32(header, 16) * Marshal.ReadInt32(header, 12)));
+            geometry = new ContainerDesktopGeometry(
+                Marshal.ReadInt32(mapping.BaseAddress, 8),
+                Marshal.ReadInt32(mapping.BaseAddress, 12),
+                Marshal.ReadInt32(mapping.BaseAddress, 16),
+                Marshal.ReadInt32(mapping.BaseAddress, 20));
+            _header = new ContainerDesktopFrameHeader(
+                geometry,
+                Marshal.ReadInt32(mapping.BaseAddress, ContainerDesktopFrame.WriterPidOffset),
+                (ContainerDesktopMode)Marshal.ReadInt32(mapping.BaseAddress, ContainerDesktopFrame.ModeOffset));
+            return mapping;
+        }
+
+        private Bitmap CreateView(SharedSectionSource.Mapping source, ContainerDesktopGeometry geometry)
+            => new(
+                geometry.Width, geometry.Height, geometry.Stride,
+                System.Drawing.Imaging.PixelFormat.Format32bppRgb,
+                IntPtr.Add(source.BaseAddress, ContainerDesktopFrame.PixelOffset));
+
+        private System.Drawing.Point FramePoint(System.Drawing.Point location, Control canvas)
+        {
+            var (x, y) = FrameViewScaling.ToFrame(
+                location.X, location.Y, Geometry.Width, Geometry.Height,
+                canvas.ClientSize.Width, canvas.ClientSize.Height);
+            return new System.Drawing.Point(x, y);
+        }
+
+        private static string Button(MouseEventArgs e)
+            => e.Button == MouseButtons.Right ? "right" : e.Button == MouseButtons.Middle ? "middle" : "left";
+
+        private void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.F10)
+            {
+                e.SuppressKeyPress = true;
+                RequestNextResolution();
+                return;
+            }
+
+            if (e.Control && e.KeyCode == Keys.V)
+            {
+                e.SuppressKeyPress = true;
+                SendClipboard();
+                return;
+            }
+
+            // The Keys enum carries the virtual-key code.
+            Send(MirrorInputCommands.Key((int)e.KeyCode, true));
+        }
+
+        private void OnKeyUp(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.F10 || (e.Control && e.KeyCode == Keys.V))
+            {
+                return;
+            }
+
+            Send(MirrorInputCommands.Key((int)e.KeyCode, false));
+        }
+
+        private void SendClipboard()
+        {
+            try
+            {
+                var text = Clipboard.GetText();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    Send(MirrorInputCommands.Clipboard(text));
+                }
+            }
+            catch (ExternalException)
+            {
+                // The host clipboard is busy; a lost paste is not an error here.
+            }
+        }
+
+        private void RequestNextResolution()
+        {
+            var index = Array.FindIndex(
+                Resolutions, r => r.Width == Geometry.Width && r.Height == Geometry.Height);
+            _requested = Resolutions[(index + 1) % Resolutions.Length];
+            try
+            {
+                // A stale ack from an earlier request must not answer this one.
+                var ack = Path.Combine(_directory, ViewRequest.AckFileName);
+                if (File.Exists(ack))
+                {
+                    File.Delete(ack);
+                }
+
+                File.WriteAllText(
+                    Path.Combine(_directory, ViewRequest.FileName),
+                    ViewRequest.Format(_requested.Width, _requested.Height),
+                    new UTF8Encoding(false));
+                _requestSentAt = DateTime.UtcNow;
+                _status = $"requested {_requested.Width}x{_requested.Height}...";
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        private void CheckRequestAck(Form form)
+        {
+            try
+            {
+                var ackPath = Path.Combine(_directory, ViewRequest.AckFileName);
+                if (File.Exists(ackPath)
+                    && ViewRequest.TryParseAck(File.ReadAllText(ackPath), out var applied, out var width, out var height)
+                    && width == _requested.Width && height == _requested.Height)
+                {
+                    _requestSentAt = DateTime.MinValue;
+                    _status = applied
+                        ? $"resolution {_requested.Width}x{_requested.Height} applied"
+                        : $"resolution {_requested.Width}x{_requested.Height} rejected - scaling";
+                    form.Text = Title(_lastSequence);
+                    return;
+                }
+            }
+            catch (IOException)
+            {
+            }
+
+            if ((DateTime.UtcNow - _requestSentAt) >= ViewRequest.AckTimeout)
+            {
+                _requestSentAt = DateTime.MinValue;
+                _status = $"no answer for {_requested.Width}x{_requested.Height} - scaling";
+                form.Text = Title(_lastSequence);
+            }
+        }
+
+        private string Title(long sequence)
+            => $"WSM - container desktop ({Geometry.Width}x{Geometry.Height})"
+                + (sequence > 0 ? $"   frame {sequence}" : string.Empty)
+                + (_status is null ? string.Empty : $"   {_status}");
+
+        private void TouchLock()
+        {
+            try
+            {
+                File.SetLastWriteTimeUtc(_lockPath, DateTime.UtcNow);
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        private void DeleteLock()
+        {
+            try
+            {
+                if (File.Exists(_lockPath))
+                {
+                    File.Delete(_lockPath);
+                }
+            }
+            catch (IOException)
+            {
+            }
         }
 
         /// <summary>
@@ -208,52 +431,49 @@ internal static class DesktopViewCommand
 
         public void Dispose()
         {
-            if (_base != IntPtr.Zero)
-            {
-                _ = NativeMethods.UnmapViewOfFile(_base);
-                _base = IntPtr.Zero;
-            }
-
-            if (_mapping != IntPtr.Zero)
-            {
-                _ = NativeMethods.CloseHandle(_mapping);
-                _mapping = IntPtr.Zero;
-            }
-
-            if (_file != new IntPtr(-1))
-            {
-                _ = NativeMethods.CloseHandle(_file);
-                _file = new IntPtr(-1);
-            }
+            DeleteLock();
+            _snapshot?.Dispose();
+            _view.Dispose();
+            _source.Dispose();
         }
     }
 
-    private static class NativeMethods
+    /// <summary>
+    /// The frame, drawn scaled into the client area (aspect kept, letterboxed black).
+    /// Bilinear is the fast high-enough-quality interpolation at these sizes.
+    /// </summary>
+    private sealed class FrameCanvas : Control
     {
-        public const uint GenericRead = 0x80000000;
-        public const uint ShareAll = 0x00000007;
-        public const uint OpenExisting = 3;
-        public const uint AttributeNormal = 0x80;
-        public const uint PageReadOnly = 0x02;
-        public const uint FileMapRead = 0x0004;
+        private readonly FrameView _view;
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr attributes,
-            uint disposition, uint flags, IntPtr template);
+        public FrameCanvas(FrameView view)
+        {
+            _view = view;
+            Dock = DockStyle.Fill;
+            BackColor = System.Drawing.Color.Black;
+            SetStyle(
+                ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint,
+                true);
+        }
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern IntPtr CreateFileMappingW(IntPtr file, IntPtr attributes, uint protect,
-            uint maximumHigh, uint maximumLow, string? name);
+        [System.ComponentModel.DesignerSerializationVisibility(
+            System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public Bitmap? Image { get; set; }
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        public static extern IntPtr MapViewOfFile(IntPtr mapping, uint access, uint offsetHigh, uint offsetLow, ulong length);
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var image = Image;
+            if (image is null)
+            {
+                return;
+            }
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool UnmapViewOfFile(IntPtr address);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool CloseHandle(IntPtr handle);
+            var geometry = _view.Geometry;
+            var dest = FrameViewScaling.Fit(
+                geometry.Width, geometry.Height, ClientSize.Width, ClientSize.Height);
+            e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+            e.Graphics.DrawImage(
+                image, new System.Drawing.Rectangle(dest.X, dest.Y, dest.Width, dest.Height));
+        }
     }
 }

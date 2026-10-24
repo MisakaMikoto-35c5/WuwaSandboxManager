@@ -265,10 +265,22 @@ internal sealed class WindowMirrorDesktopProvider
         Directory.CreateDirectory(directory);
         InstallPayload(directory, "wsm-desktop-read.ps1");
 
-        foreach (var stale in new[] { Options.MirrorFileName, Options.StopFileName, "read.out", "read.log" })
+        foreach (var stale in new[]
+        {
+            Options.MirrorFileName, Options.StopFileName, ContainerDesktopPaths.ModeFileName,
+            "read.out", "read.log",
+        })
         {
             TryDelete(Path.Combine(directory, stale));
         }
+
+        // Mode negotiation must land before the read side starts: it reads shm-mode.txt
+        // once at startup and chooses the backing of the mirror source from it. (A read
+        // side started by the image's logon hook finds no mode file and stays in file
+        // mode, which every reader still understands.)
+        var mode = ShmModeNegotiation.Negotiate(
+            ShmModeNegotiation.IsCurrentProcessElevated(), _launcher.CanLaunchIntoInteractiveSession);
+        ShmModeNegotiation.WriteModeFile(directory, mode);
 
         // The read side detaches itself (see its -Detached switch), so HCS does not have to
         // wait for it - and no cmd/`start` sits in between, which would keep the launcher
@@ -321,12 +333,13 @@ internal sealed class WindowMirrorDesktopProvider
 
     /// <summary>Reads the shared header through the shared mirror layout.</summary>
     private static ContainerDesktopGeometry? TryReadGeometry(string mirrorPath)
-        => ContainerDesktopMirror.TryReadHeader(mirrorPath, out _, out _);
+        => ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath)?.Geometry;
 
     /// <summary>Reads the published window table through the shared mirror layout.</summary>
     private static IReadOnlyList<ContainerDesktopWindow> ReadWindows(string mirrorPath)
-        => ContainerDesktopMirror.TryReadHeader(mirrorPath, out var count, out _) is { } geometry
-            ? ContainerDesktopMirror.ReadWindows(mirrorPath, geometry, count)
+        => ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath) is { } header
+            ? ContainerDesktopMirror.ReadWindows(
+                mirrorPath, header.Geometry, header.WindowCount, header.Version)
             : Array.Empty<ContainerDesktopWindow>();
 
     private ContainerDesktopSession Require(SandboxInstanceId id)

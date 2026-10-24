@@ -12,17 +12,28 @@
 # and it only rewrites the regions of windows whose pixels actually changed, so the
 # transport carries dirty regions instead of whole frames.
 #
-# Shared file layout (little endian, must match WindowMirrorDesktopProvider):
-#   0  magic 'WSMM' (0x4D4D5357)  4  version (1)
+# Sharing mode (shm-mode.txt in the agent directory, written by the host before the
+# read side starts; absent = 'file'):
+#   file     - mirror.shm carries header + pixels (the host maps the file).
+#   pagefile - mirror.shm carries ONLY the header (4 KB) and the pixels live in a
+#              page-file-backed section this process creates; the host finds that
+#              section by duplicating the handle out of this process (needs an
+#              elevated reader; named sections do not cross the silo). The mode
+#              field at offset 60 of the header tells the host which one it is.
+#
+# Shared file layout (little endian, must match ContainerDesktopMirror):
+#   0  magic 'WSMM' (0x4D4D5357)  4  version (2)
 #   8  width                     12 height
 #   16 stride                    20 fps
 #   24 seq (int64, ++ per pass)   32 busy (int32)
 #   36 writerPid (int32)         40 windowCount (int32)
-#   48 totalFrames (int64)
+#   48 totalFrames (int64)       56 dirtyCount (int32)
+#   60 mode (int32: 0 = file, 1 = pagefile)
 #   64 pixels (height * stride, top-down BGRX)
 #   pixels + 0      window table, 8192 bytes, 40 bytes per entry:
 #                   id(8) x(4) y(4) w(4) h(4) seq(8) titleOffset(4) titleLength(4)
-#   pixels + 8192   title blob, 16384 bytes (UTF-16)
+#   pixels + 8192   dirty rects, 3264 bytes, 16 bytes per entry: x(4) y(4) w(4) h(4)
+#   pixels + 11456  title blob, 16384 bytes (UTF-16)
 #
 # Input arrives as one file per command in the agent directory (input-*.txt) and is
 # injected in-process; agent-stop.txt makes it exit.
@@ -37,7 +48,8 @@ param(
     [int] $Seconds = 86400,
     [string] $TitleFilter = '',
     [string] $StartProgram = '',
-    [switch] $Detached
+    [switch] $Detached,
+    [switch] $AsShell
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,13 +62,15 @@ $log = Join-Path $AgentDirectory 'read.log'
 function Log([string] $message) {
     try { Add-Content -Path $log -Value (('{0} {1}' -f (Get-Date -Format 'HH:mm:ss.fff'), $message)) -ErrorAction SilentlyContinue } catch { }
 }
-Log ("invoked pid=$PID detached=$($Detached.IsPresent) user=$([Environment]::UserName) dir=$AgentDirectory")
+Log ("invoked pid=$PID detached=$($Detached.IsPresent) asShell=$($AsShell.IsPresent) user=$([Environment]::UserName) dir=$AgentDirectory")
 
 # Self-detach: HCS waits for the process it created to exit, so the read side must not be that
 # process. It re-launches itself through Start-Process (which detaches) and exits - so the real
 # read side is created exactly like any other process in the session (no cmd/`start`, which kept
 # the launcher alive for the child's lifetime and parked HCS process creation).
-if (-not $Detached) {
+# In shell mode (-AsShell, launched by wsm-shell.cmd as Winlogon\Shell) there is no HCS to wait
+# on us; the wrapper is the session's lifetime, so we stay in its foreground instead.
+if (-not $Detached -and -not $AsShell) {
     $parts = @(
         '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Detached'
         '-AgentDirectory "' + $AgentDirectory + '"'
@@ -81,6 +95,13 @@ if (-not $Detached) {
     }
     exit 0
 }
+
+# Shell mode must never let this script terminate: it IS the session's shell, and a shell
+# that exits tears the console session down. A fatal error (mirror file locked, a DC that
+# cannot be created) therefore restarts the whole body after a pause instead of throwing.
+$relaunch = $false
+do {
+$relaunch = $false
 
 try {
 
@@ -109,7 +130,59 @@ public static class WsmMirrorNative {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, IntPtr extra);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern short VkKeyScanW(char c);
+    [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool SetThreadDesktop(IntPtr desktop);
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool GetUserObjectInformationW(IntPtr obj, int index, System.Text.StringBuilder info, int length, out uint needed);
+
+    /// <summary>
+    /// Moves this thread to the session's ACTIVE desktop. Screen/window capture only
+    /// produces pixels there; on any other desktop GDI reads come back empty
+    /// (measured in the container's services session).
+    /// </summary>
+    public static string SwitchToInputDesktop() {
+        IntPtr input = OpenInputDesktop(0, false, 0x02000000); // MAXIMUM_ALLOWED
+        if (input == IntPtr.Zero) return "OpenInputDesktop failed: " + Marshal.GetLastWin32Error();
+        var name = new System.Text.StringBuilder(256);
+        uint needed;
+        GetUserObjectInformationW(input, 2, name, 512, out needed);
+        if (!SetThreadDesktop(input)) {
+            int error = Marshal.GetLastWin32Error();
+            CloseDesktop(input);
+            return "SetThreadDesktop(" + name + ") failed: " + error;
+        }
+        return "ok, thread desktop is now '" + name + "'";
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HARDWAREINPUT { public uint uMsg; public ushort wParamL; public ushort wParamH; }
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUTUNION { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public HARDWAREINPUT hi; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT { public uint type; public INPUTUNION u; }
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint SendInput(uint count, INPUT[] inputs, int size);
+
+    public const uint KeyeventfExtendedKey = 0x0001;
+    public const uint KeyeventfKeyUp = 0x0002;
+    public const uint KeyeventfUnicode = 0x0004;
+
+    /// <summary>One keyboard event through SendInput (vk or a Unicode code unit in scan).</summary>
+    public static uint KeyEvent(ushort vk, ushort scan, uint flags) {
+        var input = new INPUT();
+        input.type = 1;   // INPUT_KEYBOARD
+        input.u.ki.wVk = vk;
+        input.u.ki.wScan = scan;
+        input.u.ki.dwFlags = flags;
+        var inputs = new INPUT[] { input };
+        return SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
     [DllImport("user32.dll")] public static extern IntPtr GetProcessWindowStation();
     [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(int threadId);
     [DllImport("kernel32.dll")] public static extern int GetCurrentThreadId();
@@ -127,6 +200,62 @@ public static class WsmMirrorNative {
         int needed;
         GetUserObjectInformationW(handle, 2, sb, sb.Capacity * 2, out needed);
         return sb.ToString();
+    }
+}
+
+/// <summary>
+/// Per-window dirty tracking: the shadow buffer holds the previously published pixels,
+/// and each pass compares the window's rect in 8x8 blocks. Only changed blocks are
+/// copied into the shadow and their union becomes the window's dirty rect.
+/// </summary>
+public static class WsmMirrorDirty {
+    [DllImport("msvcrt.dll", EntryPoint = "memcmp", CallingConvention = CallingConvention.Cdecl)]
+    static extern int memcmp(IntPtr a, IntPtr b, UIntPtr count);
+    [DllImport("kernel32.dll")] static extern void RtlMoveMemory(IntPtr dest, IntPtr src, UIntPtr length);
+
+    public const int Block = 8;
+
+    /// <summary>
+    /// Compares the rect (x,y,w,h) of two top-down 32bpp frames block by block, copies the
+    /// changed blocks from current into shadow, and reports their union. False = unchanged.
+    /// </summary>
+    public static bool Diff(IntPtr current, IntPtr shadow, int stride, int x, int y, int w, int h,
+        out int dx, out int dy, out int dw, out int dh) {
+        dx = 0; dy = 0; dw = 0; dh = 0;
+        long cur = current.ToInt64(), sha = shadow.ToInt64();
+        int left = w, top = h, right = 0, bottom = 0;
+        for (int by = 0; by < h; by += Block) {
+            int bh = Math.Min(Block, h - by);
+            for (int bx = 0; bx < w; bx += Block) {
+                int bw = Math.Min(Block, w - bx);
+                bool same = true;
+                for (int r = 0; r < bh; r++) {
+                    long off = (long)(y + by + r) * stride + (long)(x + bx) * 4;
+                    if (memcmp(new IntPtr(cur + off), new IntPtr(sha + off), (UIntPtr)(uint)(bw * 4)) != 0) { same = false; break; }
+                }
+                if (same) continue;
+                for (int r = 0; r < bh; r++) {
+                    long off = (long)(y + by + r) * stride + (long)(x + bx) * 4;
+                    RtlMoveMemory(new IntPtr(sha + off), new IntPtr(cur + off), (UIntPtr)(uint)(bw * 4));
+                }
+                if (bx < left) left = bx;
+                if (by < top) top = by;
+                if (bx + bw > right) right = bx + bw;
+                if (by + bh > bottom) bottom = by + bh;
+            }
+        }
+        if (right <= left || bottom <= top) return false;
+        dx = x + left; dy = y + top; dw = right - left; dh = bottom - top;
+        return true;
+    }
+
+    /// <summary>Copies a rect between two frames with the same stride (shadow init after a move/resize).</summary>
+    public static void Copy(IntPtr dest, IntPtr src, int stride, int x, int y, int w, int h) {
+        long d = dest.ToInt64(), s = src.ToInt64();
+        for (int r = 0; r < h; r++) {
+            long off = (long)(y + r) * stride + (long)x * 4;
+            RtlMoveMemory(new IntPtr(d + off), new IntPtr(s + off), (UIntPtr)(uint)(w * 4));
+        }
     }
 }
 '@
@@ -153,6 +282,9 @@ $virtualKeys = @{
 }
 for ($i = 1; $i -le 24; $i++) { $virtualKeys["F$i"] = 0x6F + $i }
 
+# Virtual keys that must carry KEYEVENTF_EXTENDEDKEY for SendInput.
+$extendedKeys = @(0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x5B, 0x5C, 0x6F, 0xA2, 0xA3, 0xA4, 0xA5)
+
 function Send-Move([int] $x, [int] $y) {
     [void][WsmMirrorNative]::SetCursorPos($x, $y)
     [WsmMirrorNative]::mouse_event(0x0001, 0, 0, 0, [IntPtr]::Zero)
@@ -171,6 +303,12 @@ function Send-Click([int] $x, [int] $y, [int] $button) {
         [WsmMirrorNative]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)
     }
 }
+function Send-KeyEvent([int] $vk, [bool] $down) {
+    $flags = [uint32]0
+    if ($extendedKeys -contains $vk) { $flags = [WsmMirrorNative]::KeyeventfExtendedKey }
+    if (-not $down) { $flags = $flags -bor [WsmMirrorNative]::KeyeventfKeyUp }
+    [void][WsmMirrorNative]::KeyEvent([uint16]$vk, 0, $flags)
+}
 function Send-Keys([string] $spec) {
     $keys = @()
     foreach ($part in ($spec -split '\+')) {
@@ -186,18 +324,13 @@ function Send-Keys([string] $spec) {
     for ($i = $keys.Count - 1; $i -ge 0; $i--) { [WsmMirrorNative]::keybd_event($keys[$i], 0, 2, [IntPtr]::Zero); Start-Sleep -Milliseconds 15 }
 }
 function Send-Text([string] $text) {
-    foreach ($character in $text.ToCharArray()) {
-        $scan = [WsmMirrorNative]::VkKeyScanW($character)
-        if ($scan -eq -1) { continue }
-        $key = [byte]($scan -band 0xff)
-        $shift = ($scan -band 0x100) -ne 0
-        $ctrl = ($scan -band 0x200) -ne 0
-        if ($shift) { [WsmMirrorNative]::keybd_event(0x10, 0, 0, [IntPtr]::Zero) }
-        if ($ctrl) { [WsmMirrorNative]::keybd_event(0x11, 0, 0, [IntPtr]::Zero) }
-        [WsmMirrorNative]::keybd_event($key, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 15
-        [WsmMirrorNative]::keybd_event($key, 0, 2, [IntPtr]::Zero); Start-Sleep -Milliseconds 15
-        if ($ctrl) { [WsmMirrorNative]::keybd_event(0x11, 0, 2, [IntPtr]::Zero) }
-        if ($shift) { [WsmMirrorNative]::keybd_event(0x10, 0, 2, [IntPtr]::Zero) }
+    # KEYEVENTF_UNICODE carries arbitrary UTF-16 (VkKeyScanW could only express what the
+    # current layout maps to a key). Surrogate pairs go as two code units, which Windows
+    # combines at the receiving end.
+    foreach ($unit in $text.ToCharArray()) {
+        $code = [uint16][int][char]$unit
+        [void][WsmMirrorNative]::KeyEvent(0, $code, [WsmMirrorNative]::KeyeventfUnicode)
+        [void][WsmMirrorNative]::KeyEvent(0, $code, ([WsmMirrorNative]::KeyeventfUnicode -bor [WsmMirrorNative]::KeyeventfKeyUp))
     }
 }
 function Invoke-InputLine([string] $line) {
@@ -207,8 +340,23 @@ function Invoke-InputLine([string] $line) {
     } elseif ($line -like 'click *') {
         $xy = ($line -replace '^click\s+', '') -split ','
         $button = 1
-        if ($xy.Count -gt 2) { $button = [int]$xy[2] }
-        Send-Click ([int]$xy[0]) ([int]$xy[1]) $button
+        if ($xy.Count -gt 2) {
+            $token = $xy[2].Trim().ToLowerInvariant()
+            switch ($token) {
+                'left' { $button = 1 }
+                'right' { $button = 2 }
+                'middle' { $button = 3 }
+                default { $button = [int]$token }
+            }
+        }
+        $times = 1
+        if ($xy.Count -gt 3) { $times = [Math]::Max(1, [Math]::Min(4, [int]$xy[3])) }
+        for ($n = 0; $n -lt $times; $n++) {
+            Send-Click ([int]$xy[0]) ([int]$xy[1]) $button
+        }
+    } elseif ($line -like 'key *') {
+        $parts = ($line -replace '^key\s+', '') -split '\s+'
+        if ($parts.Count -ge 2) { Send-KeyEvent ([int]$parts[0]) ($parts[1] -ne 'up') }
     } elseif ($line -like 'keys *') {
         Send-Keys ($line -replace '^keys\s+', '')
     } elseif ($line -like 'text *') {
@@ -221,6 +369,41 @@ function Invoke-InputLine([string] $line) {
         Log ("movewindow 0x{0:X} -> ({1},{2}) ok={3}" -f [int64]$rest[0], [int]$xy[0], [int]$xy[1], $moved)
     } elseif ($line -like 'activate *') {
         [void][WsmMirrorWindows]::Activate([int64]($line -replace '^activate\s+', ''))
+    } elseif ($line -like 'launch *') {
+        # Start a program in THIS session/desktop: the read side runs in the console
+        # session, so anything it launches renders there - no cross-session creation
+        # (which the silo denies) is needed.
+        $rest = $line.Substring('launch '.Length)
+        $exe = $rest
+        $arguments = ''
+        $space = $rest.IndexOf(' ')
+        if ($space -gt 0) {
+            $exe = $rest.Substring(0, $space)
+            $arguments = $rest.Substring($space + 1)
+        }
+        try {
+            if ($arguments) {
+                Start-Process -FilePath $exe -ArgumentList $arguments -WindowStyle Normal | Out-Null
+            } else {
+                Start-Process -FilePath $exe -WindowStyle Normal | Out-Null
+            }
+            Log ("launch '$rest' ok")
+        } catch {
+            Log ("launch '$rest' failed: " + $_.Exception.Message)
+        }
+    } elseif ($line -like 'resize *') {
+        $rest = ($line -replace '^resize\s+', '') -split '\s+'
+        $wh = $rest[1] -split ','
+        $resized = [WsmMirrorWindows]::Resize([int64]$rest[0], [int]$wh[0], [int]$wh[1])
+        Log ("resize 0x{0:X} -> {1}x{2} ok={3}" -f [int64]$rest[0], [int]$wh[0], [int]$wh[1], $resized)
+    } elseif ($line -like 'wheel *') {
+        $delta = [int]($line -replace '^wheel\s+', '')
+        [WsmMirrorNative]::mouse_event(0x0800, 0, 0, [uint32]$delta, [IntPtr]::Zero)   # MOUSEEVENTF_WHEEL
+        Log ("wheel $delta")
+    } elseif ($line -like 'close *') {
+        $target = [int64]($line -replace '^close\s+', '')
+        $closed = [WsmMirrorWindows]::Close($target)
+        Log ("close 0x{0:X} ok={1}" -f $target, $closed)
     }
 }
 
@@ -427,6 +610,21 @@ public static class WsmMirrorWindows {
         return SetWindowPos(new IntPtr(id), IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
+    /// <summary>Resizes a window without moving, restacking or activating it.</summary>
+    public static bool Resize(long id, int w, int h) {
+        const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+        return SetWindowPos(new IntPtr(id), IntPtr.Zero, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    /// <summary>Asks a window to close; posted, so a hung window cannot park the read side.</summary>
+    public static bool Close(long id) {
+        return PostMessage(new IntPtr(id), WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    const int WM_CLOSE = 0x0010;
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool PostMessage(IntPtr h, int msg, IntPtr wparam, IntPtr lparam);
+
     /// <summary>Why the window list is (not) what we expect - written to the log once.</summary>
     public static string Diagnose() {
         var sb = new StringBuilder();
@@ -613,24 +811,53 @@ if ($StartProgram) {
 $stride = $Width * 4
 $pixels = $stride * $Height
 $tableOffset = 64 + $pixels
-$titleOffset = $tableOffset + 8192
+$dirtyOffset = $tableOffset + 8192
+$titleOffset = $dirtyOffset + 3264
 $capacity = $titleOffset + 16384
 $mirrorPath = Join-Path $AgentDirectory $MirrorFile
 $stopPath = Join-Path $AgentDirectory $StopFile
 
+# The host picks the sharing mode before starting us; absent/unknown = file.
+$mode = 'file'
+$modePath = Join-Path $AgentDirectory 'shm-mode.txt'
+if (Test-Path $modePath) {
+    try { if ([IO.File]::ReadAllText($modePath) -match 'pagefile') { $mode = 'pagefile' } } catch { }
+}
+
 if (-not (Test-Path $AgentDirectory)) { New-Item -ItemType Directory -Path $AgentDirectory -Force | Out-Null }
 if (Test-Path $mirrorPath) { Remove-Item $mirrorPath -Force -ErrorAction SilentlyContinue }
 
+# In pagefile mode the .shm file carries only the header (the host's wait/adopt logic
+# keeps working unchanged); the pixels live in a page-file-backed section.
+$fileCapacity = $capacity
+if ($mode -eq 'pagefile') { $fileCapacity = 4096 }
+
 $file = [WsmMirrorNative]::CreateFileW($mirrorPath, [uint32]3221225472, [uint32]7, [IntPtr]::Zero, [uint32]2, [uint32]0x80, [IntPtr]::Zero)
 if ($file -eq [IntPtr](-1)) { throw ("CreateFileW failed: " + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
-$mapping = [WsmMirrorNative]::CreateFileMappingW($file, [IntPtr]::Zero, [uint32]4, 0, [uint32]$capacity, $null)
-if ($mapping -eq [IntPtr]::Zero) { throw ("CreateFileMappingW failed: " + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
-$base = [WsmMirrorNative]::MapViewOfFile($mapping, [uint32]0xF001F, 0, 0, [uint64]$capacity)
-if ($base -eq [IntPtr]::Zero) { throw ("MapViewOfFile failed: " + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+$fileMapping = [WsmMirrorNative]::CreateFileMappingW($file, [IntPtr]::Zero, [uint32]4, 0, [uint32]$fileCapacity, $null)
+if ($fileMapping -eq [IntPtr]::Zero) { throw ("CreateFileMappingW failed: " + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+$fileBase = [WsmMirrorNative]::MapViewOfFile($fileMapping, [uint32]0xF001F, 0, 0, [uint64]$fileCapacity)
+if ($fileBase -eq [IntPtr]::Zero) { throw ("MapViewOfFile failed: " + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
 
+# $mapping/$base are where the header (live fields) and the pixels go; in file mode
+# they ARE the file's mapping. In pagefile mode the file keeps a static header copy.
 $marshal = [Runtime.InteropServices.Marshal]
+$mapping = $fileMapping
+$base = $fileBase
+if ($mode -eq 'pagefile') {
+    $mapping = [WsmMirrorNative]::CreateFileMappingW([IntPtr](-1), [IntPtr]::Zero, [uint32]4, 0, [uint32]$capacity, $null)
+    if ($mapping -eq [IntPtr]::Zero) { throw ("page-file section failed: " + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+    $base = [WsmMirrorNative]::MapViewOfFile($mapping, [uint32]0xF001F, 0, 0, [uint64]$capacity)
+    if ($base -eq [IntPtr]::Zero) { throw ("page-file view failed: " + [Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+    # Busy first, magic only inside the full header: a host that finds the section
+    # early must never see it half-initialised.
+    $marshal::WriteInt32($base, 32, 1)
+}
+
+$modeValue = 0
+if ($mode -eq 'pagefile') { $modeValue = 1 }
 $marshal::WriteInt32($base, 0, [int]0x4D4D5357)
-$marshal::WriteInt32($base, 4, 1)
+$marshal::WriteInt32($base, 4, 2)
 $marshal::WriteInt32($base, 8, $Width)
 $marshal::WriteInt32($base, 12, $Height)
 $marshal::WriteInt32($base, 16, $stride)
@@ -640,6 +867,21 @@ $marshal::WriteInt32($base, 32, 0)
 $marshal::WriteInt32($base, 36, $PID)
 $marshal::WriteInt32($base, 40, 0)
 $marshal::WriteInt64($base, 48, [int64]0)
+$marshal::WriteInt32($base, 56, 0)   # dirtyCount
+$marshal::WriteInt32($base, 60, $modeValue)
+
+if ($mode -eq 'pagefile') {
+    # Publish the static header file LAST: a valid header file is the host's signal
+    # that the section is ready for the handle passthrough.
+    $marshal::WriteInt32($fileBase, 0, [int]0x4D4D5357)
+    $marshal::WriteInt32($fileBase, 4, 2)
+    $marshal::WriteInt32($fileBase, 8, $Width)
+    $marshal::WriteInt32($fileBase, 12, $Height)
+    $marshal::WriteInt32($fileBase, 16, $stride)
+    $marshal::WriteInt32($fileBase, 20, $Fps)
+    $marshal::WriteInt32($fileBase, 36, $PID)
+    $marshal::WriteInt32($fileBase, 60, $modeValue)
+}
 
 # ---- the pixel buffer is a GDI DIB section mapped onto the shared file -------------
 # GDI paints straight into shared memory: no CopyFromScreen, no memcpy - and unlike a
@@ -744,6 +986,12 @@ if ($privateDib -ne [IntPtr]::Zero) {
     Log ("private DIB could not be created (err " + $privateError + "); only the shared DIB is available")
 }
 
+# The shadow buffer holds the previously published frame: each window's rect is compared
+# against it block by block (WsmMirrorDirty) and only the changes are published as dirty
+# rects, so a host reader can repaint just those.
+$shadow = $marshal::AllocHGlobal($pixels)
+$shadowRects = @{}
+
 # The screen is read into a normal managed bitmap and moved into the shared DIB in one call:
 # this is the capture path that was proven to work inside a container (doc section 13), while
 # drawing directly into a DIB section over a file mapping failed there.
@@ -793,7 +1041,8 @@ function Measure-Ink([int] $x, [int] $y, [int] $w, [int] $h) {
     return [Math]::Round(100 * $nonBlack / $sampled, 1)
 }
 
-Log ("read side started pid=$PID ${Width}x${Height} stride=$stride fps=$Fps seconds=$Seconds mirror=$mirrorPath")
+Log ("read side started pid=$PID ${Width}x${Height} stride=$stride fps=$Fps seconds=$Seconds mirror=$mirrorPath mode=$mode")
+Log ("input desktop: " + [WsmMirrorNative]::SwitchToInputDesktop())
 
 $sequence = [int64]0
 $frames = [int64]0
@@ -902,7 +1151,7 @@ while ((Get-Date) -lt $deadline) {
             $marshal::Copy($titleBytes, 0, [IntPtr]::Add($base, $titleOffset + $i * 512), $titleBytes.Length)
             $marshal::WriteInt32($base, $entry + 32, $i * 512)
             $marshal::WriteInt32($base, $entry + 36, [int]($titleBytes.Length / 2))
-            if (-not $painted) { Log ("paint call failed for 0x{0:X} (strategy '{1}')" -f [int64]$w.Id, $strategyNames[$strategy]) }
+            if (-not $painted -and $chosenStrategy -ge 0) { Log ("paint call failed for 0x{0:X} (strategy '{1}')" -f [int64]$w.Id, $strategyNames[$chosenStrategy]) }
         }
 
         # Painting into the private DIB only counts once its pixels are in the shared buffer: one
@@ -911,6 +1160,45 @@ while ((Get-Date) -lt $deadline) {
             [void][WsmMirrorNative]::GdiFlush()
             [WsmMirrorNative]::RtlMoveMemory($pixelSection, $privateBits, [UIntPtr]([uint64]($stride * $Height)))
         }
+
+        # Dirty rects: per window, the union of the 8x8 blocks that differ from the shadow
+        # (last published) frame. A new, moved or resized window is fully dirty.
+        if (-not $captured) { [void][WsmMirrorNative]::GdiFlush() }
+        $dirtyCount = 0
+        for ($i = 0; $i -lt $count -and $dirtyCount -lt 204; $i++) {
+            $w = $windows[$i]
+            $x = [Math]::Max(0, $w.X); $y = [Math]::Max(0, $w.Y)
+            $cw = [Math]::Min($Width, $w.X + $w.W) - $x; $ch = [Math]::Min($Height, $w.Y + $w.H) - $y
+            if ($cw -le 0 -or $ch -le 0) { continue }
+            $rectKey = "$($w.X),$($w.Y),$($w.W),$($w.H)"
+            $dx = 0; $dy = 0; $dw = 0; $dh = 0
+            $changed = $false
+            if (-not $shadowRects.ContainsKey($w.Id) -or $shadowRects[$w.Id] -ne $rectKey) {
+                [WsmMirrorDirty]::Copy($shadow, $pixelSection, $stride, $x, $y, $cw, $ch)
+                $dx = $x; $dy = $y; $dw = $cw; $dh = $ch
+                $changed = $true
+            } else {
+                $changed = [WsmMirrorDirty]::Diff($pixelSection, $shadow, $stride, $x, $y, $cw, $ch, [ref]$dx, [ref]$dy, [ref]$dw, [ref]$dh)
+            }
+            $shadowRects[$w.Id] = $rectKey
+            if ($changed) {
+                $dirtyEntry = $dirtyOffset + $dirtyCount * 16
+                $marshal::WriteInt32($base, $dirtyEntry, $dx)
+                $marshal::WriteInt32($base, $dirtyEntry + 4, $dy)
+                $marshal::WriteInt32($base, $dirtyEntry + 8, $dw)
+                $marshal::WriteInt32($base, $dirtyEntry + 12, $dh)
+                $dirtyCount++
+            }
+        }
+        # Forget windows that left the table, so a re-created hwnd is fully dirty again.
+        if ($shadowRects.Count -gt $count) {
+            foreach ($shadowId in @($shadowRects.Keys)) {
+                $stillThere = $false
+                for ($i = 0; $i -lt $count; $i++) { if ($windows[$i].Id -eq $shadowId) { $stillThere = $true; break } }
+                if (-not $stillThere) { $shadowRects.Remove($shadowId) }
+            }
+        }
+        $marshal::WriteInt32($base, 56, $dirtyCount)
 
         # On the first pass, report how much of each window actually came back: this is the
         # container-side question ("does anything give content in a session with no display
@@ -970,12 +1258,22 @@ while ((Get-Date) -lt $deadline) {
 $marshal::WriteInt32($base, 32, 0)
 Log ("read side exiting after frames=$frames windowsPublishes=$sequence")
 try { [void][WsmMirrorDib]::DeleteObject($dib); [void][WsmMirrorDib]::DeleteDC($memoryDc) } catch { }
+try { $marshal::FreeHGlobal($shadow) } catch { }
 [void][WsmMirrorNative]::UnmapViewOfFile($base)
 [void][WsmMirrorNative]::CloseHandle($mapping)
+if ($mode -eq 'pagefile') {
+    [void][WsmMirrorNative]::UnmapViewOfFile($fileBase)
+    [void][WsmMirrorNative]::CloseHandle($fileMapping)
+}
 [void][WsmMirrorNative]::CloseHandle($file)
 
 }
 catch {
     Log ("FATAL: " + $_.Exception.ToString())
-    throw
+    if (-not $AsShell) { throw }
+    Log 'shell mode: restarting the read side in 2 seconds (the session must not lose its shell)'
+    Start-Sleep -Seconds 2
+    $relaunch = $true
 }
+
+} while ($relaunch)

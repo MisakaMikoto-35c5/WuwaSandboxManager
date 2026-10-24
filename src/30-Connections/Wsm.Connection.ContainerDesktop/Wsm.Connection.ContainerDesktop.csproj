@@ -36,6 +36,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Wsm.Tests" />
+    <!-- The CLI viewers (desktop-view) map the frame source through the same shared
+         helpers (SharedSectionSource / SectionPassthrough) the providers negotiate. -->
+    <InternalsVisibleTo Include="wsm" />
   </ItemGroup>
 
 </Project>

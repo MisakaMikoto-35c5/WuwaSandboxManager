@@ -27,6 +27,13 @@ public static class ContainerDesktopPaths
     /// <summary>The logon hook that starts the read side inside the container's session.</summary>
     public const string WrapCommand = @"C:\wsm\wsm-winlogon-wrap.cmd";
 
+    /// <summary>
+    /// The persistent shell (<c>Winlogon\Shell</c>) that runs the read side in a restart
+    /// loop. A plain <c>cmd.exe</c> exits on EOF and tears the console session down with
+    /// it, so the shell must be something that never exits on its own.
+    /// </summary>
+    public const string ShellCommand = @"C:\wsm\wsm-shell.cmd";
+
     /// <summary>The window-mirror read side.</summary>
     public const string ReadAgent = @"C:\wsm\wsm-desktop-read.ps1";
 
@@ -38,6 +45,12 @@ public static class ContainerDesktopPaths
 
     /// <summary>Name of the marker file that makes a running read side or agent exit.</summary>
     public const string StopFileName = "agent-stop.txt";
+
+    /// <summary>
+    /// Name of the mode file the provider writes into the agent directory before the
+    /// agent starts: <c>pagefile</c> or <c>file</c> (absent = <c>file</c>).
+    /// </summary>
+    public const string ModeFileName = "shm-mode.txt";
 
     /// <summary>The image whose execution the logon hook rides on.</summary>
     public const string WinlogonImage = "winlogon.exe";

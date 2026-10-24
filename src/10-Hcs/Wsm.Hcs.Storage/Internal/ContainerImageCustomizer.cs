@@ -297,13 +297,9 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
                     $"Cannot open or create '{WinlogonSubKey}' in '{hiveFile}'.", 0);
 
             // All writes go through reg.exe (see EnableWindowMirror for why the managed
-            // write is refused). ForceAutoLogon on every pass: without it winlogon can
-            // stay at LogonUI after the first try, and in a container nobody can type.
-            WriteWithRegExe(hive.MountName, WinlogonSubKey, ShellValue, ContainerDesktopPaths.ShellCommand);
-            WriteWithRegExe(hive.MountName, WinlogonSubKey, AutoAdminLogonValue, "1");
-            WriteWithRegExe(hive.MountName, WinlogonSubKey, DefaultUserNameValue, options.UserName);
-            WriteWithRegExe(hive.MountName, WinlogonSubKey, DefaultPasswordValue, options.Password);
-            WriteWithRegExe(hive.MountName, WinlogonSubKey, ForceAutoLogonValue, "1");
+            // write is refused).
+            WriteDesktopLogon(options, (name, value, type) =>
+                WriteWithRegExe(hive.MountName, WinlogonSubKey, name, value, type));
 
             // No one can press Ctrl+Alt+Del inside a container: keep LogonUI from ever
             // gating the console session behind a secure-attention screen.
@@ -324,6 +320,21 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
 
         return new ContainerImageDesktopSessionPrep(
             session, hiveFile, ContainerDesktopPaths.ShellCommand, options.UserName, payloadPaths);
+    }
+
+    /// <summary>Writes the Winlogon values shared by the image patch and its regression tests.</summary>
+    internal static void WriteDesktopLogon(
+        DesktopSessionOptions options, Action<string, string, string> write)
+    {
+        write(ShellValue, ContainerDesktopPaths.ShellCommand, "REG_SZ");
+        write(AutoAdminLogonValue, "1", "REG_SZ");
+        write(DefaultUserNameValue, options.UserName, "REG_SZ");
+        write(DefaultPasswordValue, options.Password, "REG_SZ");
+        write(ForceAutoLogonValue, "1", "REG_SZ");
+
+        // A string zero left in an image suppresses auto-logon entirely; keep retrying
+        // the baked credentials instead, including the scratch's second boot.
+        write("AutoLogonCount", "99", "REG_SZ");
     }
 
     /// <summary>

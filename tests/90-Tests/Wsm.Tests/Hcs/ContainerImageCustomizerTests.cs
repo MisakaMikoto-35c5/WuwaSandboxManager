@@ -131,6 +131,24 @@ public sealed class ContainerImageCustomizerTests : IDisposable
     }
 
     [Fact]
+    public void Desktop_session_enables_autologon_for_every_boot()
+    {
+        var writes = new List<(string Name, string Value, string Type)>();
+
+        ContainerImageCustomizer.WriteDesktopLogon(
+            new DesktopSessionOptions(),
+            (name, value, type) => writes.Add((name, value, type)));
+
+        Assert.Contains(writes, write => write is
+        {
+            Name: "AutoLogonCount",
+            Value: "99",
+            Type: "REG_SZ",
+        });
+        Assert.DoesNotContain(writes, write => write.Name == "AutoLogonCount" && write.Value == "0");
+    }
+
+    [Fact]
     public void EnableDesktopSession_rejects_a_folder_that_is_not_a_prepared_layer()
     {
         Directory.CreateDirectory(_root);

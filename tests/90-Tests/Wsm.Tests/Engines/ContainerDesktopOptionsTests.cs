@@ -68,6 +68,19 @@ public sealed class ContainerDesktopOptionsTests
     }
 
     [Theory]
+    [InlineData(ContainerDesktopKind.FrameBuffer, false, false)]
+    [InlineData(ContainerDesktopKind.FrameBuffer, true, true)]
+    [InlineData(ContainerDesktopKind.WindowMirror, true, true)]
+    [InlineData(ContainerDesktopKind.None, true, true)]
+    public void The_manifest_explicitly_controls_the_interactive_logon(
+        ContainerDesktopKind kind, bool interactiveSession, bool expected)
+    {
+        var plan = new SandboxDesktopPlan { Kind = kind, InteractiveSession = interactiveSession };
+
+        Assert.Equal(expected, new ContainerDesktopOptions().ShouldConfigureFor(plan));
+    }
+
+    [Theory]
     [InlineData("1")]
     [InlineData("true")]
     [InlineData("TRUE")]

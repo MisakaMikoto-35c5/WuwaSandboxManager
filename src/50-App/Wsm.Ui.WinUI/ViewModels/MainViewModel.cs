@@ -252,6 +252,8 @@ public sealed partial class MainViewModel : ObservableObject
                     ? new SandboxDesktopPlan
                     {
                         Kind = NewDesktopKindOption?.Value ?? ContainerDesktopKind.FrameBuffer,
+                        InteractiveSession = NewDesktopKindOption?.Value is
+                            ContainerDesktopKind.FrameBuffer or ContainerDesktopKind.WindowMirror,
                         PresentToInteractiveSession = NewDesktopPresent,
                     }
                     : SandboxDesktopPlan.Default,

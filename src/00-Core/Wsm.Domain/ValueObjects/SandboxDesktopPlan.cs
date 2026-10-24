@@ -15,6 +15,12 @@ public sealed record SandboxDesktopPlan
     public ContainerDesktopKind Kind { get; init; } = ContainerDesktopKind.FrameBuffer;
 
     /// <summary>
+    /// Configure the image's interactive console logon and persistent shell. Off by
+    /// default so existing headless containers keep their startup and account behavior.
+    /// </summary>
+    public bool InteractiveSession { get; init; }
+
+    /// <summary>
     /// Explicit provider id (e.g. <c>window-mirror</c>), which takes precedence over
     /// <see cref="Kind"/>. This is the seam that keeps providers replaceable: a
     /// recipe can name a provider the core does not know about yet.

@@ -15,13 +15,11 @@ namespace Wsm.Engine.WindowsContainer;
 /// (<see cref="Wsm.Hcs.Storage.IContainerImageCustomizer.EnableDesktopSession"/>).
 /// </para>
 /// <para>
-/// <b>Be aware there is no way to see that desktop.</b> RDP is not usable inside a
-/// process-isolated container: <c>termsrv</c> refuses to create the RDP listener
-/// when it detects a container (<c>WTSIsServerContainer</c> → "TS in container and
-/// so Remote Connection is not allow"), and every registry knob that was tried
-/// failed. See <c>docs/investigation/13-container-desktop-and-rdp.md</c>. These
-/// options only pay off once a viewer exists (an in-session capture agent, or a
-/// Hyper-V-isolated container, which is effectively a VM).
+/// RDP is not usable inside a process-isolated container: <c>termsrv</c> refuses
+/// to create its listener when it detects a container. These options configure the
+/// interactive logon used by the in-session capture agent; the frame-buffer and
+/// window-mirror providers present those pixels in the user's console session.
+/// See <c>docs/investigation/13-container-desktop-and-rdp.md</c>.
 /// </para>
 /// </summary>
 public sealed class ContainerDesktopOptions
@@ -75,6 +73,10 @@ public sealed class ContainerDesktopOptions
 
     /// <summary>True when the desktop session should be configured (option or env var).</summary>
     internal bool ShouldConfigure => Enabled || IsTruthy(Environment.GetEnvironmentVariable(EnableVariable));
+
+    /// <summary>True when the global switch or this sandbox's manifest requests interactive logon.</summary>
+    internal bool ShouldConfigureFor(Wsm.Domain.ValueObjects.SandboxDesktopPlan desktop)
+        => ShouldConfigure || desktop.InteractiveSession;
 
     /// <summary>True when the experimental RDP attempt should run (option or env var).</summary>
     internal bool ShouldAttemptTcpRdp =>

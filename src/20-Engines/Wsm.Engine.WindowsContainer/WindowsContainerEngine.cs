@@ -283,7 +283,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
 
         // Opt-in desktop session (shell, auto-logon) and the experimental RDP
         // attempt. Also best effort: the container stays usable without either.
-        if (_options.Value.Desktop.ShouldConfigure)
+        if (_options.Value.Desktop.ShouldConfigureFor(recipe.Desktop))
         {
             await ConfigureDesktopAsync(id, _options.Value.Desktop, cancellationToken);
 

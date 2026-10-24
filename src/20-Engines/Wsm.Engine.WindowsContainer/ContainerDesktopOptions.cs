@@ -11,6 +11,8 @@ namespace Wsm.Engine.WindowsContainer;
 /// <c>Session Manager\NumberOfInitialSessions=2</c>, so <c>smss.exe</c> creates
 /// the console session and <c>winlogon.exe</c>/<c>LogonUI.exe</c> start. This
 /// type then decides what happens <i>after</i> a logon (the shell, auto-logon).
+/// The one-command image patch that does both sides is <c>wsm image session</c>
+/// (<see cref="Wsm.Hcs.Storage.IContainerImageCustomizer.EnableDesktopSession"/>).
 /// </para>
 /// <para>
 /// <b>Be aware there is no way to see that desktop.</b> RDP is not usable inside a
@@ -34,21 +36,26 @@ public sealed class ContainerDesktopOptions
     public bool Enabled { get; set; }
 
     /// <summary>The account auto-logon signs in as (containers' built-in admin).</summary>
-    public string UserName { get; set; } = "ContainerAdministrator";
+    public string UserName { get; set; } = Wsm.Hcs.Storage.ContainerDesktopSessionDefaults.DefaultUserName;
 
     /// <summary>
-    /// Password for auto-logon. Without one no auto-logon is configured and the
-    /// console session stays on the logon screen — which is itself a desktop
-    /// (<c>LogonUI</c>), just not a logged-in one.
+    /// Password for auto-logon. It must match the <c>DefaultPassword</c> baked into the
+    /// image (the engine sets it on the account with <c>net user</c> at start, so the
+    /// two agree). When desktop is enabled and no password is configured, the shared
+    /// default (<see cref="Wsm.Hcs.Storage.ContainerDesktopSessionDefaults.DefaultPassword"/>)
+    /// is used; without any password no auto-logon is configured and the console session
+    /// stays on the logon screen — which is itself a desktop (<c>LogonUI</c>), just not a
+    /// logged-in one.
     /// </summary>
     public string? Password { get; set; }
 
     /// <summary>
     /// The shell <c>winlogon</c> starts after a logon. The Windows Server
-    /// container images ship no <c>explorer.exe</c>, so the default is the shell
-    /// that is actually present.
+    /// container images ship no <c>explorer.exe</c>, and a plain <c>cmd.exe</c> exits
+    /// on EOF and tears the console session down with it - so the default is the
+    /// persistent WSM shell, which runs the window-mirror read side in a restart loop.
     /// </summary>
-    public string Shell { get; set; } = "cmd.exe";
+    public string Shell { get; set; } = Wsm.Domain.ValueObjects.ContainerDesktopPaths.ShellCommand;
 
     /// <summary>
     /// Whether to also attempt the RDP listener (<c>RDP-Tcp</c> on 3389).

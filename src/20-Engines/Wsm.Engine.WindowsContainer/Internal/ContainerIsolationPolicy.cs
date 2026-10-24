@@ -50,11 +50,24 @@ internal sealed class RegistryHostOsInfoProvider : IHostOsInfoProvider, ISinglet
     public HostOsInfo Read() => HostOsInfo.Read();
 }
 
+/// <summary>Seam for tests to supply imported images without touching the filesystem.</summary>
+internal interface IContainerImageCatalog
+{
+    IReadOnlyList<ContainerImageCandidate> FindCandidates();
+}
+
+/// <summary>Scans the default and legacy image roots on disk.</summary>
+internal sealed class FileSystemContainerImageCatalog : IContainerImageCatalog, ISingletonDependency
+{
+    public IReadOnlyList<ContainerImageCandidate> FindCandidates() => ContainerImagePaths.FindImportedImages();
+}
+
 /// <summary>
 /// Default <see cref="IContainerIsolationPolicy"/>. Resolves the image (engine
-/// option, then the <c>WSM_CONTAINER_BASE_IMAGE</c> override, then the newest
-/// Windows Sandbox image layer), reads its build/SKU (<see cref="ContainerImageMetadata"/>)
-/// and applies Microsoft's compatibility rule.
+/// option, then the <c>WSM_CONTAINER_BASE_IMAGE</c> override, then a compatible
+/// imported image, then the newest Windows Sandbox image layer), reads its
+/// build/SKU (<see cref="ContainerImageMetadata"/>) and applies Microsoft's
+/// compatibility rule.
 /// </summary>
 [ExposeServices(typeof(IContainerIsolationPolicy))]
 internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISingletonDependency
@@ -65,6 +78,7 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
     private readonly IOptions<WindowsContainerEngineOptions> _options;
     private readonly IHcsHostLayout _layout;
     private readonly IHostOsInfoProvider _host;
+    private readonly IContainerImageCatalog _images;
     private readonly ILogger<ContainerIsolationPolicy> _logger;
     private readonly object _gate = new();
 
@@ -74,11 +88,13 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
         IOptions<WindowsContainerEngineOptions> options,
         IHcsHostLayout layout,
         IHostOsInfoProvider host,
+        IContainerImageCatalog images,
         ILogger<ContainerIsolationPolicy> logger)
     {
         _options = options;
         _layout = layout;
         _host = host;
+        _images = images;
         _logger = logger;
     }
 
@@ -101,7 +117,7 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
     private ContainerIsolationSupport Compute()
     {
         var host = _host.Read();
-        var imagePath = ResolveImagePath();
+        var imagePath = ResolveImagePath(host);
 
         if (string.IsNullOrWhiteSpace(imagePath))
         {
@@ -114,31 +130,35 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
             return Unsupported(host, "Container.Reason.UnknownImage", imagePath);
         }
 
-        var imageBuild = metadata.Build;
-
-        // 1. An exact build match is always allowed.
-        if (imageBuild == host.Build)
+        if (IsCompatible(host, metadata))
         {
-            return Supported(host, "Container.Reason.SupportedExact", imagePath, metadata);
-        }
-
-        // 2. Windows 11 may run a Windows Server 2022/2025 image despite the mismatch.
-        if (host.IsWindows11Client
-            && metadata.IsServer
-            && imageBuild >= HostOsInfo.MinimumServerBuild
-            && imageBuild <= host.Build)
-        {
-            return Supported(host, "Container.Reason.SupportedServer", imagePath, metadata);
+            var reason = metadata.Build == host.Build
+                ? "Container.Reason.SupportedExact"
+                : "Container.Reason.SupportedServer";
+            return Supported(host, reason, imagePath, metadata);
         }
 
         return Unsupported(host, "Container.Reason.BuildMismatch", imagePath, metadata);
     }
 
     /// <summary>
-    /// The image layer the engine would use: the configured option, then the
-    /// environment override, then the newest Windows Sandbox image layer.
+    /// Microsoft's compatibility rule: an exact build match is always allowed,
+    /// and a Windows 11 host additionally accepts a Windows Server 2022+ image
+    /// whose build does not exceed the host's.
     /// </summary>
-    private string? ResolveImagePath()
+    private static bool IsCompatible(HostOsInfo host, ContainerImageMetadata metadata)
+        => metadata.Build == host.Build
+           || (host.IsWindows11Client
+               && metadata.IsServer
+               && metadata.Build >= HostOsInfo.MinimumServerBuild
+               && metadata.Build <= host.Build);
+
+    /// <summary>
+    /// The image layer the engine would use: the configured option, then the
+    /// environment override, then the first compatible image the user already
+    /// imported, then the newest Windows Sandbox image layer.
+    /// </summary>
+    private string? ResolveImagePath(HostOsInfo host)
     {
         var configured = _options.Value.BaseImageLayerPath;
         if (string.IsNullOrWhiteSpace(configured))
@@ -149,6 +169,16 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
         if (!string.IsNullOrWhiteSpace(configured))
         {
             return configured;
+        }
+
+        // An image the user imported by hand wins over the Windows Sandbox
+        // client layer, which only helps on an exact build match.
+        foreach (var candidate in _images.FindCandidates())
+        {
+            if (IsCompatible(host, candidate.Metadata))
+            {
+                return candidate.Path;
+            }
         }
 
         var layer = _layout.ResolveBaseImageLayer();

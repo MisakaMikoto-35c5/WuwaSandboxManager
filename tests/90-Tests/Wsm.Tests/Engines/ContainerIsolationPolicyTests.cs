@@ -132,6 +132,48 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
         Assert.Equal(expected, ContainerImageImporter.IsServerRepository(repository));
     }
 
+    [Fact]
+    public void A_compatible_imported_image_is_picked_when_nothing_is_configured()
+    {
+        var image = CreateImage(build: 20348, isServer: true);
+        var catalog = new StubCatalog([Candidate(image)]);
+
+        var result = Evaluate(hostBuild: 26300, isWindows11Client: true, image: null, images: catalog);
+
+        Assert.True(result.IsSupported);
+        Assert.Equal("Container.Reason.SupportedServer", result.ReasonKey);
+        Assert.Equal(image, result.ImagePath);
+    }
+
+    [Fact]
+    public void An_incompatible_imported_image_falls_through_to_the_sandbox_layer_probe()
+    {
+        var image = CreateImage(build: 26100, isServer: false);
+        var catalog = new StubCatalog([Candidate(image)]);
+
+        var result = Evaluate(hostBuild: 26300, isWindows11Client: true, image: null, images: catalog);
+
+        Assert.False(result.IsSupported);
+        Assert.Equal("Container.Reason.NoImage", result.ReasonKey);
+    }
+
+    [Fact]
+    public void A_configured_image_wins_over_imported_candidates()
+    {
+        var configured = CreateImage(build: 26300, isServer: false);
+        var imported = CreateImage(build: 20348, isServer: true);
+        var catalog = new StubCatalog([Candidate(imported)]);
+
+        var result = Evaluate(hostBuild: 26300, isWindows11Client: true, image: configured, images: catalog);
+
+        Assert.True(result.IsSupported);
+        Assert.Equal("Container.Reason.SupportedExact", result.ReasonKey);
+        Assert.Equal(configured, result.ImagePath);
+    }
+
+    private static ContainerImageCandidate Candidate(string image)
+        => new(image, ContainerImageMetadata.TryRead(image)!);
+
     private string CreateImage(int build, bool isServer)
     {
         var path = Path.Combine(_root, $"img-{build}-{isServer}");
@@ -140,7 +182,8 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
         return path;
     }
 
-    private ContainerIsolationSupport Evaluate(int hostBuild, bool isWindows11Client, string? image)
+    private ContainerIsolationSupport Evaluate(
+        int hostBuild, bool isWindows11Client, string? image, IContainerImageCatalog? images = null)
     {
         Environment.SetEnvironmentVariable(WindowsContainerEngineOptions.ImageOverrideVariable, null);
         var options = Options.Create(new WindowsContainerEngineOptions { BaseImageLayerPath = image });
@@ -148,6 +191,7 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
             options,
             new NullLayout(),
             new StubHost(hostBuild, isWindows11Client),
+            images ?? new EmptyCatalog(),
             NullLogger<ContainerIsolationPolicy>.Instance);
 
         return policy.Evaluate();
@@ -156,6 +200,16 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
     private sealed class StubHost(int build, bool isWindows11Client) : IHostOsInfoProvider
     {
         public HostOsInfo Read() => new(build, isWindows11Client);
+    }
+
+    private sealed class EmptyCatalog : IContainerImageCatalog
+    {
+        public IReadOnlyList<ContainerImageCandidate> FindCandidates() => [];
+    }
+
+    private sealed class StubCatalog(IReadOnlyList<ContainerImageCandidate> candidates) : IContainerImageCatalog
+    {
+        public IReadOnlyList<ContainerImageCandidate> FindCandidates() => candidates;
     }
 
     private sealed class NullLayout : IHcsHostLayout

@@ -25,13 +25,48 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
     private const string DefaultReference = "mcr.microsoft.com/windows/servercore:ltsc2022";
 
     /// <summary>
-    /// The Windows Server images offered for process isolation. Both are exempt
-    /// from HCS's host/image build-match rule on a Windows 11 host.
+    /// The Windows Server images offered for process isolation. All are exempt
+    /// from HCS's host/image build-match rule on a Windows 11 host. Sizes are
+    /// informational only. Note: the importer downloads the base OS layer only
+    /// (see the class comment); that shortcut is proven for the Server Core
+    /// images, while the full <c>windows/server</c> images share the same
+    /// manifest shape and are expected to behave the same, but have not been
+    /// boot-verified yet.
     /// </summary>
-    private static readonly string[] Suggested =
+    internal static readonly IReadOnlyList<ContainerImageInfo> Catalog =
     [
-        "mcr.microsoft.com/windows/servercore:ltsc2022",
-        "mcr.microsoft.com/windows/servercore:ltsc2025",
+        new ContainerImageInfo
+        {
+            Id = "windows-server-ltsc2025",
+            DisplayName = "Windows Server 2025 (full)",
+            Reference = "mcr.microsoft.com/windows/server:ltsc2025",
+            ApproxSizeGB = 5.5,
+            DescriptionKey = "ContainerImage.Desc.WindowsServer2025",
+        },
+        new ContainerImageInfo
+        {
+            Id = "windows-server-ltsc2022",
+            DisplayName = "Windows Server 2022 (full)",
+            Reference = "mcr.microsoft.com/windows/server:ltsc2022",
+            ApproxSizeGB = 5.0,
+            DescriptionKey = "ContainerImage.Desc.WindowsServer2022",
+        },
+        new ContainerImageInfo
+        {
+            Id = "windows-servercore-ltsc2025",
+            DisplayName = "Server Core 2025",
+            Reference = "mcr.microsoft.com/windows/servercore:ltsc2025",
+            ApproxSizeGB = 1.5,
+            DescriptionKey = "ContainerImage.Desc.ServerCore2025",
+        },
+        new ContainerImageInfo
+        {
+            Id = "windows-servercore-ltsc2022",
+            DisplayName = "Server Core 2022",
+            Reference = "mcr.microsoft.com/windows/servercore:ltsc2022",
+            ApproxSizeGB = 1.5,
+            DescriptionKey = "ContainerImage.Desc.ServerCore2022",
+        },
     ];
 
     private static readonly string[] ManifestListAccept =
@@ -50,7 +85,9 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         _logger = logger;
     }
 
-    public IReadOnlyList<string> SuggestedImages => Suggested;
+    public IReadOnlyList<string> SuggestedImages => Catalog.Select(image => image.Reference).ToArray();
+
+    public IReadOnlyList<ContainerImageInfo> ImageCatalog => Catalog;
 
     public async Task<string> ImportBaseLayerAsync(
         string reference,
@@ -69,10 +106,34 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
 
         Directory.CreateDirectory(destination);
 
+        // The folder was empty (or absent) at entry, so everything in it from
+        // here on is ours: a cancelled or failed import removes it again rather
+        // than leaving a partial layer that a retry would refuse.
+        try
+        {
+            await ImportCoreAsync(image, destination, progress, ct);
+        }
+        catch
+        {
+            TryDeleteDirectory(destination);
+            throw;
+        }
+
+        _logger.LogInformation("Base layer for {Image} is ready at '{Destination}'.", image, destination);
+        progress?.Report(new ContainerImageImportProgress(ContainerImageImportStage.Done, 1));
+        return destination;
+    }
+
+    private async Task ImportCoreAsync(
+        ImageReference image,
+        string destination,
+        IProgress<ContainerImageImportProgress>? progress,
+        CancellationToken ct)
+    {
         using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
 
         // 1. Resolve the platform-specific manifest.
-        progress?.Report(new ContainerImageImportProgress("Resolving the image manifest"));
+        progress?.Report(new ContainerImageImportProgress(ContainerImageImportStage.ResolvingManifest));
         var manifest = await GetManifestAsync(http, image, ct);
         var (digest, size) = manifest.Layers.Count > 0
             ? (manifest.Layers[0].Digest, manifest.Layers[0].Size)
@@ -84,16 +145,16 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
 
         // 2. Download the base layer blob next to the destination.
         var tarball = destination.TrimEnd('\\', '/') + ".layer.tgz";
-        await DownloadAsync(http, image, digest, tarball, progress, ct);
-
         try
         {
+            await DownloadAsync(http, image, digest, tarball, progress, ct);
+
             // 3. Extract (Files/, UtilityVM/, ...) with the in-box tar.
-            progress?.Report(new ContainerImageImportProgress("Extracting the layer"));
-            ExtractWithTar(tarball, destination);
+            progress?.Report(new ContainerImageImportProgress(ContainerImageImportStage.Extracting));
+            await ExtractWithTarAsync(tarball, destination, ct);
 
             // 4. Prepare it as a WCOW base layer (Hives links + blank VHDX).
-            progress?.Report(new ContainerImageImportProgress("Preparing the layer"));
+            progress?.Report(new ContainerImageImportProgress(ContainerImageImportStage.Preparing));
             _layers.ProcessBaseImage(destination);
 
             // 5. Record build/SKU so the isolation policy can evaluate it.
@@ -112,17 +173,11 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         {
             TryDelete(tarball);
         }
-
-        _logger.LogInformation("Base layer for {Image} is ready at '{Destination}'.", image, destination);
-        progress?.Report(new ContainerImageImportProgress("Done", 1));
-        return destination;
     }
 
     /// <summary>Server images are the ones HCS exempts from the build-match rule.</summary>
     internal static bool IsServerRepository(string repository)
-        => repository.Contains("servercore", StringComparison.OrdinalIgnoreCase)
-           || repository.Contains("nanoserver", StringComparison.OrdinalIgnoreCase)
-           || repository.Contains("windows/server", StringComparison.OrdinalIgnoreCase);
+        => ContainerImagePaths.IsServerImageName(repository);
 
     private static async Task<ImageManifest> GetManifestAsync(HttpClient http, ImageReference image, CancellationToken ct)
     {
@@ -212,12 +267,14 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
             await target.WriteAsync(buffer.AsMemory(0, read), ct);
             copied += read;
             progress?.Report(new ContainerImageImportProgress(
-                "Downloading the base layer",
-                total is > 0 ? (double)copied / total.Value : null));
+                ContainerImageImportStage.Downloading,
+                total is > 0 ? (double)copied / total.Value : null,
+                BytesReceived: copied,
+                TotalBytes: total is > 0 ? total.Value : null));
         }
     }
 
-    private static void ExtractWithTar(string tarball, string destination)
+    private static async Task ExtractWithTarAsync(string tarball, string destination, CancellationToken ct)
     {
         var startInfo = new ProcessStartInfo("tar.exe")
         {
@@ -238,10 +295,27 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         // keep its diagnosis: a bare "tar.exe exited with 1" is unusable when a
         // layer contains an entry Windows will not create (long paths, reserved
         // names, ...).
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        var details = (stderr.GetAwaiter().GetResult() + Environment.NewLine + stdout.GetAwaiter().GetResult()).Trim();
+        var stdout = process.StandardOutput.ReadToEndAsync(ct);
+        var stderr = process.StandardError.ReadToEndAsync(ct);
+        try
+        {
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Best effort; the process may have exited on its own.
+            }
+
+            throw;
+        }
+
+        var details = ((await stderr) + Environment.NewLine + (await stdout)).Trim();
 
         if (process.ExitCode != 0)
         {
@@ -267,6 +341,22 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         catch
         {
             // Best effort.
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort: a leftover partial layer is reported by the install
+            // state probe, and the user can delete it from the GUI.
         }
     }
 

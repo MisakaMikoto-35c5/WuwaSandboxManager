@@ -11,6 +11,7 @@ using Wsm.Connection.ContainerDesktop;
 using Wsm.Engines.Abstractions;
 using Wsm.Host.Elevation;
 using Wsm.Hcs.Storage;
+using Wsm.Hcs.Layout;
 using Wsm.Host.Policy;
 using Wsm.Localization;
 using Wsm.Persistence;
@@ -37,6 +38,8 @@ public sealed class CliApplication
     private readonly IWsmServiceClient? _serviceClient;
     private readonly IContainerImageImporter? _imageImporter;
     private readonly IContainerImageCustomizer? _imageCustomizer;
+    private readonly IWcowLayerService? _wcowLayers;
+    private readonly IHcsHostLayout? _hcsLayout;
 
     /// <summary>
     /// Container desktop channel (frames + input for a process-isolated
@@ -69,6 +72,8 @@ public sealed class CliApplication
         _serviceClient = provider.GetService<IWsmServiceClient>();
         _imageImporter = provider.GetService<IContainerImageImporter>();
         _imageCustomizer = provider.GetService<IContainerImageCustomizer>();
+        _wcowLayers = provider.GetService<IWcowLayerService>();
+        _hcsLayout = provider.GetService<IHcsHostLayout>();
         _containerDesktop = provider.GetService<IContainerDesktopHost>();
     }
 
@@ -911,6 +916,8 @@ public sealed class CliApplication
             "import" => await ImageImportAsync(positional, options),
             "desktop" => ImageDesktop(positional),
             "mirror" => ImageMirror(positional, options),
+            "session" => ImageSession(positional, options),
+            "release" => ImageRelease(positional),
             _ => UnknownImageSubcommand(subcommand),
         };
     }
@@ -918,20 +925,34 @@ public sealed class CliApplication
     private static int UnknownImageSubcommand(string subcommand)
     {
         Console.Error.WriteLine($"Unknown 'wsm image' subcommand '{subcommand}'.");
-        Console.Error.WriteLine("Usage: wsm image import <reference> <layerPath> [--desktop]");
+        Console.Error.WriteLine("Usage: wsm image import <reference> [layerPath] [--desktop]");
         Console.Error.WriteLine("       wsm image desktop <layerPath>");
         Console.Error.WriteLine("       wsm image mirror <layerPath>");
+        Console.Error.WriteLine("       wsm image session <layerPath> [--user <u>] [--password <p>] [--no-mirror]");
+        Console.Error.WriteLine("       wsm image release <layerPath>");
         return 2;
     }
 
     private async Task<int> ImageImportAsync(List<string> positional, Dictionary<string, string?> options)
     {
-        if (positional.Count < 3)
+        if (positional.Count < 2)
         {
-            Console.Error.WriteLine("Usage: wsm image import <reference> <layerPath> [--desktop]");
+            Console.Error.WriteLine("Usage: wsm image import <reference> [layerPath] [--desktop]");
             Console.Error.WriteLine(
                 "  e.g. wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 " +
                 @"C:\wsm-images\servercore-ltsc2022 --desktop");
+            Console.Error.WriteLine(
+                "  layerPath defaults to " +
+                @"%LOCALAPPDATA%\WindowsSandboxManager\images\<reference-slug>.");
+            Console.Error.WriteLine("  Suggested images:");
+            if (_imageImporter is not null)
+            {
+                foreach (var image in _imageImporter.ImageCatalog)
+                {
+                    Console.Error.WriteLine($"    {image.Reference,-48} {image.DisplayName} (~{image.ApproxSizeGB:0.#} GB)");
+                }
+            }
+
             return 2;
         }
 
@@ -942,10 +963,40 @@ public sealed class CliApplication
         }
 
         var reference = positional[1];
-        var layerPath = positional[2];
+        var layerPath = positional.Count >= 3
+            ? positional[2]
+            : ContainerImagePaths.GetDefaultLayerPath(reference);
         Console.WriteLine($"Importing the base layer of {reference} into {layerPath} ...");
 
-        var result = await _imageImporter.ImportBaseLayerAsync(reference, layerPath);
+        var lastStage = ContainerImageImportStage.Done;
+        var progress = new Progress<ContainerImageImportProgress>(report =>
+        {
+            if (report.Stage == ContainerImageImportStage.Downloading && report.Fraction is { } fraction)
+            {
+                Console.Write($"\r{report.Message} ... {fraction * 100:F0}%   ");
+            }
+            else if (report.Stage != lastStage)
+            {
+                Console.WriteLine(report.Stage == ContainerImageImportStage.Downloading
+                    ? report.Message
+                    : $"{Environment.NewLine}{report.Message}");
+            }
+
+            lastStage = report.Stage;
+        });
+
+        string result;
+        try
+        {
+            result = await _imageImporter.ImportBaseLayerAsync(reference, layerPath, progress);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine();
+            Console.Error.WriteLine("Import cancelled; the partial download was removed.");
+            return 1;
+        }
+
         Console.WriteLine($"Imported base layer: {result}");
 
         // The flag must be trailing: ParseOptions/Positional let a '--flag' swallow
@@ -987,6 +1038,7 @@ public sealed class CliApplication
             return 1;
         }
 
+        ReleaseImageLocks(layerPath);
         var prep = _imageCustomizer.EnableInteractiveSession(layerPath);
         Console.WriteLine($"Patched hive : {prep.HiveFile}");
         Console.WriteLine($"Control sets : {string.Join(", ", prep.ControlSets)}");
@@ -1019,6 +1071,7 @@ public sealed class CliApplication
             return 1;
         }
 
+        ReleaseImageLocks(positional[1]);
         var prep = _imageCustomizer.EnableWindowMirror(
             positional[1],
             new ContainerImageDesktopOptions(
@@ -1041,6 +1094,93 @@ public sealed class CliApplication
         Console.WriteLine("own session at logon. Restart any container that is already running, then use");
         Console.WriteLine("Desktop.Provider = 'window-mirror' in the sandbox recipe.");
         return 0;
+    }
+
+    /// <summary>
+    /// <c>wsm image session &lt;layerPath&gt;</c>: the one-command desktop unlock - the
+    /// console-session patch, auto-logon with a known password, and the persistent
+    /// <c>wsm-shell.cmd</c> as <c>Winlogon\Shell</c> (which runs the read side in a
+    /// restart loop). The engine sets the same password at container start, so the two
+    /// sides of the auto-logon agree.
+    /// </summary>
+    private int ImageSession(List<string> positional, Dictionary<string, string?> options)
+    {
+        if (positional.Count < 2)
+        {
+            Console.Error.WriteLine("Usage: wsm image session <layerPath> [--user <u>] [--password <p>] [--no-mirror]");
+            return 2;
+        }
+
+        if (_imageCustomizer is null)
+        {
+            Console.Error.WriteLine("The image customizer is not available in this build.");
+            return 1;
+        }
+
+        ReleaseImageLocks(positional[1]);
+        var prep = _imageCustomizer.EnableDesktopSession(
+            positional[1],
+            new DesktopSessionOptions(
+                UserName: options.GetValueOrDefault("user") ?? ContainerDesktopSessionDefaults.DefaultUserName,
+                Password: options.GetValueOrDefault("password") ?? ContainerDesktopSessionDefaults.DefaultPassword,
+                InstallWindowMirrorReadSide: !options.ContainsKey("no-mirror")));
+        Console.WriteLine($"Patched hive : {prep.HiveFile}");
+        Console.WriteLine($"Control sets : {string.Join(", ", prep.Session.ControlSets)}");
+        Console.WriteLine($"Shell        : {prep.Shell}");
+        Console.WriteLine($"Auto logon   : {prep.UserName} (password {(string.IsNullOrEmpty(options.GetValueOrDefault("password")) ? "<default>" : "<given>")})");
+        Console.WriteLine($"Payload      : {string.Join(", ", prep.PayloadFiles)}");
+        Console.WriteLine("Containers from this image now boot a console session, log on automatically and");
+        Console.WriteLine("run the read side as their shell. The engine sets the same password at start;");
+        Console.WriteLine("restart any container that is already running.");
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>wsm image release &lt;layerPath&gt;</c>: unmounts the image layer and every stale
+    /// sandbox scratch layer, which is what keeps the image's hive files locked
+    /// (<c>ERROR_SHARING_VIOLATION</c> on <c>RegLoadKey</c>) after containers that used the
+    /// image were stopped. Layers in use by a running container refuse and stay untouched.
+    /// </summary>
+    private int ImageRelease(List<string> positional)
+    {
+        if (positional.Count < 2)
+        {
+            Console.Error.WriteLine("Usage: wsm image release <layerPath>");
+            return 2;
+        }
+
+        if (_wcowLayers is null)
+        {
+            Console.Error.WriteLine("The WCOW layer service is not available in this build.");
+            return 1;
+        }
+
+        foreach (var line in WcowLayerRelease.ReleaseImageLocks(
+                     _wcowLayers, positional[1], _hcsLayout?.SandboxDataFolder))
+        {
+            Console.WriteLine(line);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Best-effort release of the stale layer mounts that lock an image's hives before the
+    /// patch commands touch them; silent when the layer service is not composed in.
+    /// </summary>
+    private void ReleaseImageLocks(string layerPath)
+    {
+        if (_wcowLayers is null)
+        {
+            return;
+        }
+
+        var lines = WcowLayerRelease.ReleaseImageLocks(_wcowLayers, layerPath, _hcsLayout?.SandboxDataFolder);
+        var released = lines.Count(line => line.EndsWith(": ok", StringComparison.Ordinal));
+        if (released > 0)
+        {
+            Console.WriteLine($"Released {released} stale layer mount(s) that held the image's hives open.");
+        }
     }
 
     /// <summary>True for a bare flag (<c>--name</c>) or an explicit truthy value.</summary>
@@ -1518,6 +1658,13 @@ public sealed class CliApplication
                                               image: the logon hook plus the read side
                                               that runs inside the container's session
                                               (--shell / --logon-user / --logon-password)
+              image session <path>            The one-command desktop unlock: console
+                                              session + auto-logon (known password) +
+                                              the persistent wsm shell that runs the
+                                              read side (--user / --password / --no-mirror)
+              image release <path>            Unmount the image layer and stale sandbox
+                                              scratch layers so the image's registry
+                                              hives can be patched again
               desktop <id>                    Start the container desktop channel the
                                               sandbox recipe asks for (Desktop.Kind or
                                               Desktop.Provider) and present it.

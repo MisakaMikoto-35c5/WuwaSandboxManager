@@ -69,6 +69,36 @@ public interface IContainerImageCustomizer
     /// <returns>What was changed, for logging/telemetry.</returns>
     ContainerImageDesktopPrep EnableWindowMirror(
         string layerPath, ContainerImageDesktopOptions? options = null);
+
+    /// <summary>
+    /// The full <b>desktop session</b> unlock, in one call: the console-session patch
+    /// (<see cref="EnableInteractiveSession"/>), auto-start for <c>TermService</c> and
+    /// <c>SessionEnv</c> in every control set (winlogon's interactive logon is arbitrated
+    /// by the LocalSessionManager inside <c>TermService</c>; the stock images ship it
+    /// disabled, so the logon never completes and the console session is torn down again),
+    /// auto-logon as
+    /// <see cref="DesktopSessionOptions.UserName"/> with a known password
+    /// (<c>AutoAdminLogon</c>/<c>DefaultUserName</c>/<c>DefaultPassword</c>/
+    /// <c>ForceAutoLogon</c> in <c>Winlogon</c>, plus <c>Lsa\LimitBlankPasswordUse = 0</c>
+    /// in every control set), and <c>Winlogon\Shell</c> pointed at
+    /// <c>C:\wsm\wsm-shell.cmd</c> - a wrapper that runs the read side in a restart loop,
+    /// because a shell that exits (plain <c>cmd.exe</c> reads EOF and quits) tears the
+    /// console session down with it.
+    /// <para>
+    /// A known password is required, not optional: auto-logon with a blank password is
+    /// refused, and the logon only completes when the baked-in <c>DefaultPassword</c>
+    /// matches the account's runtime password (the engine sets it with <c>net user</c>
+    /// at container start; both sides default to
+    /// <see cref="ContainerDesktopSessionDefaults.DefaultPassword"/>).
+    /// </para>
+    /// <para>
+    /// Requires elevation; stop any container built from this image first. A container
+    /// that is already running was started before the patch and must be restarted.
+    /// </para>
+    /// </summary>
+    /// <returns>What was changed, for logging/telemetry.</returns>
+    ContainerImageDesktopSessionPrep EnableDesktopSession(
+        string layerPath, DesktopSessionOptions? options = null);
 }
 
 /// <summary>Optional logon settings for <see cref="IContainerImageCustomizer.EnableWindowMirror"/>.</summary>
@@ -101,3 +131,31 @@ public sealed record ContainerImageDesktopPrep(
 /// <param name="HiveFile">The <c>SYSTEM</c> hive that was patched.</param>
 /// <param name="ControlSets">The control sets the value was written to.</param>
 public sealed record ContainerImageSessionPrep(string HiveFile, IReadOnlyList<string> ControlSets);
+
+/// <summary>Optional settings for <see cref="IContainerImageCustomizer.EnableDesktopSession"/>.</summary>
+/// <param name="UserName">The account auto-logon signs in as.</param>
+/// <param name="Password">
+/// That account's password. Must match what the engine sets with <c>net user</c> at
+/// container start, or auto-logon fails and the session stays on LogonUI.
+/// </param>
+/// <param name="InstallWindowMirrorReadSide">
+/// Also install the window-mirror payload (<c>wsm-desktop-read.ps1</c> and its launchers)
+/// into <c>Files\wsm\</c>. The shell payload (<c>wsm-shell.cmd</c>) is always installed.
+/// </param>
+public sealed record DesktopSessionOptions(
+    string UserName = ContainerDesktopSessionDefaults.DefaultUserName,
+    string Password = ContainerDesktopSessionDefaults.DefaultPassword,
+    bool InstallWindowMirrorReadSide = true);
+
+/// <summary>Result of <see cref="IContainerImageCustomizer.EnableDesktopSession"/>.</summary>
+/// <param name="Session">The console-session patch (which hive, which control sets).</param>
+/// <param name="HiveFile">The <c>SOFTWARE</c> hive that received the logon settings.</param>
+/// <param name="Shell">The shell <c>winlogon</c> starts after logon.</param>
+/// <param name="UserName">The account auto-logon signs in as.</param>
+/// <param name="PayloadFiles">Container-side paths of the installed payload files.</param>
+public sealed record ContainerImageDesktopSessionPrep(
+    ContainerImageSessionPrep Session,
+    string HiveFile,
+    string Shell,
+    string UserName,
+    IReadOnlyList<string> PayloadFiles);

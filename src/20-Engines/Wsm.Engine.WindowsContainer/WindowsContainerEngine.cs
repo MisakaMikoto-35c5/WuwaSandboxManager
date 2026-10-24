@@ -286,9 +286,77 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
         if (_options.Value.Desktop.ShouldConfigure)
         {
             await ConfigureDesktopAsync(id, _options.Value.Desktop, cancellationToken);
+
+            // The first boot of a scratch cannot complete auto-logon: winlogon makes
+            // its attempt seconds after smss starts, long before HCS exec can set the
+            // SAM password, fails once and flips AutoAdminLogon to 0 (measured). The
+            // password and every winlogon value live in the scratch layer, so a single
+            // extra boot over the same scratch logs on by itself. The marker keeps the
+            // restart to exactly one per scratch.
+            var marker = Path.Combine(mountPath, "wsm", ".desktop-password-armed");
+            if (!File.Exists(marker))
+            {
+                await File.WriteAllTextAsync(
+                    marker, DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
+                _logger.LogInformation(
+                    "Restarting container {SandboxId} once: the console session's auto-logon " +
+                    "needs the account password persisted in the scratch layer before winlogon " +
+                    "makes its attempt.",
+                    id);
+
+                _containers.TryRemove(key, out var firstBoot);
+                try
+                {
+                    firstBoot?.Handle.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Disposing the first-boot handle for container {SandboxId} failed.", key);
+                }
+
+                // Closing the last handle asks HCS to tear the compute system down,
+                // but the teardown is asynchronous: an immediate re-create fails with
+                // "a compute system with that id already exists" (measured). Terminate
+                // explicitly, then poll until the system is really gone.
+                _hcs.Terminate(key);
+                await WaitForComputeSystemGoneAsync(id, key, cancellationToken);
+
+                system = _hcs.Create(key, json);
+                _hcs.Start(key);
+                RememberContainer(key, system, runtime, scratchPath, baseLayers, namespaceId, endpointId, adopted: false);
+                await EnsureContainerServicesAsync(id, _options.Value.RequiredServices, cancellationToken);
+            }
         }
 
         return runtime;
+    }
+
+    /// <summary>
+    /// Polls HCS until the compute system no longer exists. Termination after the
+    /// last handle closes is asynchronous; recreating the same id too soon fails
+    /// with "already exists". Bounded so a stuck system cannot hang the start.
+    /// </summary>
+    private async Task WaitForComputeSystemGoneAsync(
+        SandboxInstanceId id, string key, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 60; // 60 x 500ms = 30s
+        for (var attempt = 1; ; attempt++)
+        {
+            if (_hcs.Get(key) is null)
+            {
+                return;
+            }
+
+            if (attempt >= maxAttempts)
+            {
+                _logger.LogWarning(
+                    "Container {SandboxId} is still listed by HCS 30s after termination; recreating it may fail.",
+                    id);
+                return;
+            }
+
+            await Task.Delay(500, cancellationToken);
+        }
     }
 
     public async Task StopAsync(SandboxInstanceId id, CancellationToken cancellationToken = default)
@@ -418,7 +486,8 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
     /// <summary>
     /// The read-only image layers the container is built from, base first. Uses
     /// <see cref="WindowsContainerEngineOptions.BaseImageLayerPath"/> when
-    /// configured, otherwise the newest registered Windows Sandbox image layer.
+    /// configured, otherwise the image the isolation policy selected (including
+    /// imported ones), otherwise the newest registered Windows Sandbox image layer.
     /// </summary>
     private IReadOnlyList<string> ResolveBaseLayers()
     {
@@ -442,6 +511,19 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             }
 
             return [root];
+        }
+
+        // The isolation policy also knows the images the user imported by hand
+        // (default root or the legacy import folder); a supported pick wins over
+        // the Windows Sandbox client layer below.
+        var support = _isolation.Evaluate();
+        if (support.IsSupported && !string.IsNullOrWhiteSpace(support.ImagePath))
+        {
+            var imported = Path.GetFullPath(support.ImagePath);
+            if (Directory.Exists(Path.Combine(imported, "Files")))
+            {
+                return [imported];
+            }
         }
 
         var layer = _layout.ResolveBaseImageLayer();
@@ -676,22 +758,46 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
     {
         const string winlogon = @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
 
+        // An explicitly enabled desktop with no configured password uses the shared default
+        // that 'wsm image session' baked into the image: auto-logon only completes when the
+        // two match (measured, doc section 11.7). The env-var switch counts the same as the
+        // option (ShouldConfigure); without any desktop request, no password means no
+        // auto-logon, exactly as before.
+        var password = desktop.Password;
+        if (string.IsNullOrEmpty(password) && desktop.ShouldConfigure)
+        {
+            password = ContainerDesktopSessionDefaults.DefaultPassword;
+        }
+
         _logger.LogInformation(
             "Configuring a desktop session in container {SandboxId} (shell={Shell}, autoLogon={AutoLogon}).",
-            id, desktop.Shell, !string.IsNullOrEmpty(desktop.Password));
+            id, desktop.Shell, !string.IsNullOrEmpty(password));
 
         // The container images ship no explorer.exe, so winlogon's default shell
         // cannot start; point it at something that is actually in the image.
         await RunInContainerAsync(
             id, RegAdd(winlogon, "Shell", desktop.Shell), cancellationToken);
 
-        if (!string.IsNullOrEmpty(desktop.Password))
+        if (!string.IsNullOrEmpty(password))
         {
+            // The image may carry a DefaultPassword from 'wsm image session'; the account's
+            // runtime password must equal it or the auto-logon fails (the password baked into
+            // the image cannot log on an account that does not have it). Set it first, then
+            // the winlogon values. /ACTIVE:YES is belt and braces: the image's Administrator
+            // can ship disabled.
+            await RunInContainerAsync(
+                id, $"net.exe user \"{desktop.UserName}\" \"{password}\"", cancellationToken);
+            await RunInContainerAsync(
+                id, $"net.exe user \"{desktop.UserName}\" /ACTIVE:YES", cancellationToken);
+
             await RunInContainerAsync(id, RegAdd(winlogon, "AutoAdminLogon", "1"), cancellationToken);
             await RunInContainerAsync(
                 id, RegAdd(winlogon, "DefaultUserName", desktop.UserName), cancellationToken);
             await RunInContainerAsync(
-                id, RegAdd(winlogon, "DefaultPassword", desktop.Password), cancellationToken);
+                id, RegAdd(winlogon, "DefaultPassword", password), cancellationToken);
+            // Without ForceAutoLogon winlogon can stay at LogonUI after the first attempt,
+            // and in a container there is nobody to type credentials.
+            await RunInContainerAsync(id, RegAdd(winlogon, "ForceAutoLogon", "1"), cancellationToken);
         }
         else
         {

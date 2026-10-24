@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Wsm.Domain.Exceptions;
+using Wsm.Domain.ValueObjects;
 using Wsm.Hcs.Storage;
 using Wsm.Hcs.Storage.Internal;
 using Xunit;
@@ -104,6 +105,37 @@ public sealed class ContainerImageCustomizerTests : IDisposable
     public void Loading_a_missing_hive_throws_before_touching_the_registry()
     {
         Assert.Throws<SandboxValidationException>(() => OfflineRegistryHive.Load(Path.Combine(_root, "SYSTEM")));
+    }
+
+    /// <summary>
+    /// The desktop-session defaults are the contract between the offline image patch and
+    /// the engine's start-time 'net user': the auto-logon only completes when both sides
+    /// configure the same account with the same password.
+    /// </summary>
+    [Fact]
+    public void Desktop_session_options_default_to_the_shared_account_and_password()
+    {
+        var options = new DesktopSessionOptions();
+
+        Assert.Equal(ContainerDesktopSessionDefaults.DefaultUserName, options.UserName);
+        Assert.Equal(ContainerDesktopSessionDefaults.DefaultPassword, options.Password);
+        Assert.True(options.InstallWindowMirrorReadSide);
+    }
+
+    [Fact]
+    public void The_desktop_shell_is_the_persistent_payload_not_cmd()
+    {
+        // A plain cmd.exe as Winlogon\Shell exits on EOF and tears the console session
+        // down with it (measured); the shell payload must be the restart-loop wrapper.
+        Assert.Equal(@"C:\wsm\wsm-shell.cmd", ContainerDesktopPaths.ShellCommand);
+    }
+
+    [Fact]
+    public void EnableDesktopSession_rejects_a_folder_that_is_not_a_prepared_layer()
+    {
+        Directory.CreateDirectory(_root);
+
+        Assert.Throws<SandboxValidationException>(() => Customizer.EnableDesktopSession(_root));
     }
 
     /// <summary>Creates a (placeholder, non-hive) file below the temp layer root.</summary>

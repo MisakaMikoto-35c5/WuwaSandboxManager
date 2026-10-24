@@ -31,6 +31,7 @@
     <EmbeddedResource Include="Images\wsm-winlogon-wrap.cmd" />
     <EmbeddedResource Include="Images\wsm-desktop-read.cmd" />
     <EmbeddedResource Include="Images\wsm-desktop-read.ps1" />
+    <EmbeddedResource Include="Images\wsm-shell.cmd" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,6 @@
+using Wsm.Domain.ValueObjects;
 using Wsm.Engine.WindowsContainer;
+using Wsm.Hcs.Storage;
 using Xunit;
 
 namespace Wsm.Tests.Engines;
@@ -31,16 +33,32 @@ public sealed class ContainerDesktopOptionsTests
     }
 
     /// <summary>
-    /// explorer.exe is absent from the Windows Server container images, so
-    /// winlogon's default shell could never start.
+    /// explorer.exe is absent from the Windows Server container images, and a plain
+    /// cmd.exe exits on EOF (tearing the console session down with it) - so the default
+    /// shell is the persistent WSM shell payload the image customization installs.
     /// </summary>
     [Fact]
-    public void The_default_shell_is_present_in_the_images()
+    public void The_default_shell_is_the_persistent_wsm_shell()
     {
         var options = new ContainerDesktopOptions();
 
-        Assert.Equal("cmd.exe", options.Shell);
-        Assert.Equal("ContainerAdministrator", options.UserName);
+        Assert.Equal(ContainerDesktopPaths.ShellCommand, options.Shell);
+        Assert.Equal(@"C:\wsm\wsm-shell.cmd", options.Shell);
+        Assert.Equal(ContainerDesktopSessionDefaults.DefaultUserName, options.UserName);
+    }
+
+    /// <summary>
+    /// The engine and the image customization must agree on the auto-logon account:
+    /// the logon only completes when the baked-in DefaultPassword matches the runtime
+    /// password the engine sets with 'net user' (measured, doc section 11.7).
+    /// </summary>
+    [Fact]
+    public void The_desktop_session_defaults_are_shared_with_the_image_customization()
+    {
+        var options = new ContainerDesktopOptions();
+
+        Assert.Equal("Administrator", options.UserName);
+        Assert.False(string.IsNullOrEmpty(ContainerDesktopSessionDefaults.DefaultPassword));
     }
 
     [Fact]

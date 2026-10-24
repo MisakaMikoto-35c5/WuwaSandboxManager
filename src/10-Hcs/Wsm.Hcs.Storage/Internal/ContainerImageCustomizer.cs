@@ -47,6 +47,13 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     /// <summary>The LSA switch that permits auto-logon with a blank password.</summary>
     private const string LimitBlankPasswordValue = "LimitBlankPasswordUse";
 
+    /// <summary>
+    /// The <c>Policies\System</c> key and its switch that skips the Ctrl+Alt+Del screen -
+    /// unreachable inside a container.
+    /// </summary>
+    private const string PoliciesSystemSubKey = @"Microsoft\Windows\CurrentVersion\Policies\System";
+    private const string DisableCadValue = "DisableCAD";
+
     /// <summary>Folder inside the container that receives the payload files.</summary>
     private const string PayloadFolder = "wsm";
 
@@ -57,6 +64,9 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         "wsm-desktop-read.cmd",
         "wsm-desktop-read.ps1",
     };
+
+    /// <summary>The persistent shell payload, installed additionally by the desktop-session patch.</summary>
+    private const string ShellPayloadFile = "wsm-shell.cmd";
 
     private readonly ILogger<ContainerImageCustomizer> _logger;
 
@@ -167,7 +177,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         string layerPath, ContainerImageDesktopOptions? options = null)
     {
         var hiveFile = ResolveSoftwareHive(layerPath);
-        InstallPayload(layerPath, out var payloadPaths);
+        InstallPayload(layerPath, PayloadFiles, out var payloadPaths);
 
         string before;
         string after;
@@ -251,6 +261,71 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
             hiveFile, before, after, payloadPaths, options?.Shell, options?.AutoLogonUser);
     }
 
+    /// <inheritdoc />
+    public ContainerImageDesktopSessionPrep EnableDesktopSession(
+        string layerPath, DesktopSessionOptions? options = null)
+    {
+        options ??= new DesktopSessionOptions();
+
+        // The console session first: without NumberOfInitialSessions=2 winlogon never
+        // starts and none of the logon settings below ever fire.
+        var session = EnableInteractiveSession(layerPath);
+
+        // Then the services that let the logon COMPLETE: winlogon's interactive logon is
+        // arbitrated by the LocalSessionManager, which lives in TermService (SessionEnv runs
+        // the session's shell infrastructure), and the stock images ship both disabled, so
+        // the console session sits at LogonUI and is torn down again (measured, doc section
+        // 25.8). This must be an image-level change: 'sc config' inside the container writes
+        // the SYSTEM hive through the lazy flusher, and a hard compute-system terminate
+        // seconds later loses the write (measured).
+        EnableSessionServices(layerPath);
+
+        var payloadFiles = options.InstallWindowMirrorReadSide
+            ? PayloadFiles.Append(ShellPayloadFile).ToArray()
+            : new[] { ShellPayloadFile };
+        InstallPayload(layerPath, payloadFiles, out var payloadPaths);
+
+        var hiveFile = ResolveSoftwareHive(layerPath);
+        using (var hive = OfflineRegistryHive.Load(hiveFile))
+        {
+            using var root = hive.OpenRoot()
+                ?? throw new SandboxBackendException(
+                    $"The offline hive '{hiveFile}' has no root key.", 0);
+
+            using var winlogon = hive.OpenOrCreateSubKey(WinlogonSubKey)
+                ?? throw new SandboxBackendException(
+                    $"Cannot open or create '{WinlogonSubKey}' in '{hiveFile}'.", 0);
+
+            // All writes go through reg.exe (see EnableWindowMirror for why the managed
+            // write is refused). ForceAutoLogon on every pass: without it winlogon can
+            // stay at LogonUI after the first try, and in a container nobody can type.
+            WriteWithRegExe(hive.MountName, WinlogonSubKey, ShellValue, ContainerDesktopPaths.ShellCommand);
+            WriteWithRegExe(hive.MountName, WinlogonSubKey, AutoAdminLogonValue, "1");
+            WriteWithRegExe(hive.MountName, WinlogonSubKey, DefaultUserNameValue, options.UserName);
+            WriteWithRegExe(hive.MountName, WinlogonSubKey, DefaultPasswordValue, options.Password);
+            WriteWithRegExe(hive.MountName, WinlogonSubKey, ForceAutoLogonValue, "1");
+
+            // No one can press Ctrl+Alt+Del inside a container: keep LogonUI from ever
+            // gating the console session behind a secure-attention screen.
+            WriteWithRegExe(
+                hive.MountName, PoliciesSystemSubKey, DisableCadValue, "1", "REG_DWORD");
+        }
+
+        // Auto-logon is refused while LSA limits blank/known-password use; the password is
+        // only effective once the engine's start-time 'net user' sets the same value on the
+        // account (doc section 11.7 measured exactly that pairing to log on successfully).
+        AllowBlankPasswordAutoLogon(layerPath);
+
+        _logger.LogInformation(
+            "The base image at '{Layer}' now boots a console session, logs on '{User}' automatically " +
+            "and runs '{Shell}' as its shell ({Payload}). The engine must set the same password at " +
+            "container start; restart any container built from this image.",
+            layerPath, options.UserName, ContainerDesktopPaths.ShellCommand, string.Join(", ", payloadPaths));
+
+        return new ContainerImageDesktopSessionPrep(
+            session, hiveFile, ContainerDesktopPaths.ShellCommand, options.UserName, payloadPaths);
+    }
+
     /// <summary>
     /// Deletes one value from a loaded offline hive through <c>reg.exe</c>, ignoring the case
     /// where the value was never there.
@@ -306,6 +381,34 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
     }
 
     /// <summary>
+    /// Sets <c>TermService</c> and <c>SessionEnv</c> to auto-start in every control set of
+    /// the image's SYSTEM hive. winlogon's interactive logon is arbitrated by the
+    /// LocalSessionManager (part of TermService); with the service disabled the console
+    /// session's logon never completes, winlogon sits at LogonUI and the session is torn
+    /// down again (measured on servercore:ltsc2022).
+    /// </summary>
+    private void EnableSessionServices(string layerPath)
+    {
+        var hiveFile = ResolveSystemHive(layerPath);
+        using var hive = OfflineRegistryHive.Load(hiveFile);
+        using var root = hive.OpenRoot()
+            ?? throw new SandboxBackendException($"The offline hive '{hiveFile}' has no root key.", 0);
+
+        foreach (var controlSet in root.GetSubKeyNames()
+                     .Where(name => name.StartsWith(ControlSetPrefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (var service in new[] { "TermService", "SessionEnv" })
+            {
+                WriteWithRegExe(
+                    hive.MountName, $@"{controlSet}\Services\{service}", "Start", "2", "REG_DWORD");
+                _logger.LogInformation(
+                    "The base image '{Hive}': {Set}\\Services\\{Service}\\Start -> 2 (auto-start).",
+                    hiveFile, controlSet, service);
+            }
+        }
+    }
+
+    /// <summary>
     /// Sets <c>Lsa\LimitBlankPasswordUse = 0</c> in every control set of the image's SYSTEM
     /// hive, so auto-logon works with the blank password container images ship.
     /// </summary>
@@ -345,13 +448,13 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         return string.Join(",", entries);
     }
 
-    private string InstallPayload(string layerPath, out IReadOnlyList<string> containerPaths)
+    private string InstallPayload(string layerPath, IReadOnlyList<string> files, out IReadOnlyList<string> containerPaths)
     {
         var directory = Path.Combine(Path.GetFullPath(layerPath), "Files", PayloadFolder);
         Directory.CreateDirectory(directory);
 
         var installed = new List<string>();
-        foreach (var file in PayloadFiles)
+        foreach (var file in files)
         {
             var target = Path.Combine(directory, file);
             var resource = $"Wsm.Hcs.Storage.Images.{file}";

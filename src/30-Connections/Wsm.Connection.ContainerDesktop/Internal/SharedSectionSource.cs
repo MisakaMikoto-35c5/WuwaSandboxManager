@@ -111,8 +111,8 @@ internal static class SharedSectionSource
     }
 
     /// <summary>
-    /// Opens the frame source behind a header file: the file mapping in file mode, or
-    /// the writer's page-file-backed section in pagefile mode.
+    /// Opens the frame source behind a header file. If pagefile passthrough fails, asks
+    /// the existing writer to switch to file mode and waits for its complete file buffer.
     /// </summary>
     /// <param name="headerPath">Path of the <c>.shm</c> file (the header in both modes).</param>
     /// <param name="magic">Magic the source must carry at offset 0.</param>
@@ -120,10 +120,8 @@ internal static class SharedSectionSource
     /// Computes the expected total size of the source from the mapped header.
     /// </param>
     /// <exception cref="IOException">
-    /// The file cannot be mapped, or the header requests pagefile mode and the
-    /// passthrough failed (not elevated, writer gone, no matching section). There is
-    /// no pixel fallback in pagefile mode - the file is only header-sized - so the
-    /// caller reports the channel unavailable and points at <c>shm-mode.txt</c>.
+    /// The file cannot be mapped, or the writer does not publish a complete file-backed
+    /// buffer after the mode change request.
     /// </exception>
     public static Mapping Open(string headerPath, int magic, Func<IntPtr, long> capacityFor)
     {
@@ -144,22 +142,82 @@ internal static class SharedSectionSource
             var writerPid = Marshal.ReadInt32(file.BaseAddress, ContainerDesktopFrame.WriterPidOffset);
             var expectedSize = capacityFor(file.BaseAddress);
             var view = SectionPassthrough.TryOpenReadOnly(writerPid, expectedSize, magic, out var failure);
-            if (view is null)
+            if (view is not null)
             {
-                throw new IOException(
-                    $"The desktop channel runs in pagefile mode (the frames are a page-file-backed section " +
-                    $"of the in-container writer pid {writerPid}) and this process could not map it: {failure}. " +
-                    $"Run the viewer elevated, or switch the channel back to file mode " +
-                    $"(rewrite shm-mode.txt in the agent directory as 'file' and restart the agent).");
+                file.Dispose();
+                return Mapping.FromPassthrough(view);
             }
 
             file.Dispose();
-            return Mapping.FromPassthrough(view);
+            return OpenFileFallback(headerPath, magic, capacityFor, writerPid, expectedSize, failure);
         }
         catch
         {
             file.Dispose();
             throw;
+        }
+    }
+
+    private static Mapping OpenFileFallback(
+        string headerPath,
+        int magic,
+        Func<IntPtr, long> capacityFor,
+        int writerPid,
+        long expectedSize,
+        string passthroughFailure)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(headerPath))
+            ?? throw new IOException($"The frame buffer '{headerPath}' has no agent directory.");
+        try
+        {
+            ShmModeNegotiation.WriteModeFile(directory, ContainerDesktopMode.File);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException(
+                $"Pagefile passthrough failed ({passthroughFailure}) and file mode could not be requested.",
+                ex);
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            try
+            {
+                var candidate = Mapping.OpenFile(headerPath);
+                try
+                {
+                    if (candidate.Length >= expectedSize
+                        && candidate.Length >= ContainerDesktopFrame.PixelOffset
+                        && Marshal.ReadInt32(candidate.BaseAddress, 0) == magic
+                        && Marshal.ReadInt32(candidate.BaseAddress, ContainerDesktopFrame.ModeOffset)
+                            == (int)ContainerDesktopMode.File
+                        && Marshal.ReadInt32(candidate.BaseAddress, ContainerDesktopFrame.WriterPidOffset) == writerPid
+                        && capacityFor(candidate.BaseAddress) == expectedSize)
+                    {
+                        return candidate;
+                    }
+                }
+                catch
+                {
+                    candidate.Dispose();
+                    throw;
+                }
+
+                candidate.Dispose();
+            }
+            catch (IOException)
+            {
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new IOException(
+                    $"Pagefile passthrough failed ({passthroughFailure}). File mode was requested from writer " +
+                    $"pid {writerPid}, but it did not publish the complete {expectedSize}-byte file buffer.");
+            }
+
+            Thread.Sleep(50);
         }
     }
 

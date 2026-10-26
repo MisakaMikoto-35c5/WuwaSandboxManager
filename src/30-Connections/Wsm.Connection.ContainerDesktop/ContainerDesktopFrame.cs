@@ -52,11 +52,12 @@ public static class ContainerDesktopFrame
 
     /// <summary>
     /// True when the header a reader just re-polled describes a different source than the
-    /// one it has mapped - a restarted agent (new writer pid) or a changed geometry (the
-    /// dynamic-resolution handshake). The caller remaps; a mere fps change does not count.
+    /// one it has mapped - a restarted agent (new writer pid), a changed backing mode or
+    /// a changed geometry. The caller remaps; a mere fps change does not count.
     /// </summary>
     public static bool RequiresRemap(ContainerDesktopFrameHeader mapped, ContainerDesktopFrameHeader current)
         => mapped.WriterPid != current.WriterPid
+            || mapped.Mode != current.Mode
             || mapped.Geometry.Width != current.Geometry.Width
             || mapped.Geometry.Height != current.Geometry.Height;
 
@@ -97,7 +98,10 @@ public static class ContainerDesktopFrame
             return new ContainerDesktopFrameHeader(
                 geometry,
                 BitConverter.ToInt32(header.Slice(WriterPidOffset, 4)),
-                (ContainerDesktopMode)BitConverter.ToInt32(header.Slice(ModeOffset, 4)));
+                (ContainerDesktopMode)BitConverter.ToInt32(header.Slice(ModeOffset, 4)))
+            {
+                Sequence = BitConverter.ToInt64(header.Slice(24, 8)),
+            };
         }
         catch (IOException)
         {
@@ -113,4 +117,8 @@ public static class ContainerDesktopFrame
 public readonly record struct ContainerDesktopFrameHeader(
     ContainerDesktopGeometry Geometry,
     int WriterPid,
-    ContainerDesktopMode Mode);
+    ContainerDesktopMode Mode)
+{
+    /// <summary>Heartbeat sequence published by the writer.</summary>
+    public long Sequence { get; init; }
+}

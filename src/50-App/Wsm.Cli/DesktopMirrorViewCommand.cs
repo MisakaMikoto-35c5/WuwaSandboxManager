@@ -30,22 +30,20 @@ namespace Wsm.Cli;
 internal static class DesktopMirrorViewCommand
 {
     /// <summary>
-    /// <c>--print-table</c>: prints what the read side published (desktop geometry, frame
-    /// sequence, every window with its rectangle) and exits. This is how a caller checks
-    /// the channel - and a window's position after moving it - without showing anything
-    /// and <b>without elevation</b> (in pagefile mode the live table needs the elevated
-    /// passthrough; without it the static header file is printed with a note).
+    /// <c>--print-table</c>: prints a live, pixel-producing capture and its window table.
+    /// A header without versioned health or an advancing heartbeat is not success.
     /// </summary>
     public static int PrintTable(string mirrorPath, int waitSeconds)
     {
         var deadline = DateTime.UtcNow.AddSeconds(Math.Max(0, waitSeconds));
         do
         {
-            if (ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath) is { } fileHeader)
+            var readiness = MirrorReadiness.ProbeAsync(mirrorPath).GetAwaiter().GetResult();
+            if (readiness.State == MirrorReadinessState.Live)
             {
+                var fileHeader = readiness.Header!.Value;
                 var header = fileHeader;
                 var windows = Array.Empty<ContainerDesktopWindow>() as IReadOnlyList<ContainerDesktopWindow>;
-                var stale = false;
                 if (fileHeader.Mode == ContainerDesktopMode.Pagefile)
                 {
                     try
@@ -60,9 +58,10 @@ internal static class DesktopMirrorViewCommand
                         windows = ContainerDesktopMirror.ReadWindows(
                             source.BaseAddress, source.Length, header.Geometry, header.WindowCount, header.Version);
                     }
-                    catch (IOException)
+                    catch (IOException ex)
                     {
-                        stale = true; // not elevated: only the static header file is readable
+                        Console.Error.WriteLine($"The mirror pixels are unavailable: {ex.Message}");
+                        return 1;
                     }
                 }
                 else
@@ -71,18 +70,17 @@ internal static class DesktopMirrorViewCommand
                         mirrorPath, header.Geometry, header.WindowCount, header.Version);
                 }
 
+                if (windows.Count == 0)
+                {
+                    Console.Error.WriteLine("The mirror is not live: its window table is empty or unreadable.");
+                    return 1;
+                }
+
                 var geometry = header.Geometry;
                 Console.WriteLine($"Mirror   : {mirrorPath}");
                 Console.WriteLine($"Geometry : {geometry.Width}x{geometry.Height} stride={geometry.Stride} fps={geometry.Fps}");
                 Console.WriteLine($"Sequence : {header.Sequence} (protocol v{header.Version}, dirty={header.DirtyCount})");
                 Console.WriteLine($"Mode     : {header.Mode.ToString().ToLowerInvariant()} (writer pid {header.WriterPid})");
-                if (stale)
-                {
-                    Console.WriteLine(
-                        "           pagefile mode and the section passthrough failed (needs elevation) - " +
-                        "showing the static header file only");
-                }
-
                 Console.WriteLine($"Windows  : {windows.Count}");
                 foreach (var window in windows)
                 {
@@ -94,11 +92,30 @@ internal static class DesktopMirrorViewCommand
                 return 0;
             }
 
+            if (readiness.State is MirrorReadinessState.NoPixels or MirrorReadinessState.Error
+                or MirrorReadinessState.UnknownHealth || DateTime.UtcNow >= deadline)
+            {
+                return ReadinessFailure(mirrorPath, readiness.State);
+            }
+
             Thread.Sleep(500);
         }
         while (DateTime.UtcNow < deadline);
 
-        Console.Error.WriteLine($"No window mirror has been published at '{mirrorPath}'.");
+        return ReadinessFailure(mirrorPath, MirrorReadinessState.Unavailable);
+    }
+
+    private static int ReadinessFailure(string mirrorPath, MirrorReadinessState state)
+    {
+        var detail = state switch
+        {
+            MirrorReadinessState.NoPixels => "the writer reports no captured pixels",
+            MirrorReadinessState.Error => "the writer reports a capture error",
+            MirrorReadinessState.UnknownHealth => "the capture health is unknown",
+            MirrorReadinessState.Stale => "the capture heartbeat is not advancing",
+            _ => "no window mirror has been published",
+        };
+        Console.Error.WriteLine($"Window mirror '{mirrorPath}' is not live: {detail}.");
         return 1;
     }
 
@@ -108,6 +125,12 @@ internal static class DesktopMirrorViewCommand
         {
             Console.Error.WriteLine($"No mirror buffer at '{mirrorPath}'.");
             return 1;
+        }
+
+        var readiness = MirrorReadiness.ProbeAsync(mirrorPath).GetAwaiter().GetResult();
+        if (readiness.State != MirrorReadinessState.Live)
+        {
+            return ReadinessFailure(mirrorPath, readiness.State);
         }
 
         var exitCode = 0;
@@ -231,9 +254,11 @@ internal static class DesktopMirrorViewCommand
             var geometry = fileHeader.Geometry;
             if (_source is not null
                 && (fileHeader.WriterPid != _writerPid
+                    || fileHeader.Mode != (_source.IsPassthrough
+                        ? ContainerDesktopMode.Pagefile : ContainerDesktopMode.File)
                     || geometry.Width != Geometry.Width || geometry.Height != Geometry.Height))
             {
-                Release(); // a new writer or a new geometry: remap below
+                Release(); // a new writer, backing mode or geometry: remap below
             }
 
             if (_source is null)
@@ -241,8 +266,9 @@ internal static class DesktopMirrorViewCommand
                 Map(fileHeader);
             }
 
-            var header = _source.IsPassthrough
-                ? ContainerDesktopMirror.TryReadHeaderInfo(_source.BaseAddress, _source.Length) ?? fileHeader
+            var source = _source ?? throw new IOException("The mirror source could not be mapped.");
+            var header = source.IsPassthrough
+                ? ContainerDesktopMirror.TryReadHeaderInfo(source.BaseAddress, source.Length) ?? fileHeader
                 : fileHeader;
 
             Geometry = geometry;
@@ -253,13 +279,13 @@ internal static class DesktopMirrorViewCommand
             }
 
             Sequence = header.Sequence;
-            Windows = _source.IsPassthrough
+            Windows = source.IsPassthrough
                 ? ContainerDesktopMirror.ReadWindows(
-                    _source.BaseAddress, _source.Length, geometry, header.WindowCount, header.Version)
+                    source.BaseAddress, source.Length, geometry, header.WindowCount, header.Version)
                 : ContainerDesktopMirror.ReadWindows(Path, geometry, header.WindowCount, header.Version);
             DirtyRects = header.Version >= ContainerDesktopMirror.CurrentVersion
-                ? _source.IsPassthrough
-                    ? ContainerDesktopMirror.ReadDirtyRects(_source.BaseAddress, _source.Length, geometry, header.DirtyCount)
+                ? source.IsPassthrough
+                    ? ContainerDesktopMirror.ReadDirtyRects(source.BaseAddress, source.Length, geometry, header.DirtyCount)
                     : ContainerDesktopMirror.ReadDirtyRects(Path, geometry, header.DirtyCount)
                 : Array.Empty<ContainerDesktopRect>();
             return true;

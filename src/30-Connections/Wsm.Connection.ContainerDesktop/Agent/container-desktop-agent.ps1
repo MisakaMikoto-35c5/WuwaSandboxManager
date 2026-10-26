@@ -10,14 +10,15 @@
 # The host maps the *same* file: a container's C:\ is the mounted scratch volume,
 # so a plain file there is shared memory between the two silos.
 #
-# Sharing mode (shm-mode.txt in the agent directory, written by the host before the
-# agent starts; absent = 'file'):
+# Sharing mode (shm-mode.txt, written before startup and polled for changes; absent =
+# 'file'):
 #   file     - frame.shm carries header + pixels (the host maps the file).
-#   pagefile - frame.shm carries ONLY the header (4 KB) and the pixels live in a
-#              page-file-backed section this process creates; the host finds that
-#              section by duplicating the handle out of this process (needs an
-#              elevated reader; named sections do not cross the silo). The mode
-#              field at offset 60 of the header tells the host which one it is.
+#   pagefile - frame.shm carries ONLY the header and heartbeat (4 KB) and the pixels
+#              live in a page-file-backed section this process creates; the host finds
+#              that section by duplicating the handle out of this process (needs an
+#              elevated reader; named sections do not cross the silo). If passthrough
+#              fails, the host writes 'file' and this same writer rebuilds the complete
+#              file-backed buffer instead of starting another writer.
 #
 # Frame file layout (little endian):
 #   0  magic 'FSM1' (0x314D5346)   4  version (1)
@@ -364,6 +365,8 @@ $script:Bounds = $null
 $script:Size = $null
 
 function Close-FrameSection {
+    if ($script:PixelBase -ne [IntPtr]::Zero) { $marshal::WriteInt32($script:PixelBase, 0, 0) }
+    if ($script:Base -ne [IntPtr]::Zero -and $script:Base -ne $script:PixelBase) { $marshal::WriteInt32($script:Base, 0, 0) }
     if ($script:Graphics) { try { $script:Graphics.Dispose() } catch { } $script:Graphics = $null }
     if ($script:Bitmap) { try { $script:Bitmap.Dispose() } catch { } $script:Bitmap = $null }
     if ($script:PixelBase -ne [IntPtr]::Zero) { [void][WsmNative]::UnmapViewOfFile($script:PixelBase); $script:PixelBase = [IntPtr]::Zero }
@@ -375,8 +378,8 @@ function Close-FrameSection {
 
 function Write-Header([IntPtr] $target, [int] $w, [int] $h, [int] $modeValue, [bool] $live) {
     # Busy first and magic last: a host that catches the section mid-init must never
-    # take a half-written header for a valid frame. In pagefile mode the file copy is
-    # static (no busy/sequence), but the ordering costs nothing there either.
+    # take a half-written header for a valid frame. The pagefile header-only file gets
+    # its heartbeat sequence from the capture loop after initialization.
     if ($live) { $marshal::WriteInt32($target, 32, 1) }
     $marshal::WriteInt32($target, 4, 1)
     $marshal::WriteInt32($target, 8, $w)
@@ -403,8 +406,8 @@ function Open-FrameSection([int] $w, [int] $h) {
     $fileCapacity = $capacity
     if ($mode -eq 'pagefile') { $fileCapacity = 4096 }
 
-    # CREATE_ALWAYS: the same call serves the first open and a resize (truncate + regrow).
-    $script:File = [WsmNative]::CreateFileW($framePath, [uint32]3221225472, [uint32]7, [IntPtr]::Zero, [uint32]2, [uint32]0x80, [IntPtr]::Zero)
+    # OPEN_ALWAYS also grows a header-only file without truncating a mapped file.
+    $script:File = [WsmNative]::CreateFileW($framePath, [uint32]3221225472, [uint32]7, [IntPtr]::Zero, [uint32]4, [uint32]0x80, [IntPtr]::Zero)
     if ($script:File -eq [IntPtr](-1)) { throw ("CreateFileW failed: " + $marshal::GetLastWin32Error()) }
     $fileMapping = [WsmNative]::CreateFileMappingW($script:File, [IntPtr]::Zero, [uint32]4, 0, [uint32]$fileCapacity, $null)
     if ($fileMapping -eq [IntPtr]::Zero) { throw ("CreateFileMappingW failed: " + $marshal::GetLastWin32Error()) }
@@ -412,7 +415,7 @@ function Open-FrameSection([int] $w, [int] $h) {
     if ($fileBase -eq [IntPtr]::Zero) { throw ("MapViewOfFile failed: " + $marshal::GetLastWin32Error()) }
 
     # $PixelBase is where the header (live fields) and the pixels go; in file mode it IS
-    # the file's mapping. In pagefile mode the file keeps a static copy of the header.
+    # the file's mapping. In pagefile mode the file keeps a header-only copy.
     $script:PixelMapping = $fileMapping
     $script:PixelBase = $fileBase
     if ($mode -eq 'pagefile') {
@@ -428,7 +431,7 @@ function Open-FrameSection([int] $w, [int] $h) {
     if ($mode -eq 'pagefile') { $modeValue = 1 }
     Write-Header $script:PixelBase $w $h $modeValue $true
     if ($mode -eq 'pagefile') {
-        # Publish the static header file too: it is the host's signal for the handle
+        # Publish the header-only file too: it is the host's signal for the handle
         # passthrough, and a resize changes the geometry it reports.
         Write-Header $script:Base $w $h $modeValue $false
     }
@@ -441,6 +444,15 @@ function Open-FrameSection([int] $w, [int] $h) {
     $script:Bounds = New-Object Drawing.Rectangle(0, 0, $w, $h)
     $script:Size = New-Object Drawing.Size($w, $h)
     Log ("frame section ready ${w}x${h} stride=$($script:Stride) mode=$mode")
+}
+
+function Switch-FrameToFile {
+    if ($script:mode -ne 'pagefile') { return }
+    try { $requested = [IO.File]::ReadAllText($modePath).Trim().ToLowerInvariant() } catch { return }
+    if ($requested -ne 'file') { return }
+    Log 'pagefile passthrough fallback requested; rebuilding this writer as file-backed'
+    $script:mode = 'file'
+    Open-FrameSection $script:Width $script:Height
 }
 
 # ---- dynamic resolution (experimental) ----
@@ -502,6 +514,7 @@ $nextHousekeeping = Get-Date
 
 while ((Get-Date) -lt $deadline) {
     if (Test-Path $stopPath) { Log 'stop marker seen'; break }
+    Switch-FrameToFile
 
     try {
         $marshal::WriteInt32($PixelBase, 32, 1)
@@ -519,6 +532,10 @@ while ((Get-Date) -lt $deadline) {
         $script:Frames++
         $marshal::WriteInt64($PixelBase, 48, $script:Frames)
         $marshal::WriteInt64($PixelBase, 24, $script:Frames)
+        if ($mode -eq 'pagefile') {
+            $marshal::WriteInt64($Base, 48, $script:Frames)
+            $marshal::WriteInt64($Base, 24, $script:Frames)
+        }
         $marshal::WriteInt32($PixelBase, 32, 0)
     } catch {
         $marshal::WriteInt32($PixelBase, 32, 0)

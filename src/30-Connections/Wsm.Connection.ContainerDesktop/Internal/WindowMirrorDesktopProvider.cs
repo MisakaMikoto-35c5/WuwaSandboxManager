@@ -74,12 +74,6 @@ internal sealed class WindowMirrorDesktopProvider
         ContainerDesktopRequest request, CancellationToken cancellationToken = default)
     {
         EnsureSupported();
-
-        if (_sessions.TryGetValue(request.SandboxId.Value, out var live))
-        {
-            return live;
-        }
-
         if (string.IsNullOrWhiteSpace(request.ContainerRoot))
         {
             throw new SandboxBackendException(
@@ -89,22 +83,37 @@ internal sealed class WindowMirrorDesktopProvider
         var directory = ContainerDesktopPaths.ToHostPath(
             request.ContainerRoot, ContainerDesktopPaths.ContainerAgentDirectory);
         var mirrorPath = Path.Combine(directory, Options.MirrorFileName);
-
-        // Adopt a publishing read side; otherwise start one through HCS, which is the
-        // supported way to run a process inside the container's session. (The image's
-        // logon hook is the alternative when the GUI lives in the interactive session -
-        // see IContainerImageCustomizer.EnableWindowMirror.)
-        var geometry = TryReadGeometry(mirrorPath);
-        if (geometry is null)
+        MirrorReadinessResult readiness;
+        if (_sessions.TryGetValue(request.SandboxId.Value, out var existing))
         {
+            readiness = await MirrorReadiness.ProbeAsync(existing.FramePath, cancellationToken).ConfigureAwait(false);
+            if (readiness.State == MirrorReadinessState.Live)
+            {
+                return existing;
+            }
+
+            _sessions.TryRemove(request.SandboxId.Value, out _);
+        }
+        else
+        {
+            readiness = await MirrorReadiness.ProbeAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
+        }
+
+        ContainerDesktopHeader header;
+        if (readiness.State == MirrorReadinessState.Live)
+        {
+            header = readiness.Header!.Value;
+        }
+        else
+        {
+            EnsureRestartIsSafe(readiness.State);
             await LaunchReadSideAsync(request, directory, cancellationToken).ConfigureAwait(false);
-            geometry = await WaitForMirrorAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
+            header = await WaitForMirrorAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
         }
 
         var windows = ReadWindows(mirrorPath);
-
         var session = new ContainerDesktopSession(
-            request.SandboxId, request.ContainerRoot, directory, mirrorPath, geometry.Value,
+            request.SandboxId, request.ContainerRoot, directory, mirrorPath, header.Geometry,
             DateTimeOffset.UtcNow, null, ContainerDesktopProviderIds.WindowMirror, windows);
 
         _sessions[request.SandboxId.Value] = session;
@@ -115,35 +124,48 @@ internal sealed class WindowMirrorDesktopProvider
     }
 
     /// <inheritdoc />
-    public Task<ContainerDesktopSession?> AttachAsync(
+    public async Task<ContainerDesktopSession?> AttachAsync(
         ContainerDesktopRequest request, CancellationToken cancellationToken = default)
     {
         EnsureSupported();
         if (string.IsNullOrWhiteSpace(request.ContainerRoot))
         {
-            return Task.FromResult<ContainerDesktopSession?>(null);
-        }
-
-        if (Get(request.SandboxId) is { } live)
-        {
-            return Task.FromResult<ContainerDesktopSession?>(live);
+            return null;
         }
 
         var directory = ContainerDesktopPaths.ToHostPath(
             request.ContainerRoot, ContainerDesktopPaths.ContainerAgentDirectory);
         var mirrorPath = Path.Combine(directory, Options.MirrorFileName);
-        if (TryReadGeometry(mirrorPath) is not { } geometry)
+        MirrorReadinessResult readiness;
+        if (Get(request.SandboxId) is { } existing)
         {
-            return Task.FromResult<ContainerDesktopSession?>(null);
+            readiness = await MirrorReadiness.ProbeAsync(existing.FramePath, cancellationToken).ConfigureAwait(false);
+            if (readiness.State == MirrorReadinessState.Live)
+            {
+                return existing;
+            }
+
+            _sessions.TryRemove(request.SandboxId.Value, out _);
+        }
+        else
+        {
+            readiness = await MirrorReadiness.ProbeAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
         }
 
+        ThrowIfCaptureFailed(readiness.State);
+        if (readiness.State != MirrorReadinessState.Live)
+        {
+            return null;
+        }
+
+        var header = readiness.Header!.Value;
         var windows = ReadWindows(mirrorPath);
         var session = new ContainerDesktopSession(
-            request.SandboxId, request.ContainerRoot, directory, mirrorPath, geometry,
+            request.SandboxId, request.ContainerRoot, directory, mirrorPath, header.Geometry,
             DateTimeOffset.UtcNow, null, ContainerDesktopProviderIds.WindowMirror, windows);
         _sessions[request.SandboxId.Value] = session;
         _logger.LogInformation("Adopted the running window mirror for {SandboxId}.", request.SandboxId);
-        return Task.FromResult<ContainerDesktopSession?>(session);
+        return session;
     }
 
     /// <inheritdoc />
@@ -231,25 +253,52 @@ internal sealed class WindowMirrorDesktopProvider
         return Task.CompletedTask;
     }
 
-    private async Task<ContainerDesktopGeometry> WaitForMirrorAsync(
+    private async Task<ContainerDesktopHeader> WaitForMirrorAsync(
         string mirrorPath, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow.AddSeconds(Options.FrameTimeoutSeconds);
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (TryReadGeometry(mirrorPath) is { } geometry)
+            var readiness = await MirrorReadiness.ProbeAsync(mirrorPath, cancellationToken).ConfigureAwait(false);
+            if (readiness.State == MirrorReadinessState.Live)
             {
-                return geometry;
+                return readiness.Header!.Value;
             }
 
+            EnsureRestartIsSafe(readiness.State);
             await Task.Delay(500, cancellationToken).ConfigureAwait(false);
         }
 
         throw new SandboxBackendException(
-            "The container's window-mirror read side is not publishing. It is started by the container's own " +
-            "logon, so the base image must be prepared first (wsm image mirror <layerPath>) and the container " +
-            "restarted afterwards - a container that booted before the patch cannot have it.", 0);
+            "The container's window-mirror read side did not publish an advancing, pixel-producing capture. " +
+            "The base image must be prepared first (wsm image mirror <layerPath>) and the container restarted.", 0);
+    }
+
+    private static void EnsureRestartIsSafe(MirrorReadinessState state)
+    {
+        ThrowIfCaptureFailed(state);
+        if (state == MirrorReadinessState.UnknownHealth)
+        {
+            throw new SandboxBackendException(
+                "The window-mirror capture health is unknown. The header will not be adopted, and a second " +
+                "writer will not be started while the existing writer may still be running.", 0);
+        }
+    }
+
+    private static void ThrowIfCaptureFailed(MirrorReadinessState state)
+    {
+        if (state == MirrorReadinessState.NoPixels)
+        {
+            throw new SandboxBackendException(
+                "The window-mirror writer reports no captured pixels. A window table without pixels is not " +
+                "a live desktop.", 0);
+        }
+
+        if (state == MirrorReadinessState.Error)
+        {
+            throw new SandboxBackendException("The window-mirror writer reports a capture error.", 0);
+        }
     }
 
     /// <summary>
@@ -267,17 +316,15 @@ internal sealed class WindowMirrorDesktopProvider
 
         foreach (var stale in new[]
         {
-            Options.MirrorFileName, Options.StopFileName, ContainerDesktopPaths.ModeFileName,
-            "read.out", "read.log",
+            Options.MirrorFileName, Options.MirrorFileName + MirrorCaptureStatus.FileSuffix,
+            Options.StopFileName, ContainerDesktopPaths.ModeFileName, "read.out", "read.log",
         })
         {
             TryDelete(Path.Combine(directory, stale));
         }
 
-        // Mode negotiation must land before the read side starts: it reads shm-mode.txt
-        // once at startup and chooses the backing of the mirror source from it. (A read
-        // side started by the image's logon hook finds no mode file and stays in file
-        // mode, which every reader still understands.)
+        // Mode negotiation lands before the read side starts. The writer also watches
+        // this file so a viewer can request file mode after a passthrough failure.
         var mode = ShmModeNegotiation.Negotiate(
             ShmModeNegotiation.IsCurrentProcessElevated(), _launcher.CanLaunchIntoInteractiveSession);
         ShmModeNegotiation.WriteModeFile(directory, mode);
@@ -331,16 +378,40 @@ internal sealed class WindowMirrorDesktopProvider
         }
     }
 
-    /// <summary>Reads the shared header through the shared mirror layout.</summary>
-    private static ContainerDesktopGeometry? TryReadGeometry(string mirrorPath)
-        => ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath)?.Geometry;
-
-    /// <summary>Reads the published window table through the shared mirror layout.</summary>
+    /// <summary>Reads a non-empty window table through the shared mirror layout.</summary>
     private static IReadOnlyList<ContainerDesktopWindow> ReadWindows(string mirrorPath)
-        => ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath) is { } header
-            ? ContainerDesktopMirror.ReadWindows(
-                mirrorPath, header.Geometry, header.WindowCount, header.Version)
-            : Array.Empty<ContainerDesktopWindow>();
+    {
+        IReadOnlyList<ContainerDesktopWindow> windows;
+        if (ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath) is not { } fileHeader)
+        {
+            windows = Array.Empty<ContainerDesktopWindow>();
+        }
+        else if (fileHeader.Mode != ContainerDesktopMode.Pagefile)
+        {
+            windows = ContainerDesktopMirror.ReadWindows(
+                mirrorPath, fileHeader.Geometry, fileHeader.WindowCount, fileHeader.Version);
+        }
+        else
+        {
+            using var source = SharedSectionSource.Open(mirrorPath, ContainerDesktopMirror.Magic,
+                mapped => ContainerDesktopMirror.TryReadHeaderInfo(
+                        mapped, ContainerDesktopFrame.HeaderFileCapacity) is { } parsed
+                    ? ContainerDesktopMirror.Capacity(parsed.Geometry, parsed.Version)
+                    : 0);
+            var header = ContainerDesktopMirror.TryReadHeaderInfo(source.BaseAddress, source.Length) ?? fileHeader;
+            windows = ContainerDesktopMirror.ReadWindows(
+                source.BaseAddress, source.Length, header.Geometry, header.WindowCount, header.Version);
+        }
+
+        if (windows.Count == 0)
+        {
+            throw new SandboxBackendException(
+                "The window-mirror writer published no readable windows. An empty window table is not " +
+                "a usable live desktop, even when its health token or heartbeat looks valid.", 0);
+        }
+
+        return windows;
+    }
 
     private ContainerDesktopSession Require(SandboxInstanceId id)
         => Get(id) ?? throw new SandboxBackendException(

@@ -60,21 +60,21 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
             : AttachAsync(request.ComputeSystemId, request.ContainerRoot, cancellationToken);
 
     /// <inheritdoc />
-    public Task<ContainerDesktopSession?> AttachAsync(
+    public async Task<ContainerDesktopSession?> AttachAsync(
         ContainerDesktopRequest request, CancellationToken cancellationToken = default)
     {
         EnsureSupported();
         if (string.IsNullOrWhiteSpace(request.ContainerRoot))
         {
-            return Task.FromResult<ContainerDesktopSession?>(null);
+            return null;
         }
 
-        // Adopt only: a valid frame header means an agent is already publishing.
         var directory = AgentDirectoryFor(request.ContainerRoot);
         var framePath = Path.Combine(directory, Options.FrameFileName);
-        if (ContainerDesktopFrame.TryReadHeader(framePath) is not { } header)
+        if (ContainerDesktopFrame.TryReadHeader(framePath) is not { } header
+            || !await IsAdvancingAsync(framePath, header, cancellationToken).ConfigureAwait(false))
         {
-            return Task.FromResult<ContainerDesktopSession?>(null);
+            return null;
         }
 
         var session = new ContainerDesktopSession(
@@ -84,7 +84,7 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         _logger.LogInformation(
             "Adopted the running frame buffer desktop for {SandboxId} ({Mode} mode, writer pid {WriterPid}).",
             request.SandboxId, header.Mode, header.WriterPid);
-        return Task.FromResult<ContainerDesktopSession?>(session);
+        return session;
     }
 
     /// <inheritdoc />
@@ -101,7 +101,13 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         EnsureSupported();
         if (_sessions.TryGetValue(id.Value, out var live))
         {
-            return live;
+            if (ContainerDesktopFrame.TryReadHeader(live.FramePath) is { } current
+                && await IsAdvancingAsync(live.FramePath, current, cancellationToken).ConfigureAwait(false))
+            {
+                return live;
+            }
+
+            _sessions.TryRemove(id.Value, out _);
         }
 
         var engine = RequireEngine();
@@ -132,18 +138,23 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         }
 
         var id = SandboxInstanceId.From(value);
-        if (_sessions.TryGetValue(value, out var live))
-        {
-            return live;
-        }
-
         var directory = AgentDirectoryFor(containerRoot);
         var framePath = Path.Combine(directory, Options.FrameFileName);
+        if (_sessions.TryGetValue(value, out var live))
+        {
+            if (ContainerDesktopFrame.TryReadHeader(live.FramePath) is { } current
+                && await IsAdvancingAsync(live.FramePath, current, cancellationToken).ConfigureAwait(false))
+            {
+                return live;
+            }
 
-        // Adopt a live agent rather than restarting one: a second caller (the
-        // service, or another CLI invocation) must not fight the running agent for
-        // the frame file. A valid header is the liveness signal.
-        if (ContainerDesktopFrame.TryReadHeader(framePath) is { } adopted)
+            _sessions.TryRemove(value, out _);
+        }
+
+        // A header is only a candidate: adoption requires its heartbeat to advance,
+        // otherwise the stale file is replaced through the normal agent start path.
+        if (ContainerDesktopFrame.TryReadHeader(framePath) is { } adopted
+            && await IsAdvancingAsync(framePath, adopted, cancellationToken).ConfigureAwait(false))
         {
             var existing = new ContainerDesktopSession(
                 id, containerRoot, directory, framePath, adopted.Geometry, DateTimeOffset.UtcNow);
@@ -157,8 +168,8 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         Directory.CreateDirectory(directory);
         ResetAgentDirectory(directory);
 
-        // Mode negotiation must land before the agent starts: it reads shm-mode.txt
-        // once at startup and chooses the backing of the frame source from it.
+        // Mode negotiation lands before the agent starts. The agent also watches
+        // shm-mode.txt so a viewer can request file mode after passthrough fails.
         var mode = ShmModeNegotiation.Negotiate(
             ShmModeNegotiation.IsCurrentProcessElevated(), _launcher.CanLaunchIntoInteractiveSession);
         ShmModeNegotiation.WriteModeFile(directory, mode);
@@ -354,7 +365,8 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (ContainerDesktopFrame.TryReadHeader(framePath) is { } header)
+            if (ContainerDesktopFrame.TryReadHeader(framePath) is { } header
+                && await IsAdvancingAsync(framePath, header, cancellationToken).ConfigureAwait(false))
             {
                 _logger.LogInformation(
                     "The container desktop agent is publishing ({Mode} mode, writer pid {WriterPid}).",
@@ -366,8 +378,25 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
         }
 
         throw new SandboxBackendException(
-            $"The container desktop agent did not produce a frame within {Options.FrameTimeoutSeconds}s "
+            $"The container desktop agent did not produce advancing frames within {Options.FrameTimeoutSeconds}s "
             + $"({Path.Combine(directory, "agent.out")}).", 0);
+    }
+
+    private static async Task<bool> IsAdvancingAsync(
+        string framePath, ContainerDesktopFrameHeader initial, CancellationToken cancellationToken)
+    {
+        var delay = Math.Clamp(2000.0 / Math.Max(1, initial.Geometry.Fps), 125, 2000);
+        await Task.Delay(TimeSpan.FromMilliseconds(delay), cancellationToken).ConfigureAwait(false);
+        if (ContainerDesktopFrame.TryReadHeader(framePath) is not { } current)
+        {
+            return false;
+        }
+
+        return current.WriterPid == initial.WriterPid
+            && current.Mode == initial.Mode
+            && current.Geometry.Width == initial.Geometry.Width
+            && current.Geometry.Height == initial.Geometry.Height
+            && current.Sequence > initial.Sequence;
     }
 
     private string ResolveViewerCommand()

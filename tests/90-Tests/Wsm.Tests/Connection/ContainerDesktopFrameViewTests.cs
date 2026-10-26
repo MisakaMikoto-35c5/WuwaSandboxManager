@@ -165,6 +165,16 @@ public sealed class ContainerDesktopFrameViewTests
             mapped, mapped with { Geometry = geometry with { Fps = 10 } }));
     }
 
+    [Fact]
+    public void A_backing_mode_change_requires_a_remap()
+    {
+        var geometry = new ContainerDesktopGeometry(1024, 768, 1024 * 4, 5);
+        var mapped = new ContainerDesktopFrameHeader(geometry, 1234, ContainerDesktopMode.Pagefile);
+
+        Assert.True(ContainerDesktopFrame.RequiresRemap(
+            mapped, mapped with { Mode = ContainerDesktopMode.File }));
+    }
+
     [Theory]
     [InlineData("Wsm.Connection.ContainerDesktop.Agent.container-desktop-agent.ps1")]
     [InlineData("Wsm.Connection.ContainerDesktop.Agent.wsm-desktop-read.ps1")]

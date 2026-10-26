@@ -35,7 +35,7 @@ internal static class SectionPassthrough
     private static readonly IntPtr InvalidHandleValue = new(-1);
 
     /// <summary>One row of the system handle table (the pure part, unit-tested).</summary>
-    internal readonly record struct HandleEntry(int ProcessId, int ObjectTypeIndex, int HandleValue);
+    internal readonly record struct HandleEntry(int ProcessId, int ObjectTypeIndex, long HandleValue);
 
     /// <summary>A read-only view of a section obtained through handle passthrough.</summary>
     internal sealed class View : IDisposable
@@ -183,13 +183,16 @@ internal static class SectionPassthrough
             entries.Add(new HandleEntry(
                 (int)BitConverter.ToInt64(buffer, offset + 8),
                 BitConverter.ToUInt16(buffer, offset + 30),
-                (int)BitConverter.ToInt64(buffer, offset + 16)));
+                BitConverter.ToInt64(buffer, offset + 16)));
         }
 
         return entries;
     }
 
     private static int _sectionTypeIndex = -1;
+
+    internal static bool ProbeHandleMatches(IntPtr probe, long handleValue)
+        => handleValue == probe.ToInt64();
 
     /// <summary>
     /// Resolves the object type index of Section handles on this build by finding our
@@ -206,7 +209,7 @@ internal static class SectionPassthrough
         }
 
         var ownPid = Environment.ProcessId;
-        var probeValue = unchecked((int)(probe.ToInt64() & 0xFFFF));
+        var probeValue = probe.ToInt64();
         var ownRows = 0;
         foreach (var entry in entries)
         {
@@ -216,7 +219,7 @@ internal static class SectionPassthrough
             }
 
             ownRows++;
-            if (entry.HandleValue != probeValue)
+            if (!ProbeHandleMatches(probe, entry.HandleValue))
             {
                 continue;
             }
@@ -259,7 +262,7 @@ internal static class SectionPassthrough
     }
 
     private static bool TryDuplicateMatchingSection(
-        IntPtr process, int handleValue, long expectedSize, int expectedMagic, out View? view)
+        IntPtr process, long handleValue, long expectedSize, int expectedMagic, out View? view)
     {
         view = null;
         if (!Native.DuplicateHandle(

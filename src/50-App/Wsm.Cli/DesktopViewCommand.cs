@@ -30,10 +30,9 @@ namespace Wsm.Cli;
 /// and no listener inside the container, is involved.
 /// </para>
 /// <para>
-/// The frame path is the header file in both sharing modes: in pagefile mode the
-/// frames live in the writer's page-file-backed section and are mapped through
-/// handle passthrough (<see cref="SharedSectionSource"/>), which needs this viewer
-/// to run elevated.
+/// The frame path is the header file in both sharing modes. The viewer first tries
+/// handle passthrough for a pagefile section; if that fails it asks the same writer to
+/// rebuild as a complete file-backed buffer and remaps when the mode changes.
 /// </para>
 /// <para>
 /// While it runs the viewer holds a <see cref="ViewerLiveness"/> lock next to the
@@ -260,7 +259,10 @@ internal static class DesktopViewCommand
             _header = new ContainerDesktopFrameHeader(
                 geometry,
                 Marshal.ReadInt32(mapping.BaseAddress, ContainerDesktopFrame.WriterPidOffset),
-                (ContainerDesktopMode)Marshal.ReadInt32(mapping.BaseAddress, ContainerDesktopFrame.ModeOffset));
+                (ContainerDesktopMode)Marshal.ReadInt32(mapping.BaseAddress, ContainerDesktopFrame.ModeOffset))
+            {
+                Sequence = Marshal.ReadInt64(mapping.BaseAddress, 24),
+            };
             return mapping;
         }
 

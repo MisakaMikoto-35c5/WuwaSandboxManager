@@ -6,8 +6,9 @@ namespace Wsm.Connection.ContainerDesktop.Internal;
 /// <summary>
 /// Negotiates the shared-memory mode of a desktop channel
 /// (<see cref="ContainerDesktopMode"/>). The provider writes its choice into
-/// <c>shm-mode.txt</c> in the agent directory <b>before</b> the agent starts, and the
-/// agent publishes it back in the header's mode field.
+/// <c>shm-mode.txt</c> in the agent directory before the agent starts. A reader can
+/// subsequently request file mode after passthrough fails; the same writer watches the
+/// file, rebuilds its backing and publishes the new mode in the header.
 /// <para>
 /// Pagefile mode only pays off when the process that <i>maps</i> the section (the
 /// viewer) can duplicate a handle out of the in-container writer, which needs

@@ -31,6 +31,7 @@
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.Connection.Legacy\Wsm.Connection.Legacy.csproj" />
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.Connection.Session\Wsm.Connection.Session.csproj" />
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.Connection.ContainerDesktop\Wsm.Connection.ContainerDesktop.csproj" />
+    <ProjectReference Include="..\..\..\src\50-App\Wsm.Cli\Wsm.Cli.csproj" />
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.SandboxServer.Client\Wsm.SandboxServer.Client.csproj" />
     <ProjectReference Include="..\..\..\src\30-Connections\Wsm.Service.Client\Wsm.Service.Client.csproj" />
     <ProjectReference Include="..\..\..\src\40-Host\Wsm.Host.Policy\Wsm.Host.Policy.csproj" />

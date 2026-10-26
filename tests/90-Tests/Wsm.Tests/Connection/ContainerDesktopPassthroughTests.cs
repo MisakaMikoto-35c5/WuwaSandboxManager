@@ -280,6 +280,96 @@ public sealed class ContainerDesktopPassthroughTests
         }
     }
 
+    [Fact]
+    public void The_handle_table_parser_preserves_handles_wider_than_32_bits()
+    {
+        var buffer = new byte[16 + 40];
+        BitConverter.GetBytes(1).CopyTo(buffer, 0);
+        BitConverter.GetBytes((long)Environment.ProcessId).CopyTo(buffer, 16 + 8);
+        BitConverter.GetBytes(0x1_0001_2345L).CopyTo(buffer, 16 + 16);
+        BitConverter.GetBytes((ushort)49).CopyTo(buffer, 16 + 30);
+
+        var entry = Assert.Single(SectionPassthrough.ParseHandleTable(buffer));
+
+        Assert.Equal(0x1_0001_2345L, entry.HandleValue);
+    }
+
+    [Theory]
+    [InlineData(0x10001L, 0x10001L, true)]
+    [InlineData(0x10001L, 0x00001L, false)]
+    [InlineData(0x1_0001_2345L, 0x1_0001_2345L, true)]
+    public void Probe_matching_uses_the_full_handle_value(long probe, long entry, bool expected)
+        => Assert.Equal(expected, SectionPassthrough.ProbeHandleMatches(new IntPtr(probe), entry));
+
+    [Fact]
+    public async Task Pagefile_passthrough_failure_switches_the_existing_writer_to_a_full_file_buffer()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"wsm-fallback-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "frame.shm");
+        var capacity = (int)ContainerDesktopFrame.Capacity(Geometry);
+        const int writerPid = int.MaxValue;
+        using var cancelled = new CancellationTokenSource();
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var stub = new byte[ContainerDesktopFrame.HeaderFileCapacity];
+            Write(stub, 0, ContainerDesktopFrame.Magic);
+            Write(stub, 4, ContainerDesktopFrame.CurrentVersion);
+            Write(stub, 8, Geometry.Width);
+            Write(stub, 12, Geometry.Height);
+            Write(stub, 16, Geometry.Stride);
+            Write(stub, 20, Geometry.Fps);
+            Write(stub, ContainerDesktopFrame.WriterPidOffset, writerPid);
+            Write(stub, ContainerDesktopFrame.ModeOffset, (int)ContainerDesktopMode.Pagefile);
+            File.WriteAllBytes(path, stub);
+
+            var writer = Task.Run(() =>
+            {
+                var modePath = Path.Combine(directory, ContainerDesktopPaths.ModeFileName);
+                while (!cancelled.IsCancellationRequested)
+                {
+                    if (File.Exists(modePath)
+                        && ShmModeNegotiation.Parse(File.ReadAllText(modePath)) == ContainerDesktopMode.File)
+                    {
+                        var full = new byte[capacity];
+                        stub.CopyTo(full, 0);
+                        Write(full, ContainerDesktopFrame.ModeOffset, (int)ContainerDesktopMode.File);
+                        Write(full, 64, 0x11223344);
+                        File.WriteAllBytes(path, full);
+                        return;
+                    }
+
+                    Thread.Sleep(10);
+                }
+            });
+
+            try
+            {
+                using var source = SharedSectionSource.Open(path, ContainerDesktopFrame.Magic,
+                    _ => ContainerDesktopFrame.Capacity(Geometry));
+
+                Assert.False(source.IsPassthrough);
+                Assert.Equal(capacity, source.Length);
+                Assert.Equal(0x11223344, Marshal.ReadInt32(source.BaseAddress, 64));
+                Assert.Equal("file", File.ReadAllText(
+                    Path.Combine(directory, ContainerDesktopPaths.ModeFileName)));
+                await writer.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            finally
+            {
+                cancelled.Cancel();
+                await writer.WaitAsync(TimeSpan.FromSeconds(1));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     private static void Write(byte[] buffer, int offset, int value)
         => BitConverter.GetBytes(value).CopyTo(buffer, offset);
 

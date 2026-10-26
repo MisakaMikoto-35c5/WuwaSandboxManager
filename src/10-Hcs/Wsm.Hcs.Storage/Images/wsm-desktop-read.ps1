@@ -12,14 +12,19 @@
 # and it only rewrites the regions of windows whose pixels actually changed, so the
 # transport carries dirty regions instead of whole frames.
 #
-# Sharing mode (shm-mode.txt in the agent directory, written by the host before the
-# read side starts; absent = 'file'):
+# Sharing mode (shm-mode.txt, written before startup and polled for changes; absent =
+# 'file'):
 #   file     - mirror.shm carries header + pixels (the host maps the file).
 #   pagefile - mirror.shm carries ONLY the header (4 KB) and the pixels live in a
 #              page-file-backed section this process creates; the host finds that
 #              section by duplicating the handle out of this process (needs an
-#              elevated reader; named sections do not cross the silo). The mode
-#              field at offset 60 of the header tells the host which one it is.
+#              elevated reader; named sections do not cross the silo). If passthrough
+#              fails, the host writes 'file' and this same writer rebuilds the complete
+#              file-backed buffer instead of starting another writer.
+#
+# mirror.shm.status is a separate versioned key=value file: writerPid, sequence and
+# health (unknown/live/no-pixels/error/stopped). It leaves the v1/v2 mirror layout
+# unchanged and prevents a window table without ink from being reported as live.
 #
 # Shared file layout (little endian, must match ContainerDesktopMirror):
 #   0  magic 'WSMM' (0x4D4D5357)  4  version (2)
@@ -816,8 +821,27 @@ $titleOffset = $dirtyOffset + 3264
 $capacity = $titleOffset + 16384
 $mirrorPath = Join-Path $AgentDirectory $MirrorFile
 $stopPath = Join-Path $AgentDirectory $StopFile
+$statusPath = $mirrorPath + '.status'
+
+function Publish-CaptureStatus([string] $health) {
+    $publishedSequence = [int64]0
+    if (Get-Variable -Name sequence -ErrorAction SilentlyContinue) { $publishedSequence = [int64]$sequence }
+    $body = "version=1`nwriterPid=$PID`nsequence=$publishedSequence`nhealth=$health`n"
+    $statusTemp = $statusPath + '.tmp'
+    try {
+        [IO.File]::WriteAllText($statusTemp, $body)
+        if (Test-Path $statusPath) {
+            [IO.File]::Replace($statusTemp, $statusPath, $null)
+        } else {
+            [IO.File]::Move($statusTemp, $statusPath)
+        }
+    } finally {
+        if (Test-Path $statusTemp) { Remove-Item $statusTemp -Force -ErrorAction SilentlyContinue }
+    }
+}
 
 # The host picks the sharing mode before starting us; absent/unknown = file.
+# A viewer can subsequently request file mode if pagefile passthrough fails.
 $mode = 'file'
 $modePath = Join-Path $AgentDirectory 'shm-mode.txt'
 if (Test-Path $modePath) {
@@ -882,6 +906,7 @@ if ($mode -eq 'pagefile') {
     $marshal::WriteInt32($fileBase, 36, $PID)
     $marshal::WriteInt32($fileBase, 60, $modeValue)
 }
+Publish-CaptureStatus 'unknown'
 
 # ---- the pixel buffer is a GDI DIB section mapped onto the shared file -------------
 # GDI paints straight into shared memory: no CopyFromScreen, no memcpy - and unlike a
@@ -1041,6 +1066,88 @@ function Measure-Ink([int] $x, [int] $y, [int] $w, [int] $h) {
     return [Math]::Round(100 * $nonBlack / $sampled, 1)
 }
 
+function Switch-MirrorToFile {
+    if ($script:mode -ne 'pagefile') { return }
+    Log 'pagefile passthrough fallback requested; rebuilding this writer as file-backed'
+    Publish-CaptureStatus 'unknown'
+
+    $marshal::WriteInt32($script:base, 0, 0)
+    $marshal::WriteInt32($script:fileBase, 0, 0)
+    if ($script:dib -ne [IntPtr]::Zero) {
+        [void][WsmMirrorDib]::DeleteObject($script:dib)
+        $script:dib = [IntPtr]::Zero
+    }
+    if ($script:memoryDc -ne [IntPtr]::Zero) {
+        [void][WsmMirrorDib]::DeleteDC($script:memoryDc)
+        $script:memoryDc = [IntPtr]::Zero
+    }
+    [void][WsmMirrorNative]::UnmapViewOfFile($script:base)
+    [void][WsmMirrorNative]::CloseHandle($script:mapping)
+    $script:base = [IntPtr]::Zero
+    $script:mapping = [IntPtr]::Zero
+    [void][WsmMirrorNative]::UnmapViewOfFile($script:fileBase)
+    [void][WsmMirrorNative]::CloseHandle($script:fileMapping)
+    $script:fileBase = [IntPtr]::Zero
+    $script:fileMapping = [IntPtr]::Zero
+    [void][WsmMirrorNative]::CloseHandle($script:file)
+    $script:file = [IntPtr](-1)
+
+    # OPEN_ALWAYS grows the existing header file without truncating a mapped file.
+    $script:file = [WsmMirrorNative]::CreateFileW($script:mirrorPath, [uint32]3221225472, [uint32]7, [IntPtr]::Zero, [uint32]4, [uint32]0x80, [IntPtr]::Zero)
+    if ($script:file -eq [IntPtr](-1)) { throw ("file fallback CreateFileW failed: " + $marshal::GetLastWin32Error()) }
+    $script:fileMapping = [WsmMirrorNative]::CreateFileMappingW($script:file, [IntPtr]::Zero, [uint32]4, 0, [uint32]$script:capacity, $null)
+    if ($script:fileMapping -eq [IntPtr]::Zero) { throw ("file fallback CreateFileMappingW failed: " + $marshal::GetLastWin32Error()) }
+    $script:fileBase = [WsmMirrorNative]::MapViewOfFile($script:fileMapping, [uint32]0xF001F, 0, 0, [uint64]$script:capacity)
+    if ($script:fileBase -eq [IntPtr]::Zero) { throw ("file fallback MapViewOfFile failed: " + $marshal::GetLastWin32Error()) }
+    $script:mode = 'file'
+    $script:mapping = $script:fileMapping
+    $script:base = $script:fileBase
+
+    $marshal::WriteInt32($script:base, 32, 1)
+    $marshal::WriteInt32($script:base, 4, 2)
+    $marshal::WriteInt32($script:base, 8, $Width)
+    $marshal::WriteInt32($script:base, 12, $Height)
+    $marshal::WriteInt32($script:base, 16, $stride)
+    $marshal::WriteInt32($script:base, 20, $Fps)
+    $marshal::WriteInt64($script:base, 24, [int64]$script:sequence)
+    $marshal::WriteInt32($script:base, 36, $PID)
+    $marshal::WriteInt32($script:base, 40, 0)
+    $marshal::WriteInt64($script:base, 48, [int64]$script:frames)
+    $marshal::WriteInt32($script:base, 56, 0)
+    $marshal::WriteInt32($script:base, 60, 0)
+    $marshal::WriteInt32($script:base, 0, [int]0x4D4D5357)
+    $marshal::WriteInt32($script:base, 32, 0)
+
+    $script:pixelSection = [IntPtr]::Add($script:base, 64)
+    $dibError = 0
+    $script:dib = [WsmMirrorDib]::Create($Width, $Height, $script:mapping, 64, [ref]$dibError)
+    if ($script:dib -eq [IntPtr]::Zero) { throw ("file fallback CreateDIBSection failed: " + $dibError) }
+    $script:memoryDc = [WsmMirrorDib]::CreateCompatibleDC([IntPtr]::Zero)
+    if ($script:memoryDc -eq [IntPtr]::Zero -and $script:privateDc -ne [IntPtr]::Zero) {
+        $script:memoryDc = [WsmMirrorDib]::CreateCompatibleDC($script:privateDc)
+    }
+    if ($script:memoryDc -eq [IntPtr]::Zero) {
+        $probeId = [WsmMirrorWindows]::FirstWindow($TitleFilter)
+        if ($probeId -eq 0) { $probeId = [WsmMirrorWindows]::FirstWindow('') }
+        if ($probeId -ne 0) {
+            $windowDc = [WsmMirrorWindows]::WindowDc($probeId)
+            if ($windowDc -ne [IntPtr]::Zero) {
+                $script:memoryDc = [WsmMirrorDib]::CreateCompatibleDC($windowDc)
+                [WsmMirrorWindows]::ReleaseWindowDc($probeId, $windowDc)
+            }
+        }
+    }
+    if ($script:memoryDc -eq [IntPtr]::Zero) { throw 'file fallback CreateCompatibleDC failed' }
+    [void][WsmMirrorDib]::SelectObject($script:memoryDc, $script:dib)
+
+    [void][WsmMirrorNative]::memset($script:shadow, 0, [UIntPtr]([uint64]$script:pixels))
+    $script:shadowRects.Clear()
+    $script:chosenStrategy = -1
+    $script:chosenTarget = -1
+    $script:probed = $false
+    Log 'file-backed fallback is ready with the complete mirror capacity'
+}
+
 Log ("read side started pid=$PID ${Width}x${Height} stride=$stride fps=$Fps seconds=$Seconds mirror=$mirrorPath mode=$mode")
 Log ("input desktop: " + [WsmMirrorNative]::SwitchToInputDesktop())
 
@@ -1052,6 +1159,12 @@ $delay = [Math]::Max(1, [int](1000 / [Math]::Max(1, $Fps)))
 
 while ((Get-Date) -lt $deadline) {
     if (Test-Path $stopPath) { Log 'stop marker seen'; break }
+
+    $requestedMode = $mode
+    try {
+        if (Test-Path $modePath) { $requestedMode = [IO.File]::ReadAllText($modePath).Trim().ToLowerInvariant() }
+    } catch { $requestedMode = $mode }
+    if ($mode -eq 'pagefile' -and $requestedMode -eq 'file') { Switch-MirrorToFile }
 
     try {
         $marshal::WriteInt32($base, 32, 1)   # busy
@@ -1129,6 +1242,10 @@ while ((Get-Date) -lt $deadline) {
             $right = [Math]::Min($Width, $w.X + $w.W); $bottom = [Math]::Min($Height, $w.Y + $w.H)
             $cw = $right - $x; $ch = $bottom - $y
 
+            if (-not $captured -and $cw -gt 0 -and $ch -gt 0) {
+                Clear-Region $pixelSection $x $y $cw $ch
+                if ($chosenTarget -eq 1) { Clear-Region $privateBits $x $y $cw $ch }
+            }
             $painted = $captured
             if (-not $captured -and $chosenStrategy -ge 0 -and $cw -gt 0 -and $ch -gt 0) {
                 if ($sequence -le 2) { [void][WsmMirrorWindows]::Show($w.Id) }
@@ -1161,9 +1278,22 @@ while ((Get-Date) -lt $deadline) {
             [WsmMirrorNative]::RtlMoveMemory($pixelSection, $privateBits, [UIntPtr]([uint64]($stride * $Height)))
         }
 
+        # A successful GDI call is not capture health: only actual ink in a published
+        # window makes the frame live. The window table is still published either way.
+        if (-not $captured) { [void][WsmMirrorNative]::GdiFlush() }
+        $captureHealth = 'no-pixels'
+        for ($i = 0; $i -lt $count; $i++) {
+            $w = $windows[$i]
+            $x = [Math]::Max(0, $w.X); $y = [Math]::Max(0, $w.Y)
+            $cw = [Math]::Min($Width, $w.X + $w.W) - $x; $ch = [Math]::Min($Height, $w.Y + $w.H) - $y
+            if ($cw -gt 0 -and $ch -gt 0 -and (Measure-Ink $x $y $cw $ch) -gt 0.0) {
+                $captureHealth = 'live'
+                break
+            }
+        }
+
         # Dirty rects: per window, the union of the 8x8 blocks that differ from the shadow
         # (last published) frame. A new, moved or resized window is fully dirty.
-        if (-not $captured) { [void][WsmMirrorNative]::GdiFlush() }
         $dirtyCount = 0
         for ($i = 0; $i -lt $count -and $dirtyCount -lt 204; $i++) {
             $w = $windows[$i]
@@ -1218,9 +1348,11 @@ while ((Get-Date) -lt $deadline) {
         $marshal::WriteInt64($base, 48, $frames)
         $marshal::WriteInt64($base, 24, $sequence)
         $marshal::WriteInt32($base, 32, 0)   # not busy
+        Publish-CaptureStatus $captureHealth
     } catch {
         $marshal::WriteInt32($base, 32, 0)
         Log ('capture failed: ' + $_.Exception.Message)
+        try { Publish-CaptureStatus 'error' } catch { Log ('status publish failed: ' + $_.Exception.Message) }
         Start-Sleep -Seconds 1
         continue
     }
@@ -1256,6 +1388,9 @@ while ((Get-Date) -lt $deadline) {
 }
 
 $marshal::WriteInt32($base, 32, 0)
+$marshal::WriteInt32($base, 0, 0)
+if ($mode -eq 'pagefile') { $marshal::WriteInt32($fileBase, 0, 0) }
+try { Publish-CaptureStatus 'stopped' } catch { Log ('stop status publish failed: ' + $_.Exception.Message) }
 Log ("read side exiting after frames=$frames windowsPublishes=$sequence")
 try { [void][WsmMirrorDib]::DeleteObject($dib); [void][WsmMirrorDib]::DeleteDC($memoryDc) } catch { }
 try { $marshal::FreeHGlobal($shadow) } catch { }
@@ -1270,6 +1405,11 @@ if ($mode -eq 'pagefile') {
 }
 catch {
     Log ("FATAL: " + $_.Exception.ToString())
+    try {
+        if ($base -and $base -ne [IntPtr]::Zero) { $marshal::WriteInt32($base, 0, 0) }
+        if ($fileBase -and $fileBase -ne [IntPtr]::Zero -and $fileBase -ne $base) { $marshal::WriteInt32($fileBase, 0, 0) }
+    } catch { }
+    try { if ($statusPath) { Publish-CaptureStatus 'error' } } catch { }
     if (-not $AsShell) { throw }
     Log 'shell mode: restarting the read side in 2 seconds (the session must not lose its shell)'
     Start-Sleep -Seconds 2

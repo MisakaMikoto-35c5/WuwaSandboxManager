@@ -32,6 +32,11 @@ namespace Wsm.Connection.ContainerDesktop;
 /// <c>writerPid</c> that the host maps through handle passthrough (same layout, magic
 /// first). Readers therefore take either a path or a mapped view.
 /// </para>
+/// <para>
+/// Capture health and the heartbeat live in a separate versioned <c>.status</c> file,
+/// so these version 1 and version 2 layouts stay unchanged. A valid header without a
+/// live health token and an advancing sequence is not an adoptable desktop.
+/// </para>
 /// </summary>
 public static class ContainerDesktopMirror
 {

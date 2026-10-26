@@ -1571,10 +1571,9 @@ zero the region -> paint with one strategy -> GdiFlush -> measure non-black samp
   「`cmd.exe` 做 Shell 会立刻 EOF 退出、导致会话被拆」（t+100s 现象的成因之一）；
 - 读侧 payload 一并安装进 `Files\wsm\` ✓（`--no-mirror` 可关）。
 
-密码两侧必须一致，所以默认值只存在一处：`ContainerDesktopSessionDefaults`
-（`ContainerAdministrator` / `Wsm!Container2025`）；引擎启动时 `ConfigureDesktopAsync` 在容器内
-`net user <u> <p>` 并刷新自动登录键，使运行时密码与烘进镜像的 `DefaultPassword` 一致 ✓
-（`src/20-Engines/Wsm.Engine.WindowsContainer/WindowsContainerEngine.cs`）。
+密码两侧必须一致：默认账号是 `Administrator`，默认密码改为按镜像派生，不再使用固定密码。
+`ContainerDesktopSessionDefaults` 的派生逻辑使用受限主机密钥；引擎按实际基础层路径计算同一密码，
+再执行 `net user <u> <p>` 并刷新自动登录键（`src/20-Engines/Wsm.Engine.WindowsContainer/WindowsContainerEngine.cs`）。
 
 读侧（`Images/wsm-desktop-read.ps1`）新增输入命令：**`launch <exe> [args]`**（在读侧自己所在的
 console 会话里启动 GUI 程序 —— 这就是绕过 §23.3「跨会话建进程被 silo 拒绝」的机制：不需要跨会话，
@@ -1677,17 +1676,17 @@ CLI：`wsm image session <layerPath> [--user <u>] [--password <p>] [--no-mirror]
 - 对比 §11.7 成功样本：当年顺序是 #41/#42 → **#21 Session logon succeeded** → **#22 Shell start notification**；现在 #21 从未出现，即自动登录在「认证提交」之前就已经死了；
 - RemoteConnectionManager/Operational：**#1136 "RD Session Host Server role is not installed"** —— TermService 虽然 Running，但 RCM 拒绝建监听（§11 的 `WTSIsServerContainer` 路径），netstat 证实 3389 无监听。TCP RDP 路线维持 §11 结论：死。
 
-**step51（LogonUser 探针，`artifacts/live-step51.log`）**：第二启动的 SAM 状态完全正常 —— `LogonUser('Administrator', '.', 'Wsm!Container2025', 2/3)` 均 ok=True，`Password last set` = 当次启动 18:33:15（ConfigureDesktopAsync 每次启动都重设，早于 winlogon 启动 3 秒）、`Account active = Yes`。**密码持久化假说排除**。
+**step51（LogonUser 探针，`artifacts/live-step51.log`）**：第二启动的 SAM 状态完全正常 —— `LogonUser('Administrator', '.', '<redacted>', 2/3)` 均 ok=True，`Password last set` = 当次启动 18:33:15（ConfigureDesktopAsync 每次启动都重设，早于 winlogon 启动 3 秒）、`Account active = Yes`。**密码持久化假说排除**。
 
 剩下两个未测的自动登录门：① `AutoLogonSID = S-1-5-21-...-500` 是烘进镜像层的（仿 Sysinternals），若它与容器 SAM 里 Administrator 的真实 SID 不符，winlogon 的 SID 查找会**静默跳过**自动登录（不发任何事件，与观测吻合）；② `DefaultDomainName` 为空。step52 删掉 AutoLogonSID、补上 `DefaultDomainName='.'` 后第三启动实测。
 
-### 25.10 step52–86：认证打通，121 秒墙锁定为宿主 LCU 回归（2026-10-15 20:03 的 RollupFix 9711）/ Autologon authenticated; the 121s wall is a host-LCU regression
+### 25.10 step52–86：认证打通，121 秒墙与宿主 LCU 的强相关性（未受控验证）/ Autologon authenticated; correlation with the host LCU, not a proven cause
 
 **step52–54**：`AutoLogonSID` 毒值（烘进镜像的 SID 与容器 SAM 真实 SID 不符）删除、`DefaultDomainName='.'` 补上后仍无认证事件 → 该门也排除；镜像 SOFTWARE 里发现 **`AutoLogonCount=0`**（语义=不再自动登录），是 §10.3 时代留下的毒值之一。
 
 **step55–67（SAM 事故与恢复）**：一次离线 SAM 手术把镜像 `SAM_BASE` 写坏（容器无法启动）；用 `SAM_BASE.orig`（MCR 原始字节）做字节级回滚并 md5 验证，镜像恢复。结论：SAM 不做离线手术，密码只走运行时 `net user`（写容器 scratch 层）。
 
-**step68–77（空密码实验链）**：把镜像 `DefaultPassword` 置空 + `LimitBlankPasswordUse=0` 后，首启动即出现一次 4625（LogonType 2、Logon Process **User32**、空密码 → `0xC000006D/0xC000006A` 密码错——证明 winlogon 确实在启动瞬间尝试了自动登录，只是镜像 SAM 里 Administrator 密码非空未知）。双启动烘密码后第二启动反而不提交任何认证。step77 容器内 `LogonUser('Administrator','Wsm!Container2025',type 2/3)` **ok=True**：烘密码成功、账户激活、凭据完全有效。
+**step68–77（空密码实验链）**：把镜像 `DefaultPassword` 置空 + `LimitBlankPasswordUse=0` 后，首启动即出现一次 4625（LogonType 2、Logon Process **User32**、空密码 → `0xC000006D/0xC000006A` 密码错——证明 winlogon 确实在启动瞬间尝试了自动登录，只是镜像 SAM 里 Administrator 密码非空未知）。双启动烘密码后第二启动反而不提交任何认证。step77 容器内 `LogonUser('Administrator','<redacted>',type 2/3)` **ok=True**：烘密码成功、账户激活、凭据完全有效。
 
 **step78（突破，`artifacts/live-step78.log`）**：镜像 SOFTWARE 写入 **`AutoLogonCount=99`（REG_SZ）** 后，winlogon 每启动都提交认证并**成功**——Security 4624：`Administrator`、`LogonType 2`、`Elevated Token Yes`、`User32/Negotiate`、成对 linked logon。认证环节自此完全打通。**但** LSM **#21（Session logon succeeded）从未出现**，会话停在 `Conn`，t+121s 被 #39/#40（reason 11 = winlogon 主动断开）拆除；`AutoLogonCount` 停在 99 不递减（winlogon 未判定登录完成）。
 
@@ -1710,9 +1709,9 @@ CLI：`wsm image session <layerPath> [--user <u>] [--password <p>] [--no-mirror]
 | **10-15 20:01 / 20:03** | **两次重启，LCU 完成安装**（Setup 日志 id=2：`Package_for_RollupFix … 26100.9711.1.30` 已安装，KB5121794 26100.9544 已安装） |
 | 10-16 起（step32–85，含今日 10-23 11:11 崩溃后启动） | 全部复现同一堵墙：认证可成功（step78 起）但 #21 不到、userinit 不启动、121s 拆除——跑在 **9711 内核**上 |
 
-即：**「进程隔离容器 console 会话自动登录」在 UBR ~9457 时代内核上工作，在 RollupFix 26100.9711.1.30（2026-10-15 20:03 生效）上回归**——挂起点在 winlogon 仲裁之后、userinit 之前，与镜像内容、TermService/SessionEnv、AutoLogon* 各值、我们的全部 payload 均无关（逐一证伪）。唯一未经受控实验的剩余变量就是宿主 LCU 本身。
+即：时间线只支持**强相关性**，不能据此断言宿主 LCU 就是根因。挂起点在 winlogon 仲裁之后、userinit 之前；镜像内容与我们的 payload 已逐一证伪，但宿主 LCU 未经过受控回滚验证。
 
-**下一步（决定性验证，需用户授权重启）**：`dism /online /remove-package /packagename:Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9711.1.30`（必要时连带 `Package_for_KB5121794~…~26100.9544.1.2`）→ 重启回 ~9457 内核 → 重跑 step85 流程。若自动登录恢复 → 回归实锤，可据此决定「停留旧内核 / 追踪修复版本」；若仍失败 → 排除 LCU，转 win32k 会话空间方向。备选路线：Windows Update 向更新版本升级（赌新版已修复），同样以重启为代价。
+**按用户决定，不执行卸载或回滚 Windows 更新。** 后续只通过当前环境复测、其他正常主机对照或运行时修复后的行为验证假说，不再提出以卸载更新为前提的实验。
 
 ### 25.11 step87+：宿主环境修复——官方 Windows Sandbox 0x80370106 的真正原因 / Host repair: the real cause of the Sandbox failure
 
@@ -1795,4 +1794,3 @@ Server Core 在本机仍复现：LSM #41/#42 后没有 #21/#22，`userinit`/读�
   WinUI 自包含应用上不是有效的验证方式；它会混淆基线与当前版本的比较。
 - UI Automation 设置文本框后要移动焦点以提交绑定；选择容器引擎后要重新枚举桌面 ComboBox；
   重复运行前关闭旧设置对话框。找不到隐藏按钮不等于按钮没有实现。
-

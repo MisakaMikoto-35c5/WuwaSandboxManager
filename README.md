@@ -245,7 +245,7 @@ wsm exec $id cmd.exe /c qwinsta     # 应能看到  console  <id>  Conn
 [--user <u>] [--password <p>] [--no-mirror]` —— 它在 console 补丁之外还把自动登录
 （`AutoAdminLogon`/`DefaultPassword` 等）与 `Winlogon\Shell = C:\wsm\wsm-shell.cmd`（读侧以重启
 循环常驻，作为会话的生命期）一起烘进镜像；引擎启动容器时会用 `net user` 把运行时密码设成与烘入值
-一致（默认 `Administrator` / `Wsm!Container2025`），并写入 `AutoLogonCount=99`。
+一致（默认 `Administrator` / 按镜像派生的密码，不再使用固定密码），并写入 `AutoLogonCount=99`。
 **注意：镜像准备已实测可用，但本机容器内桌面端到端尚未打通**（交互登录与首次重启仍受
 宿主 HCS/会话问题阻塞，见
 [docs/investigation/13-container-desktop-and-rdp.md](docs/investigation/13-container-desktop-and-rdp.md) §26）。

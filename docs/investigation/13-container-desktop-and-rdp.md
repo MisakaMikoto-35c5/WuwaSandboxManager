@@ -1755,7 +1755,7 @@ CLI：`wsm image session <layerPath> [--user <u>] [--password <p>] [--no-mirror]
 - **桌面健康与回退**：无像素、空窗口表或心跳停止不再被报告为成功；pagefile 穿透失败会协商并重建
   完整容量的 file-backed 共享内存，4KB 占位文件不算回退成功；句柄表保留完整 64 位值。
 - **回归**：三个修复模块分别在独立 worktree 通过 RED→GREEN 定向测试及全量测试；合并后
-  `dotnet test WindowsSandboxManager.slnx --no-restore` 为 **511/511**。
+  `dotnet test WindowsSandboxManager.slnx --no-restore` 为 **516/516**。
   以上均为替身、本机共享内存回环及真实 ViewModel 验证，不替代真实容器桌面验证。
 - **主机状态**：`ContainerAI\BaseImageVersion` 已恢复存在（`0xa000065f425ef`），无需再次改注册表；
   未卸载或暂停 Windows 更新。
@@ -1789,7 +1789,7 @@ Server Core 在本机仍复现：LSM #41/#42 后没有 #21/#22，`userinit`/读�
 - **没有**完成整屏远程桌面会话、pagefile 穿透或动态分辨率验证；
 - **没有**在本机启动完整 Server 2025。上述 MCR manifest 只证明来源和镜像形状可用。
 
-宿主侧的 mirror 协议、查看器和 511 个测试仍有效，但不能替代这些真实容器验证。
+宿主侧的 mirror 协议、查看器和 516 个测试仍有效，但不能替代这些真实容器验证。
 下一步应在已知正常的另一台主机或运行时被修复后的本机，用一个新容器复测同一条链路；
 不卸载 Windows 更新，也不继续堆叠已被证伪的注册表项或 HCS 调用。
 

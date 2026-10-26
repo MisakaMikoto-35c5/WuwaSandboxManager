@@ -34,7 +34,7 @@ public sealed class FrameBufferHealthTests
     }
 
     [Fact]
-    public async Task Attach_adopts_an_advancing_frame_writer()
+    public async Task Attach_rejects_an_advancing_frame_writer_without_pixels()
     {
         var directory = NewDirectory();
         using var cancelled = new CancellationTokenSource();
@@ -45,6 +45,31 @@ public sealed class FrameBufferHealthTests
             Directory.CreateDirectory(Path.GetDirectoryName(frame)!);
             WriteFrame(frame, 101, 7);
             writer = AdvanceWriter(frame, 101, 7, cancelled.Token);
+            var provider = CreateProvider(new CallbackEngine(() => { }));
+
+            var session = await provider.AttachAsync(Request(directory));
+
+            Assert.Null(session);
+        }
+        finally
+        {
+            await StopWriter(cancelled, writer);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Attach_adopts_an_advancing_frame_writer_with_pixels()
+    {
+        var directory = NewDirectory();
+        using var cancelled = new CancellationTokenSource();
+        Task? writer = null;
+        try
+        {
+            var frame = Path.Combine(directory, "wsm", "frame.shm");
+            Directory.CreateDirectory(Path.GetDirectoryName(frame)!);
+            WriteFrame(frame, 101, 7, hasPixels: true);
+            writer = AdvanceWriter(frame, 101, 7, cancelled.Token, hasPixels: true);
             var provider = CreateProvider(new CallbackEngine(() => { }));
 
             var session = await provider.AttachAsync(Request(directory));
@@ -72,8 +97,8 @@ public sealed class FrameBufferHealthTests
             WriteFrame(frame, 101, 7);
             var engine = new CallbackEngine(() =>
             {
-                WriteFrame(frame, 202, 1);
-                writer = AdvanceWriter(frame, 202, 1, cancelled.Token);
+                WriteFrame(frame, 202, 1, hasPixels: true);
+                writer = AdvanceWriter(frame, 202, 1, cancelled.Token, hasPixels: true);
             });
             var provider = CreateProvider(engine);
 
@@ -110,7 +135,7 @@ public sealed class FrameBufferHealthTests
         return path;
     }
 
-    private static void WriteFrame(string path, int writerPid, long sequence)
+    private static void WriteFrame(string path, int writerPid, long sequence, bool hasPixels = false)
     {
         var buffer = new byte[ContainerDesktopFrame.Capacity(Geometry)];
         Write(buffer, 0, ContainerDesktopFrame.Magic);
@@ -122,14 +147,21 @@ public sealed class FrameBufferHealthTests
         WriteLong(buffer, 24, sequence);
         Write(buffer, ContainerDesktopFrame.WriterPidOffset, writerPid);
         Write(buffer, ContainerDesktopFrame.ModeOffset, (int)ContainerDesktopMode.File);
-        File.WriteAllBytes(path, buffer);
+        if (hasPixels)
+        {
+            buffer[ContainerDesktopFrame.PixelOffset] = 0xff;
+        }
+        var temporary = path + ".tmp";
+        File.WriteAllBytes(temporary, buffer);
+        File.Move(temporary, path, overwrite: true);
     }
 
     private static int ReadWriterPid(string frame)
         => BitConverter.ToInt32(File.ReadAllBytes(frame), ContainerDesktopFrame.WriterPidOffset);
 
     private static Task AdvanceWriter(
-        string frame, int writerPid, long initialSequence, CancellationToken cancellationToken)
+        string frame, int writerPid, long initialSequence, CancellationToken cancellationToken,
+        bool hasPixels = false)
         => Task.Run(async () =>
         {
             var sequence = initialSequence;
@@ -139,7 +171,7 @@ public sealed class FrameBufferHealthTests
                 {
                     await Task.Delay(40, cancellationToken);
                     sequence++;
-                    WriteFrame(frame, writerPid, sequence);
+                    WriteFrame(frame, writerPid, sequence, hasPixels);
                 }
             }
             catch (OperationCanceledException)

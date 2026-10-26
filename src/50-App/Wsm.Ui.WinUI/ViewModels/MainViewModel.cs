@@ -719,9 +719,26 @@ public sealed partial class MainViewModel : ObservableObject
 
     private static void ReplaceDownloadedImage(string staging, string destination, CancellationToken ct)
     {
+        var mutexName = "Global\\Wsm.ContainerImage." + Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(destination).ToUpperInvariant())));
+        using var mutex = new Mutex(false, mutexName);
+        var acquired = false;
+        try
+        {
+            acquired = mutex.WaitOne(TimeSpan.FromSeconds(30));
+        }
+        catch (AbandonedMutexException)
+        {
+            acquired = true;
+        }
+        if (!acquired)
+        {
+            throw new IOException($"Timed out waiting to replace the container image '{destination}'.");
+        }
+
         var backup = destination.TrimEnd('\\', '/') + ".wsm-backup-" + Guid.NewGuid().ToString("N") + ".tmp";
         var movedExisting = false;
-        var movedStaging = false;
         try
         {
             ct.ThrowIfCancellationRequested();
@@ -732,17 +749,10 @@ public sealed partial class MainViewModel : ObservableObject
             }
 
             ct.ThrowIfCancellationRequested();
-            Directory.Move(staging, destination);
-            movedStaging = true;
-            ct.ThrowIfCancellationRequested();
+            CommitDownloadedImage(staging, destination);
         }
         catch
         {
-            if (movedStaging && Directory.Exists(destination) && !Directory.Exists(staging))
-            {
-                Directory.Move(destination, staging);
-            }
-
             if (movedExisting && Directory.Exists(backup) && !Directory.Exists(destination))
             {
                 Directory.Move(backup, destination);
@@ -750,12 +760,19 @@ public sealed partial class MainViewModel : ObservableObject
 
             throw;
         }
+        finally
+        {
+            mutex.ReleaseMutex();
+        }
 
         if (movedExisting)
         {
             TryDeleteDirectory(backup);
         }
     }
+
+    private static void CommitDownloadedImage(string staging, string destination)
+        => Directory.Move(staging, destination);
 
     private static void TryDeleteDirectory(string path)
     {

@@ -187,16 +187,53 @@ public sealed class ContainerImageCustomizerTests : IDisposable
     {
         var keyPath = Path.Combine(_root, "secrets", "container-desktop.key");
 
+        Directory.CreateDirectory(Path.GetDirectoryName(keyPath)!);
+        File.WriteAllBytes(keyPath, new byte[32]);
+        var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+        typeof(ContainerDesktopSessionDefaults).GetMethod("SecureFile", flags)!.Invoke(null, [keyPath]);
+        typeof(ContainerDesktopSessionDefaults).GetMethod("SecureDirectory", flags)!
+            .Invoke(null, [Path.GetDirectoryName(keyPath)!]);
+
+        var directory = new DirectoryInfo(Path.GetDirectoryName(keyPath)!).GetAccessControl();
+        var file = new FileInfo(keyPath).GetAccessControl();
+        Assert.True(
+            HasOnlyAdministratorAndSystemAccess(directory) && HasOnlyAdministratorAndSystemAccess(file),
+            "The key and its directory must disable inheritance and have only Administrators and SYSTEM ACEs.");
+        AllowCurrentUser(keyPath);
+    }
+
+    [Fact]
+    public void Desktop_key_override_does_not_replace_the_parent_directory_acl()
+    {
+        var keyPath = Path.Combine(_root, "shared", "container-desktop.key");
+        Directory.CreateDirectory(Path.GetDirectoryName(keyPath)!);
+        var before = new DirectoryInfo(Path.GetDirectoryName(keyPath)!).GetAccessControl();
+        var beforeSddl = before.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        string? afterSddl = null;
+        var afterProtected = false;
+
         WithDesktopKey(keyPath, () =>
         {
-            _ = ContainerDesktopSessionDefaults.GetPassword(Path.Combine(_root, "layer"));
-
-            var directory = new DirectoryInfo(Path.GetDirectoryName(keyPath)!).GetAccessControl();
-            var file = new FileInfo(keyPath).GetAccessControl();
-            Assert.True(
-                HasOnlyAdministratorAndSystemAccess(directory) && HasOnlyAdministratorAndSystemAccess(file),
-                "The key and its directory must disable inheritance and have only Administrators and SYSTEM ACEs.");
+            _ = ContainerDesktopSessionDefaults.GetPassword(_root);
+            var after = new DirectoryInfo(Path.GetDirectoryName(keyPath)!).GetAccessControl();
+            afterSddl = after.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+            afterProtected = after.AreAccessRulesProtected;
         });
+
+        Assert.Equal(before.AreAccessRulesProtected, afterProtected);
+        Assert.Equal(beforeSddl, afterSddl);
+    }
+
+    [Fact]
+    public void Parallel_first_password_derivation_publishes_one_complete_key()
+    {
+        var keyPath = Path.Combine(_root, "parallel", "container-desktop.key");
+
+        WithDesktopKey(keyPath, () => Parallel.For(0, 64, _ =>
+            Assert.Equal(44, ContainerDesktopSessionDefaults.GetPassword(_root).Length)));
+
+        AllowCurrentUser(keyPath);
+        Assert.Equal(32, File.ReadAllBytes(keyPath).Length);
     }
 
     [Fact]

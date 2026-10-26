@@ -392,11 +392,39 @@ internal sealed class FrameBufferDesktopProvider : IContainerDesktopProvider, IC
             return false;
         }
 
-        return current.WriterPid == initial.WriterPid
-            && current.Mode == initial.Mode
-            && current.Geometry.Width == initial.Geometry.Width
-            && current.Geometry.Height == initial.Geometry.Height
-            && current.Sequence > initial.Sequence;
+        if (current.WriterPid != initial.WriterPid
+            || current.Mode != initial.Mode
+            || current.Geometry.Width != initial.Geometry.Width
+            || current.Geometry.Height != initial.Geometry.Height
+            || current.Sequence <= initial.Sequence)
+        {
+            return false;
+        }
+
+        try
+        {
+            var capacity = ContainerDesktopFrame.Capacity(current.Geometry);
+            using var source = SharedSectionSource.Open(
+                framePath, ContainerDesktopFrame.Magic, _ => capacity);
+            if (source.Length < capacity)
+            {
+                return false;
+            }
+
+            for (var offset = ContainerDesktopFrame.PixelOffset; offset < capacity; offset++)
+            {
+                if (System.Runtime.InteropServices.Marshal.ReadByte(source.BaseAddress, offset) != 0)
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        return false;
     }
 
     private string ResolveViewerCommand()

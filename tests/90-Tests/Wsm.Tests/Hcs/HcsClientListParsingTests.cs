@@ -1,3 +1,4 @@
+using Wsm.Domain.Exceptions;
 using Wsm.Hcs.Interop;
 using Wsm.Hcs.Interop.Internal;
 using Xunit;
@@ -103,5 +104,22 @@ public sealed class HcsClientListParsingTests
         Assert.IsType<Wsm.Domain.Exceptions.SandboxBackendException>(terminated);
         Assert.Contains("already terminated", terminated.Message);
         Assert.Contains("did not complete within", timeout.Message);
+    }
+
+    [Fact]
+    public void Terminate_does_not_treat_a_stopped_registration_as_released()
+    {
+        var terminateCalls = 0;
+        using var system = new HcsComputeSystem(IntPtr.Zero);
+        var client = new HcsClient(
+            _ => system,
+            (_, _) =>
+            {
+                terminateCalls++;
+                throw new SandboxBackendException("termination did not release the registration", 0);
+            });
+
+        Assert.Throws<SandboxBackendException>(() => client.Terminate("container"));
+        Assert.Equal(1, terminateCalls);
     }
 }

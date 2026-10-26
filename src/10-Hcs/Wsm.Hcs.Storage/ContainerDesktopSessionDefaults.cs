@@ -32,37 +32,61 @@ public static class ContainerDesktopSessionDefaults
     {
         var normalizedLayer = Path.TrimEndingDirectorySeparator(Path.GetFullPath(layerPath))
             .ToUpperInvariant();
-        var keyPath = GetKeyPath();
-        var key = ReadOrCreateKey(keyPath);
+        var keyPath = GetKeyPath(out var secureKeyDirectory);
+        var key = ReadOrCreateKey(keyPath, secureKeyDirectory);
         var password = HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(normalizedLayer));
         return Convert.ToBase64String(password);
     }
 
-    private static string GetKeyPath()
+    private static string GetKeyPath(out bool secureKeyDirectory)
     {
         var overridden = Environment.GetEnvironmentVariable(KeyOverrideVariable);
-        if (!string.IsNullOrWhiteSpace(overridden))
-        {
-            return Path.GetFullPath(overridden);
-        }
-
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "WindowsSandboxManager",
-            "secrets",
-            "container-desktop.key");
+        secureKeyDirectory = string.IsNullOrWhiteSpace(overridden);
+        return secureKeyDirectory
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "WindowsSandboxManager",
+                "secrets",
+                "container-desktop.key")
+            : Path.GetFullPath(overridden!);
     }
 
-    private static byte[] ReadOrCreateKey(string keyPath)
+    private static byte[] ReadOrCreateKey(string keyPath, bool secureKeyDirectory)
     {
         var directory = Path.GetDirectoryName(keyPath)
             ?? throw new InvalidOperationException("The desktop key path must have a parent directory.");
         Directory.CreateDirectory(directory);
+        var mutexName = "Global\\Wsm.ContainerDesktop." + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(keyPath.ToUpperInvariant())));
+        using var mutex = new Mutex(false, mutexName);
+        var acquired = false;
+        try
+        {
+            acquired = mutex.WaitOne(TimeSpan.FromSeconds(30));
+        }
+        catch (AbandonedMutexException)
+        {
+            acquired = true;
+        }
+        if (!acquired)
+        {
+            throw new TimeoutException("Timed out waiting for the container desktop key.");
+        }
 
-        var key = File.Exists(keyPath) ? ReadKey(keyPath) : CreateKey(keyPath);
-        SecureFile(keyPath);
-        SecureDirectory(directory);
-        return key;
+        try
+        {
+            var key = File.Exists(keyPath) ? ReadKey(keyPath) : CreateKey(keyPath, secureKeyDirectory);
+            if (secureKeyDirectory)
+            {
+                SecureFile(keyPath);
+                SecureDirectory(directory);
+            }
+            return key;
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+        }
     }
 
     private static byte[] ReadKey(string keyPath)
@@ -77,18 +101,20 @@ public static class ContainerDesktopSessionDefaults
         return key;
     }
 
-    private static byte[] CreateKey(string keyPath)
+    private static byte[] CreateKey(string keyPath, bool secure)
     {
         var key = RandomNumberGenerator.GetBytes(KeySize);
         try
         {
-            using var stream = new FileInfo(keyPath).Create(
-                FileMode.CreateNew,
-                FileSystemRights.Write,
-                FileShare.None,
-                4096,
-                FileOptions.None,
-                CreateFileSecurity());
+            using var stream = secure
+                ? new FileInfo(keyPath).Create(
+                    FileMode.CreateNew,
+                    FileSystemRights.Write,
+                    FileShare.None,
+                    4096,
+                    FileOptions.None,
+                    CreateFileSecurity())
+                : new FileStream(keyPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             stream.Write(key);
             return key;
         }

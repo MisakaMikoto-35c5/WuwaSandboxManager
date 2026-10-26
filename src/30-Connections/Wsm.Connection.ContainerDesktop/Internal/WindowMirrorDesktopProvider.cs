@@ -381,36 +381,57 @@ internal sealed class WindowMirrorDesktopProvider
     /// <summary>Reads a non-empty window table through the shared mirror layout.</summary>
     private static IReadOnlyList<ContainerDesktopWindow> ReadWindows(string mirrorPath)
     {
-        IReadOnlyList<ContainerDesktopWindow> windows;
-        if (ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath) is not { } fileHeader)
+        var deadline = DateTime.UtcNow.AddSeconds(1);
+        while (true)
         {
-            windows = Array.Empty<ContainerDesktopWindow>();
-        }
-        else if (fileHeader.Mode != ContainerDesktopMode.Pagefile)
-        {
-            windows = ContainerDesktopMirror.ReadWindows(
-                mirrorPath, fileHeader.Geometry, fileHeader.WindowCount, fileHeader.Version);
-        }
-        else
-        {
-            using var source = SharedSectionSource.Open(mirrorPath, ContainerDesktopMirror.Magic,
-                mapped => ContainerDesktopMirror.TryReadHeaderInfo(
-                        mapped, ContainerDesktopFrame.HeaderFileCapacity) is { } parsed
-                    ? ContainerDesktopMirror.Capacity(parsed.Geometry, parsed.Version)
-                    : 0);
-            var header = ContainerDesktopMirror.TryReadHeaderInfo(source.BaseAddress, source.Length) ?? fileHeader;
-            windows = ContainerDesktopMirror.ReadWindows(
-                source.BaseAddress, source.Length, header.Geometry, header.WindowCount, header.Version);
+            try
+            {
+                if (ContainerDesktopMirror.TryReadHeaderInfo(mirrorPath) is { } fileHeader)
+                {
+                    IReadOnlyList<ContainerDesktopWindow> windows;
+                    if (fileHeader.Mode != ContainerDesktopMode.Pagefile)
+                    {
+                        windows = ContainerDesktopMirror.ReadWindows(
+                            mirrorPath, fileHeader.Geometry, fileHeader.WindowCount, fileHeader.Version);
+                    }
+                    else
+                    {
+                        using var source = SharedSectionSource.Open(mirrorPath, ContainerDesktopMirror.Magic,
+                            mapped => ContainerDesktopMirror.TryReadHeaderInfo(
+                                    mapped, ContainerDesktopFrame.HeaderFileCapacity) is { } parsed
+                                ? ContainerDesktopMirror.Capacity(parsed.Geometry, parsed.Version)
+                                : 0);
+                        var header = ContainerDesktopMirror.TryReadHeaderInfo(source.BaseAddress, source.Length)
+                            ?? fileHeader;
+                        windows = ContainerDesktopMirror.ReadWindows(
+                            source.BaseAddress, source.Length, header.Geometry, header.WindowCount, header.Version);
+                    }
+
+                    if (windows.Count > 0)
+                    {
+                        return windows;
+                    }
+
+                    if (fileHeader.WindowCount == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (IOException)
+            {
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                break;
+            }
+            Thread.Sleep(25);
         }
 
-        if (windows.Count == 0)
-        {
-            throw new SandboxBackendException(
-                "The window-mirror writer published no readable windows. An empty window table is not " +
-                "a usable live desktop, even when its health token or heartbeat looks valid.", 0);
-        }
-
-        return windows;
+        throw new SandboxBackendException(
+            "The window-mirror writer published no readable windows. An empty window table is not " +
+            "a usable live desktop, even when its health token or heartbeat looks valid.", 0);
     }
 
     private ContainerDesktopSession Require(SandboxInstanceId id)

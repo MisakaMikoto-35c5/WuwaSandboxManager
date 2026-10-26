@@ -128,6 +128,23 @@ public sealed class MainViewModelImageDownloadTests : IDisposable
     }
 
     [Fact]
+    public void Committed_replacement_has_no_cancellation_rollback_window()
+    {
+        var destination = CreatePreparedImage("old");
+        var staging = Path.Combine(_root, "staging");
+        Directory.CreateDirectory(staging);
+        File.WriteAllText(Path.Combine(staging, "owner.txt"), "new");
+        using var cancelled = new CancellationTokenSource();
+        Directory.Move(destination, destination + ".backup");
+
+        InvokeCommit(staging, destination);
+        cancelled.Cancel();
+
+        Assert.Equal("new", File.ReadAllText(Path.Combine(destination, "owner.txt")));
+        Assert.False(Directory.Exists(staging));
+    }
+
+    [Fact]
     public void Replacement_restores_the_old_image_when_moving_staging_fails()
     {
         var destination = CreatePreparedImage("old");
@@ -163,6 +180,21 @@ public sealed class MainViewModelImageDownloadTests : IDisposable
         try
         {
             method.Invoke(null, [staging, destination, CancellationToken.None]);
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            throw ex.InnerException;
+        }
+    }
+
+    private static void InvokeCommit(string staging, string destination)
+    {
+        var method = typeof(MainViewModel).GetMethod(
+            "CommitDownloadedImage", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new MissingMethodException(nameof(MainViewModel), "CommitDownloadedImage");
+        try
+        {
+            method.Invoke(null, [staging, destination]);
         }
         catch (TargetInvocationException ex) when (ex.InnerException is not null)
         {

@@ -36,6 +36,21 @@ internal sealed class HcsComputeSystem : SafeHandleZeroOrMinusOneIsInvalid
 [ExposeServices(typeof(IHcsClient))]
 internal sealed class HcsClient : IHcsClient, ISingletonDependency
 {
+    private readonly Func<string, HcsComputeSystem>? _openForTermination;
+    private readonly Action<HcsComputeSystem, HcsOperation>? _terminate;
+
+    public HcsClient()
+    {
+    }
+
+    internal HcsClient(
+        Func<string, HcsComputeSystem> openForTermination,
+        Action<HcsComputeSystem, HcsOperation> terminate)
+    {
+        _openForTermination = openForTermination;
+        _terminate = terminate;
+    }
+
     public IReadOnlyList<HcsComputeSystemInfo> List(string? query = null)
     {
         using var operation = new HcsOperation();
@@ -157,7 +172,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         HcsComputeSystem system;
         try
         {
-            system = OpenHandle(id);
+            system = _openForTermination?.Invoke(id) ?? OpenHandle(id);
         }
         catch (SandboxNotFoundException)
         {
@@ -165,14 +180,14 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         }
 
         using (system)
+        using (var operation = new HcsOperation())
         {
-            if (List().FirstOrDefault(candidate =>
-                    string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase))?.IsStopped == true)
+            if (_terminate is not null)
             {
+                _terminate(system, operation);
                 return;
             }
 
-            using var operation = new HcsOperation();
             var hr = HcsNative.HcsTerminateComputeSystem(system.Handle, operation.Handle, null);
             try
             {

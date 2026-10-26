@@ -88,9 +88,10 @@ internal static class HcsErrors
     public const int HcsESystemNotFound = unchecked((int)0x8037010E);
     public const int HcsESystemAlreadyExists = unchecked((int)0x8037010F);
     public const int HcsENotFound = unchecked((int)0x80370110);
-    public const int HcsETerminated = unchecked((int)0x80370117);
+    public const int HcsETerminated = unchecked((int)0x80370107);
     public const int HcsEAccessDenied = unchecked((int)0x8037011B);
     public const int HcsEOperationTimeout = unchecked((int)0xC0370104);
+    public const int HcsELegacyOperationTimeout = unchecked((int)0x80370118);
 
     public const string ElevationMessage =
         "The Host Compute Service (HCS) requires an elevated process. " +
@@ -125,7 +126,7 @@ internal static class HcsErrors
             return new SandboxDomainException($"The compute system has already terminated ({operationName}).{suffix}");
         }
 
-        if (hresult == HcsEOperationTimeout)
+        if (hresult == HcsEOperationTimeout || hresult == HcsELegacyOperationTimeout)
         {
             return new SandboxBackendException(
                 $"HCS '{operationName}' did not complete within the allotted time (HCS_E_OPERATION_TIMEOUT).{suffix}",

@@ -46,6 +46,9 @@ public interface IContainerIsolationPolicy
     /// <summary>Evaluates the current host and image (cached between calls).</summary>
     ContainerIsolationSupport Evaluate();
 
+    /// <summary>Evaluates an explicit per-recipe image without replacing the cached default.</summary>
+    ContainerIsolationSupport Evaluate(string? imagePath);
+
     /// <summary>Drops the cache, e.g. after an image is imported.</summary>
     void Invalidate();
 }

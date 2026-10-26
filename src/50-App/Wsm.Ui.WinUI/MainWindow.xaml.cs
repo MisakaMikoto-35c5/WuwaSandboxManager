@@ -73,6 +73,7 @@ public sealed partial class MainWindow : Window
             _localizer,
             services.GetRequiredService<IContainerImageImporter>(),
             services.GetRequiredService<IContainerIsolationPolicy>(),
+            services,
             agentClient,
             services.GetService<IContainerDesktopHost>());
 

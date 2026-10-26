@@ -106,6 +106,19 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
         }
     }
 
+    public ContainerIsolationSupport Evaluate(string? imagePath)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath))
+        {
+            return Evaluate();
+        }
+
+        lock (_gate)
+        {
+            return Compute(imagePath);
+        }
+    }
+
     public void Invalidate()
     {
         lock (_gate)
@@ -114,10 +127,10 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
         }
     }
 
-    private ContainerIsolationSupport Compute()
+    private ContainerIsolationSupport Compute(string? explicitImagePath = null)
     {
         var host = _host.Read();
-        var imagePath = ResolveImagePath(host);
+        var imagePath = explicitImagePath ?? ResolveImagePath(host);
 
         if (string.IsNullOrWhiteSpace(imagePath))
         {
@@ -154,16 +167,16 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
                && metadata.Build <= host.Build);
 
     /// <summary>
-    /// The image layer the engine would use: the configured option, then the
-    /// environment override, then the first compatible image the user already
+    /// The image layer the engine would use: the environment override, then the
+    /// configured option, then the first compatible image the user already
     /// imported, then the newest Windows Sandbox image layer.
     /// </summary>
     private string? ResolveImagePath(HostOsInfo host)
     {
-        var configured = _options.Value.BaseImageLayerPath;
+        var configured = Environment.GetEnvironmentVariable(ImageOverrideVariable);
         if (string.IsNullOrWhiteSpace(configured))
         {
-            configured = Environment.GetEnvironmentVariable(ImageOverrideVariable);
+            configured = _options.Value.BaseImageLayerPath;
         }
 
         if (!string.IsNullOrWhiteSpace(configured))

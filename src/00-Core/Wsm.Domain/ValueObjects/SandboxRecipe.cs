@@ -32,6 +32,13 @@ public sealed record SandboxRecipe
     /// </summary>
     public SandboxDesktopPlan Desktop { get; init; } = SandboxDesktopPlan.Default;
 
+    /// <summary>
+    /// Optional prepared WCOW base layer for the process-isolated engine. It travels
+    /// with the recipe so the GUI, agent and CLI all start the same selected image.
+    /// Null uses the engine's configured/default image resolution.
+    /// </summary>
+    public string? ContainerImagePath { get; init; }
+
     /// <summary>When true the sandbox is presented as RemoteApp/RAIL windows.</summary>
     public bool RailMode { get; init; }
 

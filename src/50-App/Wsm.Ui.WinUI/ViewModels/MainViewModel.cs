@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
 using Wsm.Domain.Exceptions;
 using Wsm.Domain.ValueObjects;
@@ -32,6 +33,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly IAppLocalizer _l;
     private readonly IContainerImageImporter _imageImporter;
     private readonly IContainerIsolationPolicy _isolation;
+    private readonly IServiceProvider _services;
     private readonly DispatcherQueue _dispatcher =
         DispatcherQueue.GetForCurrentThread()
         ?? throw new InvalidOperationException("The main view model must be created on the UI thread.");
@@ -44,6 +46,7 @@ public sealed partial class MainViewModel : ObservableObject
         IAppLocalizer localizer,
         IContainerImageImporter imageImporter,
         IContainerIsolationPolicy isolation,
+        IServiceProvider services,
         IWsmServiceClient? serviceClient = null,
         IContainerDesktopHost? containerDesktop = null)
     {
@@ -53,6 +56,7 @@ public sealed partial class MainViewModel : ObservableObject
         _l = localizer;
         _imageImporter = imageImporter;
         _isolation = isolation;
+        _services = services;
 
         ContainerDesktop = new ContainerDesktopConnector(
             serviceClient, containerDesktop, UiSettingsStore.Load().ResolveConfigDataFolder());
@@ -246,6 +250,7 @@ public sealed partial class MainViewModel : ObservableObject
                 RailMode = NewTypeIndex == 0,
                 RailProgram = string.IsNullOrWhiteSpace(NewRailProgram) ? SandboxRecipe.DefaultRailProgram : NewRailProgram.Trim(),
                 Storage = SandboxStorageOptions.Default,
+                ContainerImagePath = IsNewContainerEngine ? _isolation.Evaluate().ImagePath : null,
                 // Only the process-isolation engine has a desktop to plan; other
                 // engines keep the recipe default.
                 Desktop = IsNewContainerEngine
@@ -439,25 +444,34 @@ public sealed partial class MainViewModel : ObservableObject
     /// download, and a target folder the importer will accept.
     /// </summary>
     public bool CanDownloadContainerImage =>
-        IsElevated && !IsContainerImageDownloading && ContainerImageInstallState == ContainerImageInstallState.Missing;
+        IsElevated && !IsBusy && !IsContainerImageDownloading
+        && ContainerImageInstallState == ContainerImageInstallState.Missing;
 
-    /// <summary>Re-download and delete are available whenever no download runs.</summary>
-    public bool CanManageContainerImage => !IsContainerImageDownloading;
+    /// <summary>Re-download and delete are available whenever no image operation runs.</summary>
+    public bool CanManageContainerImage => !IsContainerImageDownloading && !IsBusy;
 
-    partial void OnIsContainerImageDownloadingChanged(bool value)
-    {
-        OnPropertyChanged(nameof(CanDownloadContainerImage));
-        OnPropertyChanged(nameof(CanManageContainerImage));
-    }
+    /// <summary>An installed image can be selected directly or prepared for interactive desktop use.</summary>
+    public bool CanUseContainerImage =>
+        IsElevated && !IsBusy && !IsContainerImageDownloading && IsContainerImageInstalled;
 
-    partial void OnIsElevatedChanged(bool value)
-        => OnPropertyChanged(nameof(CanDownloadContainerImage));
+    partial void OnIsContainerImageDownloadingChanged(bool value) => RefreshContainerImageActions();
+
+    partial void OnIsElevatedChanged(bool value) => RefreshContainerImageActions();
+
+    partial void OnIsBusyChanged(bool value) => RefreshContainerImageActions();
 
     partial void OnContainerImageInstallStateChanged(ContainerImageInstallState value)
     {
-        OnPropertyChanged(nameof(CanDownloadContainerImage));
         OnPropertyChanged(nameof(IsContainerImageInstalled));
         OnPropertyChanged(nameof(IsContainerImageOccupied));
+        RefreshContainerImageActions();
+    }
+
+    private void RefreshContainerImageActions()
+    {
+        OnPropertyChanged(nameof(CanDownloadContainerImage));
+        OnPropertyChanged(nameof(CanManageContainerImage));
+        OnPropertyChanged(nameof(CanUseContainerImage));
     }
 
     partial void OnSelectedContainerImageReferenceChanged(string? value)
@@ -522,6 +536,98 @@ public sealed partial class MainViewModel : ObservableObject
         {
             RefreshContainerImageInstallState();
         }
+    }
+
+    /// <summary>Selects an already-installed image without downloading it again.</summary>
+    [RelayCommand]
+    private void UseContainerImage()
+    {
+        if (!CanUseContainerImage)
+        {
+            return;
+        }
+
+        try
+        {
+            Status = SelectContainerImage(ContainerImageFolder)
+                ? _l.Get("ContainerImageSelected.Text", ContainerImageFolder)
+                : _l["ContainerImageError.Incompatible.Text"];
+        }
+        catch (Exception ex)
+        {
+            Status = _l.Get("ContainerImageUseFailed.Text", ex.Message);
+        }
+    }
+
+    /// <summary>Installs interactive logon and the desktop agent into an installed image.</summary>
+    [RelayCommand]
+    private async Task PrepareContainerDesktopAsync()
+    {
+        if (!CanUseContainerImage)
+        {
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            Status = _l["ContainerDesktopPreparing.Text"];
+            await Task.Run(() =>
+            {
+                var layers = _services.GetRequiredService<IWcowLayerService>();
+                var customizer = _services.GetRequiredService<IContainerImageCustomizer>();
+                WcowLayerRelease.ReleaseImageLocks(
+                    layers,
+                    ContainerImageFolder,
+                    UiSettingsStore.Load().ResolveConfigDataFolder());
+                customizer.EnableDesktopSession(ContainerImageFolder);
+            });
+
+            Status = SelectContainerImage(ContainerImageFolder)
+                ? _l["ContainerDesktopPrepared.Text"]
+                : _l["ContainerImageError.Incompatible.Text"];
+        }
+        catch (Exception ex)
+        {
+            Status = _l.Get("ContainerDesktopPrepareFailed.Text", ex.Message);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private bool SelectContainerImage(string layerPath)
+    {
+        var path = Path.GetFullPath(layerPath);
+        var previous = Environment.GetEnvironmentVariable(WindowsContainerEngineOptions.ImageOverrideVariable);
+        Environment.SetEnvironmentVariable(WindowsContainerEngineOptions.ImageOverrideVariable, path);
+        _isolation.Invalidate();
+        var support = _isolation.Evaluate();
+        if (!support.IsSupported || !string.Equals(support.ImagePath, path, StringComparison.OrdinalIgnoreCase))
+        {
+            Environment.SetEnvironmentVariable(WindowsContainerEngineOptions.ImageOverrideVariable, previous);
+            _isolation.Invalidate();
+            BuildEngines();
+            BuildEngineOptions();
+            UpdateContainerIsolationStatus();
+            return false;
+        }
+
+        try
+        {
+            var current = UiSettingsStore.Load();
+            UiSettingsStore.Save(current with { ContainerBaseImagePath = path });
+        }
+        catch
+        {
+            // The current process still uses the selected image when persistence fails.
+        }
+
+        BuildEngines();
+        BuildEngineOptions();
+        UpdateContainerIsolationStatus();
+        return true;
     }
 
     private async Task RunImageDownloadAsync(bool deleteExisting)

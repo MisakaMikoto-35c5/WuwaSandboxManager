@@ -171,6 +171,39 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
         Assert.Equal(configured, result.ImagePath);
     }
 
+    [Fact]
+    public void A_recipe_image_wins_over_all_global_sources()
+    {
+        var configured = CreateImage(build: 26300, isServer: false);
+        var selected = CreateImage(build: 20348, isServer: true);
+
+        var result = Evaluate(
+            hostBuild: 26300,
+            isWindows11Client: true,
+            image: configured,
+            recipeImage: selected,
+            environmentImage: configured);
+
+        Assert.True(result.IsSupported);
+        Assert.Equal(selected, result.ImagePath);
+    }
+
+    [Fact]
+    public void The_environment_override_wins_over_the_configured_option()
+    {
+        var configured = CreateImage(build: 26300, isServer: false);
+        var selected = CreateImage(build: 20348, isServer: true);
+
+        var result = Evaluate(
+            hostBuild: 26300,
+            isWindows11Client: true,
+            image: configured,
+            environmentImage: selected);
+
+        Assert.True(result.IsSupported);
+        Assert.Equal(selected, result.ImagePath);
+    }
+
     private static ContainerImageCandidate Candidate(string image)
         => new(image, ContainerImageMetadata.TryRead(image)!);
 
@@ -183,9 +216,14 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
     }
 
     private ContainerIsolationSupport Evaluate(
-        int hostBuild, bool isWindows11Client, string? image, IContainerImageCatalog? images = null)
+        int hostBuild,
+        bool isWindows11Client,
+        string? image,
+        IContainerImageCatalog? images = null,
+        string? recipeImage = null,
+        string? environmentImage = null)
     {
-        Environment.SetEnvironmentVariable(WindowsContainerEngineOptions.ImageOverrideVariable, null);
+        Environment.SetEnvironmentVariable(WindowsContainerEngineOptions.ImageOverrideVariable, environmentImage);
         var options = Options.Create(new WindowsContainerEngineOptions { BaseImageLayerPath = image });
         var policy = new ContainerIsolationPolicy(
             options,
@@ -194,7 +232,7 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
             images ?? new EmptyCatalog(),
             NullLogger<ContainerIsolationPolicy>.Instance);
 
-        return policy.Evaluate();
+        return recipeImage is null ? policy.Evaluate() : policy.Evaluate(recipeImage);
     }
 
     private sealed class StubHost(int build, bool isWindows11Client) : IHostOsInfoProvider

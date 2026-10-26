@@ -135,6 +135,26 @@ public sealed class ContainerDesktopOptionsTests
             command);
     }
 
+    [Fact]
+    public void Sensitive_desktop_commands_are_redacted_before_logging()
+    {
+        var net = WindowsContainerEngine.RedactCommandForLog(
+            "net.exe user \"Administrator\" \"secret-value\"");
+        var registry = WindowsContainerEngine.RedactCommandForLog(
+            WindowsContainerEngine.RegAdd(
+                @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                "DefaultPassword",
+                "secret-value"));
+
+        Assert.Equal("net.exe user \"Administrator\" \"<redacted>\"", net);
+        Assert.DoesNotContain("secret-value", registry);
+        Assert.Contains("<redacted>", registry);
+        Assert.Equal(
+            WindowsContainerEngine.RegAdd("key", "Shell", "cmd.exe"),
+            WindowsContainerEngine.RedactCommandForLog(
+                WindowsContainerEngine.RegAdd("key", "Shell", "cmd.exe")));
+    }
+
     /// <summary>
     /// Runs <paramref name="body"/> with the environment variable set, restoring
     /// the previous value afterwards (the switches deliberately read the

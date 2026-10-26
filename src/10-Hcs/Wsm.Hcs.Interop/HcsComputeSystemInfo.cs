@@ -19,6 +19,8 @@ public sealed record HcsComputeSystemInfo
 
     public bool IsRunning => string.Equals(State, "Running", StringComparison.OrdinalIgnoreCase);
 
+    public bool IsStopped => string.Equals(State, "Stopped", StringComparison.OrdinalIgnoreCase);
+
     public bool IsContainer => string.Equals(SystemType, "Container", StringComparison.OrdinalIgnoreCase);
 
     public bool IsVirtualMachine => string.Equals(SystemType, "VirtualMachine", StringComparison.OrdinalIgnoreCase);

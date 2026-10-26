@@ -161,15 +161,27 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
         }
         catch (SandboxNotFoundException)
         {
-            // Already gone: terminating a missing compute system is a no-op.
             return;
         }
 
         using (system)
         {
+            if (List().FirstOrDefault(candidate =>
+                    string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase))?.IsStopped == true)
+            {
+                return;
+            }
+
             using var operation = new HcsOperation();
-            var hr = HcsNative.HcsTerminateComputeSystem(system.Handle, operation.Handle, "{}");
-            operation.Complete(hr, nameof(HcsNative.HcsTerminateComputeSystem));
+            var hr = HcsNative.HcsTerminateComputeSystem(system.Handle, operation.Handle, "");
+            try
+            {
+                operation.Complete(hr, nameof(HcsNative.HcsTerminateComputeSystem), 30_000);
+            }
+            catch (SandboxBackendException ex) when (ex.HResult == HcsErrors.HcsETerminated)
+            {
+                // A terminated system is the requested end state, not a failed stop.
+            }
         }
     }
 

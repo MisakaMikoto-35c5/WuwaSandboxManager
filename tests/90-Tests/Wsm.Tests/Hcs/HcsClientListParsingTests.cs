@@ -29,10 +29,12 @@ public sealed class HcsClientListParsingTests
         Assert.Equal(2, systems.Count);
         Assert.Equal("abc", systems[0].Id);
         Assert.True(systems[0].IsRunning);
+        Assert.False(systems[0].IsStopped);
         Assert.True(systems[0].IsContainer);
         Assert.Equal("one", systems[0].Name);
         Assert.Equal("def", systems[1].Id);
         Assert.True(systems[1].IsVirtualMachine);
+        Assert.True(systems[1].IsStopped);
     }
 
     [Fact]
@@ -90,5 +92,15 @@ public sealed class HcsClientListParsingTests
     public void Bare_non_system_scalar_yields_no_systems()
     {
         Assert.Empty(HcsClient.ParseList("42"));
+    }
+
+    [Fact]
+    public void Terminated_and_operation_timeout_are_distinct()
+    {
+        var terminated = HcsErrors.ToException(unchecked((int)0x80370107), "Terminate", null);
+        var timeout = HcsErrors.ToException(unchecked((int)0x80370118), "Wait", null);
+
+        Assert.Contains("already terminated", terminated.Message);
+        Assert.Contains("did not complete within", timeout.Message);
     }
 }

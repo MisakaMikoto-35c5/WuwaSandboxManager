@@ -170,7 +170,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
 
         EnsureHostServices();
 
-        var baseLayers = ResolveBaseLayers();
+        var baseLayers = ResolveBaseLayers(recipe.ContainerImagePath);
 
         // 1. Networking: create the namespace + endpoint and attach the endpoint
         // to the namespace so the container's NIC is present from the start.
@@ -307,22 +307,29 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
                 _containers.TryRemove(key, out var firstBoot);
                 try
                 {
-                    firstBoot?.Handle.Dispose();
+                    _logger.LogDebug("Requesting termination of the first boot for {SandboxId}.", id);
+                    _hcs.Terminate(key);
+                    _logger.LogDebug("Termination returned for {SandboxId}; closing its primary handle.", id);
                 }
-                catch (Exception ex)
+                finally
                 {
-                    _logger.LogDebug(ex, "Disposing the first-boot handle for container {SandboxId} failed.", key);
+                    try
+                    {
+                        firstBoot?.Handle.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Disposing the first-boot handle for container {SandboxId} failed.", key);
+                    }
                 }
 
-                // Closing the last handle asks HCS to tear the compute system down,
-                // but the teardown is asynchronous: an immediate re-create fails with
-                // "a compute system with that id already exists" (measured). Terminate
-                // explicitly, then poll until the system is really gone.
-                _hcs.Terminate(key);
                 await WaitForComputeSystemGoneAsync(id, key, cancellationToken);
 
+                _logger.LogDebug("Creating the second boot for {SandboxId}.", id);
                 system = _hcs.Create(key, json);
+                _logger.LogDebug("Second-boot compute system created for {SandboxId}; starting it.", id);
                 _hcs.Start(key);
+                _logger.LogDebug("Second boot started for {SandboxId}.", id);
                 RememberContainer(key, system, runtime, scratchPath, baseLayers, namespaceId, endpointId, adopted: false);
                 await EnsureContainerServicesAsync(id, _options.Value.RequiredServices, cancellationToken);
             }
@@ -332,9 +339,8 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
     }
 
     /// <summary>
-    /// Polls HCS until the compute system no longer exists. Termination after the
-    /// last handle closes is asynchronous; recreating the same id too soon fails
-    /// with "already exists". Bounded so a stuck system cannot hang the start.
+    /// Polls HCS until the terminated compute system releases its id. A bounded
+    /// wait prevents a stopped registration from silently becoming a restart failure.
     /// </summary>
     private async Task WaitForComputeSystemGoneAsync(
         SandboxInstanceId id, string key, CancellationToken cancellationToken)
@@ -342,17 +348,15 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
         const int maxAttempts = 60; // 60 x 500ms = 30s
         for (var attempt = 1; ; attempt++)
         {
-            if (_hcs.Get(key) is null)
+            if (_hcs.List().All(system => !string.Equals(system.Id, key, StringComparison.OrdinalIgnoreCase)))
             {
                 return;
             }
 
             if (attempt >= maxAttempts)
             {
-                _logger.LogWarning(
-                    "Container {SandboxId} is still listed by HCS 30s after termination; recreating it may fail.",
-                    id);
-                return;
+                throw new SandboxBackendException(
+                    $"Container {id} did not release its compute-system id within 30 seconds.", 0);
             }
 
             await Task.Delay(500, cancellationToken);
@@ -484,20 +488,21 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
     }
 
     /// <summary>
-    /// The read-only image layers the container is built from, base first. Uses
-    /// <see cref="WindowsContainerEngineOptions.BaseImageLayerPath"/> when
-    /// configured, otherwise the image the isolation policy selected (including
-    /// imported ones), otherwise the newest registered Windows Sandbox image layer.
+    /// The read-only image layers the container is built from, base first. A recipe's
+    /// explicit image wins, then the environment override, then the configured option.
+    /// Otherwise the isolation policy selects a compatible imported or Sandbox layer.
     /// </summary>
-    private IReadOnlyList<string> ResolveBaseLayers()
+    private IReadOnlyList<string> ResolveBaseLayers(string? requestedImagePath = null)
     {
-        // Prefer the configured option, then the environment override (the CLI
-        // does not always load a config file, so the env var is the reliable
-        // way to point the engine at an imported Windows Server image).
-        var configured = _options.Value.BaseImageLayerPath;
+        var configured = requestedImagePath;
         if (string.IsNullOrWhiteSpace(configured))
         {
             configured = Environment.GetEnvironmentVariable("WSM_CONTAINER_BASE_IMAGE");
+        }
+
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            configured = _options.Value.BaseImageLayerPath;
         }
 
         if (!string.IsNullOrWhiteSpace(configured))
@@ -508,6 +513,13 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
                 throw new SandboxNotSupportedException(
                     $"The configured container base image layer '{root}' does not look like a WCOW layer " +
                     "(it has no 'Files' folder). Import a Windows Server 2022/2025 image first.");
+            }
+
+            var supportForConfigured = _isolation.Evaluate(root);
+            if (!supportForConfigured.IsSupported)
+            {
+                throw new SandboxNotSupportedException(
+                    $"The container image '{root}' is not compatible with this host ({supportForConfigured.ReasonKey}).");
             }
 
             return [root];
@@ -886,21 +898,44 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
     internal static string RegAdd(string key, string name, string value)
         => $"reg.exe add \"{key}\" /v {name} /t REG_SZ /d \"{value}\" /f";
 
+    /// <summary>Removes password arguments from commands that are included in diagnostic logs.</summary>
+    internal static string RedactCommandForLog(string command)
+    {
+        if (command.StartsWith("net.exe user ", StringComparison.OrdinalIgnoreCase))
+        {
+            var fields = command.Split('"');
+            return fields.Length >= 4
+                ? $"{fields[0]}\"{fields[1]}\"{fields[2]}\"<redacted>\""
+                : "net.exe user <credentials redacted>";
+        }
+
+        if (command.Contains("/v DefaultPassword ", StringComparison.OrdinalIgnoreCase))
+        {
+            var fields = command.Split('"');
+            return fields.Length >= 4
+                ? $"{fields[0]}\"{fields[1]}\"{fields[2]}\"<redacted>\""
+                : "reg.exe add <DefaultPassword redacted>";
+        }
+
+        return command;
+    }
+
     /// <summary>Runs a command in the container and returns its exit code (-1 when it could not run).</summary>
     private async Task<int> RunInContainerAsync(
         SandboxInstanceId id, string command, CancellationToken cancellationToken)
     {
+        var logCommand = RedactCommandForLog(command);
         try
         {
             var exitCode = await _process.ExecuteAsync(id.ToString(), command, ct: cancellationToken);
             _logger.LogDebug(
-                "Container {SandboxId}: '{Command}' exited with {ExitCode}.", id, command, exitCode);
+                "Container {SandboxId}: '{Command}' exited with {ExitCode}.", id, logCommand, exitCode);
             return exitCode;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(
-                ex, "Container {SandboxId}: '{Command}' could not be run (continuing).", id, command);
+                ex, "Container {SandboxId}: '{Command}' could not be run (continuing).", id, logCommand);
             return -1;
         }
     }

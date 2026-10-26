@@ -155,8 +155,11 @@ wsm checkpoint save <id> <name> [--template]  保存 HCS 检查点
 wsm checkpoint list <id>                      列出检查点
 wsm checkpoint restore <id> <checkpointId>    恢复检查点
 wsm multi [--enable|--disable] 查看/切换多实例许可策略（gRPC 引擎用）
-wsm image import <ref> <path> 导入容器镜像的基础层，供「进程隔离」引擎使用
-                              （默认 mcr.microsoft.com/windows/servercore:ltsc2022）
+wsm image import <ref> [path] 导入容器镜像的基础层，供「进程隔离」引擎使用
+                              （path 可选；缺省落到 %LOCALAPPDATA%\WindowsSandboxManager\images\<slug>，
+                              与 GUI 下载共用同一位置；默认 ref 为 mcr.microsoft.com/windows/servercore:ltsc2022）
+wsm image session <path>      一条命令的桌面会话解锁：console 会话补丁 + 自动登录 +
+                              wsm-shell（读侧作 Winlogon\Shell）（--user / --password / --no-mirror）
 wsm elevate                    提权重启（启用 HCS 引擎）
 wsm help                       显示帮助
 
@@ -195,15 +198,21 @@ wsm stop $id
 （允许 build 不一致）。**VM 隔离（HCS / Windows Sandbox）始终可用**；仅当镜像满足兼容规则时，
 进程隔离引擎才会被列出为可用（否则在下拉框里显示为不可用，选择器自动回退到 VM 引擎）。
 
-在图形界面里：**设置 → 进程隔离镜像**，选择 `Windows Server 2022/2025` 镜像并点击「下载镜像」
-（需管理员）。下载完成后立即生效：状态行显示「进程隔离：可用」，创建对话框的引擎下拉框随之可选。
+在图形界面里：**设置 → 进程隔离镜像**，从目录中选择镜像并点击「下载镜像」（需管理员）。
+目录现含 4 项：`Windows Server 2025/2022 (full)`（约 5.5/5 GB）与 `Server Core 2025/2022`
+（各约 1.5 GB），也可直接键入自定义 reference。下载有字节/速度/ETA 进度与取消按钮；
+已安装的镜像显示「已安装」（可重新下载/删除），关闭对话框下载不中断。镜像默认下载到
+`%LOCALAPPDATA%\WindowsSandboxManager\images\<slug>`——GUI 与 CLI 共用同一位置。
+已有镜像可直接点「使用此镜像」而不必重新下载；点「准备桌面镜像」会写入交互登录和读侧
+（先停止使用该镜像的容器）。镜像路径也保存进每个实例的 `ContainerImagePath`，所以 agent
+已运行时，新实例仍使用你选择的镜像。下载完成后状态行显示「进程隔离：可用」，引擎下拉框随之可选。
 
-命令行等价流程：
+命令行等价流程（`layerPath` 可省略，缺省同上默认根）：
 
 ```powershell
 wsm elevate
-wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 C:\wsm-images\servercore-ltsc2022
-$env:WSM_CONTAINER_BASE_IMAGE = 'C:\wsm-images\servercore-ltsc2022'
+wsm image import mcr.microsoft.com/windows/servercore:ltsc2022
+$env:WSM_CONTAINER_BASE_IMAGE = "$env:LOCALAPPDATA\WindowsSandboxManager\images\mcr.microsoft.com-windows-servercore-ltsc2022"
 $id = (wsm create --name ctr --engine container --memory 4096 --cpu 2 --networking enable)
 wsm host $id                       # 启动并保持（另开一个提权窗口操作）
 wsm exec $id cmd.exe /c ver        # 在容器内执行命令
@@ -224,13 +233,22 @@ services 会话，`winlogon.exe` —— 以及 `LogonUI`、登录桌面、shell 
 ```powershell
 wsm elevate
 # 对已导入的镜像打补丁（也可在导入时加尾部 --desktop）
-wsm image desktop C:\wsm-images\servercore-ltsc2022
+wsm image desktop "$env:LOCALAPPDATA\WindowsSandboxManager\images\mcr.microsoft.com-windows-servercore-ltsc2022"
 
-$env:WSM_CONTAINER_BASE_IMAGE = 'C:\wsm-images\servercore-ltsc2022'
+$env:WSM_CONTAINER_BASE_IMAGE = "$env:LOCALAPPDATA\WindowsSandboxManager\images\mcr.microsoft.com-windows-servercore-ltsc2022"
 $id = (wsm create --name desk --engine container --memory 4096 --cpu 2 --networking enable)
 wsm host $id
 wsm exec $id cmd.exe /c qwinsta     # 应能看到  console  <id>  Conn
 ```
+
+要的不只是 console 会话、而是**完整的桌面会话**时，用一条命令代替：`wsm image session <layerPath>
+[--user <u>] [--password <p>] [--no-mirror]` —— 它在 console 补丁之外还把自动登录
+（`AutoAdminLogon`/`DefaultPassword` 等）与 `Winlogon\Shell = C:\wsm\wsm-shell.cmd`（读侧以重启
+循环常驻，作为会话的生命期）一起烘进镜像；引擎启动容器时会用 `net user` 把运行时密码设成与烘入值
+一致（默认 `Administrator` / `Wsm!Container2025`），并写入 `AutoLogonCount=99`。
+**注意：镜像准备已实测可用，但本机容器内桌面端到端尚未打通**（交互登录与首次重启仍受
+宿主 HCS/会话问题阻塞，见
+[docs/investigation/13-container-desktop-and-rdp.md](docs/investigation/13-container-desktop-and-rdp.md) §26）。
 
 > **注意：这不能让你"远程进桌面"。** 进程隔离容器里 RDP 监听器被 `termsrv` 主动拒绝
 > （`WTSIsServerContainer` → “TS in container and so Remote Connection is not allow”），
@@ -245,10 +263,11 @@ wsm exec $id cmd.exe /c qwinsta     # 应能看到  console  <id>  Conn
 > 被注销。**真正能用的是容器自己会话的桌面**：可绘制、可截屏（同文档 §10.5 有一张
 > 真实「注册表编辑器」的截图），工具见 `tools/container-desktop-agent/`。
 
-容器桌面的引擎选项（默认关闭）：`WindowsContainer:Desktop`
+容器桌面的引擎全局选项（默认关闭）：`WindowsContainer:Desktop`
 （`Enabled` / `UserName` / `Password` / `Shell` / `AttemptTcpRdp`），也可用环境变量
-`WSM_CONTAINER_DESKTOP=1` 打开。镜像是精简的且**没有 `explorer.exe`**，所以 `Shell` 默认是
-`cmd.exe`；配了 `Password` 才会写自动登录，否则会话停在 `LogonUI` 登录界面（也是桌面）。
+`WSM_CONTAINER_DESKTOP=1` 打开。GUI 选择桌面时则把 `Desktop.InteractiveSession=true`
+写进该实例清单；默认 `false`，不改变无头容器的启动和账号行为。Server Core 镜像没有
+`explorer.exe`，所以默认 shell 是持久运行的 `C:\wsm\wsm-shell.cmd`，而不是会立即退出的 `cmd.exe`。
 `AttemptTcpRdp` 是**实验性且已知无效**的 RDP 尝试，保留原因见上面的文档。
 
 ### 容器桌面通道（进程隔离；可替换的 provider，由清单选择）
@@ -256,16 +275,28 @@ wsm exec $id cmd.exe /c qwinsta     # 应能看到  console  <id>  Conn
 进程隔离的容器没有 RDP，容器窗口也不能跨 silo 搬进你的会话（实测见同文档 §16/§17）。所以桌面是一条
 **像素通道**，由 **provider** 实现，而**用哪一个由沙箱清单决定**：
 
-* `frame-buffer`（默认）：容器内 agent 抓整屏写进共享文件，宿主用一个窗口显示；不需要改镜像。
-* `window-mirror`：宿主通过 **HCS** 在容器会话里启动读侧；读侧**逐窗口** `PrintWindow` 直接画进共享内存
-  （`CreateDIBSection(hSection=共享映射)`，零拷贝，且不需要屏幕 DC），宿主为**每个容器窗口开一个真实窗口**
-  （同矩形/标题/z-order，会出现在任务栏与 Alt-Tab），**拖动宿主窗口就是真的移动容器里的窗口**
-  （`movewindow` → 读侧 `SetWindowPos`）。
+* `frame-buffer`（默认）：容器内 agent 抓整屏写进共享缓冲，宿主用一个窗口显示（可缩放窗口 +
+  letterbox 等比缩放与坐标逆变换；wheel/双击/剪贴板发送；**F10** 循环发起动态分辨率请求——agent 经
+  `ChangeDisplaySettingsEx` 尝试、失败优雅拒绝，TSDDD 可能拒绝，实验性）；不需要改镜像。agent 生命期
+  由**查看器锁**驱动（`viewers\<guid>.lock`，60 秒不续判 stale，无查看器 30 秒退出，900 秒兜底）。
+* `window-mirror`（镜像协议 **v2**）：宿主通过 **HCS** 在容器会话里启动读侧；读侧**逐窗口**抓取写进
+  共享内存，并对 shadow buffer 做 8×8 块差分，只发布**脏矩形**；宿主为**每个容器窗口开一个真实窗口**
+  （`FormBorderStyle.Sizable`——真标题栏/最小化/最大化/关闭，出现在任务栏与 Alt-Tab），查看器只重绘脏区。
+  **拖动宿主窗口就是真的移动容器里的窗口**（标题栏拖动 → `movewindow`；边框拖动 → `resize`；关闭按钮
+  → `close`），输入为结构化命令 `key <vk> down|up` / `text`（SendInput + `KEYEVENTF_UNICODE`）/ `wheel` /
+  双击。读侧还有 **`launch <exe> [args]`**：在它自己所在的会话里启动 GUI 程序——这是绕过跨会话 silo
+  墙的机制（不需要跨会话建进程）。
+
+共享缓冲有两种模式，由 `shm-mode.txt` 协商：宿主提权**且**查看器持有同一令牌时用 **pagefile**
+（`.shm` 只是 4 KB 的 header stub，像素在 page-file section 里，宿主侧经句柄穿透
+`SectionPassthrough` 直接映射，省掉文件这一跳）；否则回退 **file**。已知限制：由 SYSTEM 承载的 GUI
+拉起的查看器（UAC 过滤后的交互用户令牌）拿不到穿透句柄，自动落回 file 模式。
 
 清单里选（`SandboxRecipe.Desktop` → `SandboxDesktopPlan`）：
 
 ```jsonc
 { "desktop": { "kind": "WindowMirror",   // 或 "FrameBuffer" / "None"
+               "interactiveSession": true, // 请求镜像内的交互登录；GUI 自动设置
                "provider": null,         // 也可直接写 provider id（优先于 kind）
                "presentToInteractiveSession": true } }
 ```
@@ -275,14 +306,21 @@ wsm desktop <id> [--provider <id>] [--mode <Kind>] [--present|--no-present] [--i
 wsm desktop --list-providers                     # 本宿主注册了哪些 provider
 wsm desktop --compute-system <id> --container-root \\?\Volume{GUID} --provider window-mirror
 wsm image mirror <layerPath> [--shell cmd.exe] [--logon-user <u>] [--logon-password <p>]
+wsm image session <layerPath> [--user <u>] [--password <p>] [--no-mirror]
 wsm desktop-view --mode windows --frame <mirror.shm> [--offset-x N --offset-y N]
 ```
 
 > `wsm image mirror` 把读侧与登录钩子（`Winlogon\Userinit`）烘进镜像，供"GUI 跑在交互会话"的容器使用；
-> 默认路径不需要它——HCS 会把读侧直接启动到容器会话里。
+> 默认路径不需要它——HCS 会把读侧直接启动到容器会话里。`wsm image session` 是更进一步的**一条命令
+> 桌面会话解锁**（见上一节）。
+>
+> GUI 里：运行中的 WindowsContainer 实例的详情页有「Container desktop」区块，「桌面」/「窗口(RAIL)」
+> 按钮分别以 `--mode frame|windows` 拉起查看器；创建对话框在引擎选 WindowsContainer 时也可直接选
+> 桌面 kind 并持久化到清单。
 
 实测（同文档 §20）：宿主上出现镜像窗口 `rect=(500,320 480x300)`；拖动 (+90,+60) 后被镜像的窗口变成
-`rect=(170,140)`，读侧日志 `movewindow 0x15198C -> (170,140) ok=True`。
+`rect=(170,140)`，读侧日志 `movewindow 0x15198C -> (170,140) ok=True`。**注意**：以上是宿主侧回归；
+解锁链路（`wsm image session` + `launch`）的容器内端到端实测**尚未完成**，待验清单见同文档 §25.7。
 
 ### 桌面与 mstsc（用 VM 隔离）
 
@@ -360,11 +398,19 @@ mstsc /v:172.21.83.79   # 用户名 WDAGUtilityAccount；密码为确定性口�
     **Windows Server 2022/2025** 镜像（允许 build 不一致）。Windows Sandbox 自带的是
     **客户端** 镜像，功能更新后可能落后于宿主（本例宿主 26H2/26300、镜像 24H2/26100），
     此时 HCS 会以 `HCS_E_IMAGE_MISMATCH (0x80370101)` 拒绝。请先
-    `wsm image import mcr.microsoft.com/windows/servercore:ltsc2022 <path>`，
-    再设 `WSM_CONTAINER_BASE_IMAGE`（或 `WindowsContainer:BaseImageLayerPath`）指向该层。
-  - **无图形桌面**：进程隔离容器（含 ServerCore）没有可交互的会话与 RDP 监听
-    （`WinStations\RDP-Tcp` 缺失），因此**不能**用 `mstsc` 进入图形桌面；需要图形桌面请使用
-    Windows Sandbox/HCS 全 VM 引擎。该容器适合无头工作负载（可用 `wsm exec` 执行命令）。
+    `wsm image import mcr.microsoft.com/windows/servercore:ltsc2022`（path 可省略，缺省落到
+    `%LOCALAPPDATA%\WindowsSandboxManager\images\<slug>`），再设 `WSM_CONTAINER_BASE_IMAGE`
+    （或 `WindowsContainer:BaseImageLayerPath`）指向该层。
+  - **图形桌面（宿主侧已实现；本机端到端未打通）**：进程隔离容器**没有 RDP 监听**
+    （`termsrv` 在容器里主动拒绝创建监听器），因此**不能**用 `mstsc` 进入图形桌面。镜像准备、
+    镜像选择、清单（`Kind` / `InteractiveSession` / `ContainerImagePath`）以及宿主侧
+    frame-buffer / window-mirror provider 均已实测；但本机交互登录和首次容器重启仍受
+    HCS/会话问题阻塞，**尚未验证容器内像素、输入与 RAIL 窗口**。详见
+    [docs/investigation/13-container-desktop-and-rdp.md](docs/investigation/13-container-desktop-and-rdp.md) §26。
+    需要成熟图形桌面请使用 Windows Sandbox/HCS 全 VM 引擎。
+  - **pagefile 共享模式的限制**：`shm-mode.txt` 协商为 `pagefile` 时宿主侧靠句柄穿透直接映射像素
+    section；由 SYSTEM 承载的 GUI 拉起的查看器（UAC 过滤后的交互用户令牌）穿透不了，自动回退
+    `file` 模式（功能相同，多一次文件拷贝）。
 - `HCS` 的 guest IP 由 HNS 维护，未从 HCS 属性直接暴露。
 - `WindowsSandboxServer` gRPC 契约与 `RDPBASE`/`computecore`/`cmclient` 接口属**非公开**接口，可能随版本变化。
 - `ISandboxEnvironment.PackageInstallPath` 在非提权下可能为 `null`。

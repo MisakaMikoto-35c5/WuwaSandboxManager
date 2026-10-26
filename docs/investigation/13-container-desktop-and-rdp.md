@@ -1551,3 +1551,248 @@ zero the region -> paint with one strategy -> GdiFlush -> measure non-black samp
 并在 `read.log` 里留下完整的策略矩阵 ✓，宿主侧显示的就是空白窗口 ✓（而不是假装有内容 ✓）。
 `container-steps.ps1 -Step 5` 也据此更新 ✓：矩阵里的 `ink=0%` 行是**证据** ✓，判定看的是
 `capture chosen` 是否存在 ✓ 与最好 ink 是否 > 0 ✓。
+
+
+## 25. 产品化实现：§23.6 的解锁条件已落码（容器内实测待定）/ Productization: the §23.6 unlock is now code, live verification pending
+
+§23.6 列的「什么时候这条链就能通」本轮**已在代码里实现**（分六个 phase 落地）✓，宿主侧回归通过 ✓；
+但**容器内端到端验证尚未做**——所有「待验」项集中在 §25.7。本节只做实现记录，不改写上面任何一节的实测结论。
+
+### 25.1 交互式会话解锁（phase 1）/ The §23.6 unlock, in one call
+
+`IContainerImageCustomizer.EnableDesktopSession(layerPath, DesktopSessionOptions)`
+（`src/10-Hcs/Wsm.Hcs.Storage/`，实现在 `Internal/ContainerImageCustomizer.cs`）一次调用完成 §23.6 的全部条件：
+
+- console 会话补丁：每个控制集 `Session Manager\NumberOfInitialSessions = 2`（即原 `wsm image desktop` 的那一步）✓；
+- Winlogon 自动登录：`AutoAdminLogon` / `DefaultUserName` / `DefaultPassword` / `ForceAutoLogon`，
+  外加每个控制集 `Lsa\LimitBlankPasswordUse = 0`（REG_DWORD）✓；
+- `Winlogon\Shell = C:\wsm\wsm-shell.cmd` ✓ —— 新 payload（`src/10-Hcs/Wsm.Hcs.Storage/Images/wsm-shell.cmd`）：
+  **永不退出**的重启循环，用 `-AsShell` 前台跑读侧，日志写 `C:\wsm\shell.log`。这正是 §23.6 的对策：
+  「`cmd.exe` 做 Shell 会立刻 EOF 退出、导致会话被拆」（t+100s 现象的成因之一）；
+- 读侧 payload 一并安装进 `Files\wsm\` ✓（`--no-mirror` 可关）。
+
+密码两侧必须一致，所以默认值只存在一处：`ContainerDesktopSessionDefaults`
+（`ContainerAdministrator` / `Wsm!Container2025`）；引擎启动时 `ConfigureDesktopAsync` 在容器内
+`net user <u> <p>` 并刷新自动登录键，使运行时密码与烘进镜像的 `DefaultPassword` 一致 ✓
+（`src/20-Engines/Wsm.Engine.WindowsContainer/WindowsContainerEngine.cs`）。
+
+读侧（`Images/wsm-desktop-read.ps1`）新增输入命令：**`launch <exe> [args]`**（在读侧自己所在的
+console 会话里启动 GUI 程序 —— 这就是绕过 §23.3「跨会话建进程被 silo 拒绝」的机制：不需要跨会话，
+程序直接生在对的会话里）、`resize`、`wheel`、`close`；以及 `-AsShell` 模式（不自脱离，wrapper 就是
+会话的生命期）。
+
+CLI：`wsm image session <layerPath> [--user <u>] [--password <p>] [--no-mirror]`。
+
+### 25.2 RAIL 镜像协议 v2（phase 2）/ Mirror protocol version 2
+
+- `ContainerDesktopMirror.cs`：version 2 布局 —— `dirtyCount`（int32）在 header 偏移 56，
+  脏矩形数组（204 × 16B）跟在窗口表之后，title blob 相应后移 3264 字节；v1 兼容保留。
+  读侧对 shadow buffer 做 8×8 块 memcmp 差分，查看器只重绘脏区。
+- `DesktopMirrorViewCommand`：镜像窗口改用真实 `FormBorderStyle.Sizable`（真标题栏/最小化/最大化/关闭）：
+  标题栏拖动 → `movewindow`；边框拖动 → `resize`；关闭按钮 → `close`。输入升级为 v2 结构化命令：
+  `key <vk> down|up` + `text`（SendInput / `KEYEVENTF_UNICODE`）、`wheel`、双击。
+  命令格式器公开在 `MirrorInputCommands.cs`（`src/30-Connections/Wsm.Connection.ContainerDesktop/`）。
+
+### 25.3 pagefile section + 句柄穿透（phase 3）/ Page-file section and handle passthrough
+
+- 模式协商 `shm-mode.txt`：宿主提权**且**查看器持有同一令牌时写 `pagefile`，否则 `file`。
+  pagefile 模式下 `.shm` 文件只是 4 KB 的 header-only stub，像素放在
+  `CreateFileMappingW(INVALID_HANDLE_VALUE)` 的 page-file section 里；`mode` 字段在 header 偏移 60
+  （`FSM1` 与 `WSMM` 两种布局一致）。
+- `Internal/SectionPassthrough.cs`：OpenProcess(`PROCESS_DUP_HANDLE`) →
+  `SystemExtendedHandleInformation`（class 64）→ 用自建探针 section 解析 Section type index →
+  `DuplicateHandle`（`SECTION_MAP_READ|SECTION_QUERY`）→ `NtQuerySection` 尺寸比对（一页窗口）→
+  magic 校验。任一步失败回退 file 模式。
+- **已知限制**：以 SYSTEM 承载的 GUI 启动的查看器（UAC 过滤后的交互用户令牌）拿不到穿透句柄 →
+  自动落回 `file` 模式。
+
+### 25.4 整屏会话产品化（phase 4）/ Full-desktop session productization
+
+- 帧 agent（`Agent/container-desktop-agent.ps1`）输入对齐 v2 语法，并新增
+  `clipboard <base64-utf8>`（设置会话剪贴板）。
+- 查看器（`DesktopViewCommand`）：可缩放窗口 + letterbox 等比缩放，坐标逆变换回容器坐标；
+  wheel、双击、剪贴板发送。F10 循环发起**动态分辨率**请求（`view-request.txt` /
+  `view-request.ack.txt`；agent 尝试 `ChangeDisplaySettingsEx`，失败时优雅拒绝——TSDDD 可能拒绝，
+  未实测）。
+- agent 生命期改为**查看器锁**驱动：`viewers\<guid>.lock`，60 秒不续判 stale 清除，无任何查看器
+  30 秒后退出；保留 900 秒外部兜底。
+
+### 25.5 WinUI GUI 集成（phase 5）/ GUI integration
+
+- `wsm_service.proto` 新增 RPC：`StartDesktop`（adopt 已活的通道）、`StopDesktop`、
+  `GetDesktopStatus`；`IWsmServiceClient` 对应方法（`src/30-Connections/Wsm.Service.Client/`）。
+- GUI `ContainerDesktopConnector`（`src/50-App/Wsm.Ui.WinUI/`）：agent 优先、失败回退进程内引擎。
+- 实例详情页新增「Container desktop」区块：桌面 / 窗口(RAIL) 两个按钮（运行中的
+  WindowsContainer 实例可见），拉起 `wsm.exe desktop-view --mode frame|windows`。
+- 创建对话框新增桌面区块（kind：None / FrameBuffer / WindowMirror + present 复选框，引擎为
+  WindowsContainer 时出现），持久化到 recipe 的 `SandboxDesktopPlan`。
+
+### 25.6 镜像下载 GUI（phase 6）/ Image download in the GUI
+
+- 目录 `ContainerImageInfo`（`ContainerImageImporter`）共 4 项：
+  `windows/server:ltsc2025`（约 5.5 GB）、`windows/server:ltsc2022`（约 5 GB）、
+  `servercore:ltsc2025/2022`（各约 1.5 GB）；`ContainerImageImportStage` 枚举 + 字节级进度
+  （`BytesReceived`/`TotalBytes`）；取消被尊重并清理半成品文件。
+- 共享默认根 `ContainerImagePaths`（`%LOCALAPPDATA%\WindowsSandboxManager\images\<slug>`，
+  `GetInstallState` → Missing / Installed / Occupied），GUI 与 CLI 落同一个目录。
+- GUI 设置区块：可编辑 ComboBox（目录项或自定义 reference）、字节/速度/ETA 进度
+  （extract/prepare 阶段为 indeterminate）、取消按钮、已安装状态（重新下载/删除）、
+  Occupied 提示；关掉对话框下载不中断（进度镜像到主状态栏），错误本地化。
+- CLI `wsm image import <reference> [layerPath]` —— `layerPath` 改为可选，缺省同上默认根；
+  控制台有进度输出。
+
+### 25.7 待容器内端到端实测 / Pending live verification (checklist)
+
+以上全部只经过宿主侧回归；以下各项**必须在真实容器里验过才算通**：
+
+- [ ] 自动登录用烘进去的密码真的走完 —— `winlogon` 是否活过 ~100 秒并拉起 shell（§23.4 的 t+100s 现象是否消除）；
+- [ ] 读侧在 console 会话里真的产出像素（§24.2 的全 0 矩阵只测过 service 会话）；
+- [ ] `launch regedit` → 宿主出现镜像窗口且可拖动/输入；
+- [ ] pagefile 穿透在容器链路里成立（非 file 回退）；
+- [ ] 动态分辨率对 TSDDD 实际生效（agent 已支持优雅拒绝）；
+- [ ] 完整 `windows/server` 镜像的「仅基础层」可启动性 —— importer 对 Server Core 已断言可行；
+      完整 Server 镜像 manifest 形状相同、预期一致，**但尚未 boot-verify**。
+
+### 25.8 容器内实测：自动登录被 120 秒墙挡死，四条绕行路线逐一证伪（step32–48）/ Live: autologon dies at the 120s wall; four bypass routes measured and closed
+
+对应 §25.7 清单的实测结果。**坏消息：自动登录路线在本机（Win11 26H2 build 26300）走不通**；好消息是每一条绕行路线都被定量测过，死在哪一行都有日志（`artifacts/live-step32.log` … `live-step48.log`）。
+
+**step32/33/34（livedesk7，双启动 + TermService 假说）**：镜像补丁全部生效 —— TermService/SessionEnv Running+Automatic、注册表五项（AutoAdminLogon/DefaultUserName/DefaultPassword/ForceAutoLogon/LimitBlankPasswordUse=0）全对、双启动机制触发正常、烘进去的密码跨 Terminate 幸存（`LogonUser` type 2/3 均 ok）。**但** winlogon 停在 LogonUI 等待，console 会话在**精确 t+120s** 被原子拆除（winlogon/LogonUI/csrss 同帧消失，与 §10.3 的 121s TermSrv notification 拆除吻合）。"Last logon" 注册表值从未被登录更新 → **自动登录从未发生**，凭据提供器在等真实输入。§11.7 曾实测自动登录成功，差异在于当时密码已在容器层；双启动烘密码路线在本 build 上不再触发自动登录。
+
+**step35（window-mirror 全链路）**：链路本身全通 —— HCS 注入读侧 ✓、pagefile 零拷贝协商 ✓、窗口表发布 ✓、`launch regedit` 输入管道生效 ✓（窗口表出现 `Registry Editor 768x555`）。**但 7 种像素策略全部 0% ink**：读侧落在 services 会话，不是输入桌面。注意 CLI 是 `--provider window-mirror`（`--mode` 枚举解析失败会静默回退 frame-buffer）。
+
+**step38–41（容器内跨会话注入）**：**封死**。就算经容器内计划任务拿 SYSTEM：`CreateProcessAsUser`（winlogon token）err=5（silo 拒绝）；`CreateProcessWithTokenW` 能成功创建，但**子进程落在调用者会话**（childSession=2 而非目标的 3）——token 复制不改变会话归属。
+
+**step42–45（services 会话直接取像素）**：**全路死**。拓扑探针（dispdiag）：exec 进程落在 service 窗口站 `Service-0x0-e28880f$`、桌面 `Default`；`OpenInputDesktop` err=1、`OpenDesktop("Winlogon")` err=2；`CreateDC("DISPLAY")` 能建（TSDDD 显示设备 1024x768x32 真实存在）但 `BitBlt` 读 err=6（gdiag2）——设备上下文存在不等于能读到像素。两个容器侧脚本里加的 `SwitchToInputDesktop()`（OpenInputDesktop+SetThreadDesktop）对本路线无效（services 会话拿不到输入桌面句柄），代码保留但确认无害。
+
+**step46–48（宿主侧借容器 winlogon token 注入）**：宿主能看到容器内 winlogon（pid 级可见，内存空间共享的直接证据）。三级权限定位：① `OpenProcessToken` 必须开 `MAXIMUM_ALLOWED`（0x20000000），单独权利组合 err=5；② 提权用户 `CreateProcessAsUser` err=1314（缺 SeTcbPrivilege）；③ 改走**宿主计划任务 /ru SYSTEM** 后 SPAWN 成功（pid=26360，目标 winlogon pid=44716 session=3）——但子进程立即消失、容器 volume 里没有 in-probe.log。**判读：子进程疑似不在 silo 内**（它看到的是宿主 C:\，而 `C:\wsm\in-probe.ps1` 当时只埋在容器 volume 里 → 找不到脚本立即退出）。step49 把探针同时埋进宿主 `C:\wsm\` 和容器 volume（双文件系统）来判定子进程的真实落点：若宿主侧出现 in-probe.log 且 session=3，说明至少会话归属正确，截图 + SendKeys 打字会在 LogonUI 上真实执行。
+
+### 25.9 step49–51：注入路线终审 + 自动登录取证 / Injection verdict and autologon forensics
+
+**step49（双文件系统判定，livedesk15）**：宿主 SYSTEM 注入的子进程连第一行日志都没写就消失 —— 探针同时埋在容器 volume 与宿主 `C:\wsm\`，两侧都无 `in-probe.log`（`artifacts/live-step49.log`）。判读：`CreateProcessAsUser` 的「成功」是空壳，子进程死于进程初始化（最可能是跨 silo 的 CSRSS 会话注册失败），用户态代码从未执行。**宿主侧借 token 注入路线封死**。至此四条绕行路线全部定量证伪。
+
+**step50（容器内事件日志取证，`artifacts/live-step50.log`）**：
+- Winlogon 注册表全量 dump：五值全对（AutoAdminLogon=1 / DefaultUserName=Administrator / DefaultPassword 正确 / ForceAutoLogon=1 / **DisableCAD=1 也已在位**），`LegalNotice*` 为空、`Shell`/`Userinit` 指向 wsm payload；
+- LocalSessionManager/Operational：**#41/#42 仲裁确实以 `LIVEDESK15-389F\Administrator` 开始**（t+0.9s），但之后**没有任何认证事件**——Security 日志里无 winlogon 发起的 4624/4625/4776（唯一两个 type-2 登录是 wininit/winlogon 给 UMFD 字体驱动开的）；t+121s LSM #39/#40「Session 3 has been disconnected by session 3, reason code 11」= 120 秒墙的执行者；
+- 对比 §11.7 成功样本：当年顺序是 #41/#42 → **#21 Session logon succeeded** → **#22 Shell start notification**；现在 #21 从未出现，即自动登录在「认证提交」之前就已经死了；
+- RemoteConnectionManager/Operational：**#1136 "RD Session Host Server role is not installed"** —— TermService 虽然 Running，但 RCM 拒绝建监听（§11 的 `WTSIsServerContainer` 路径），netstat 证实 3389 无监听。TCP RDP 路线维持 §11 结论：死。
+
+**step51（LogonUser 探针，`artifacts/live-step51.log`）**：第二启动的 SAM 状态完全正常 —— `LogonUser('Administrator', '.', 'Wsm!Container2025', 2/3)` 均 ok=True，`Password last set` = 当次启动 18:33:15（ConfigureDesktopAsync 每次启动都重设，早于 winlogon 启动 3 秒）、`Account active = Yes`。**密码持久化假说排除**。
+
+剩下两个未测的自动登录门：① `AutoLogonSID = S-1-5-21-...-500` 是烘进镜像层的（仿 Sysinternals），若它与容器 SAM 里 Administrator 的真实 SID 不符，winlogon 的 SID 查找会**静默跳过**自动登录（不发任何事件，与观测吻合）；② `DefaultDomainName` 为空。step52 删掉 AutoLogonSID、补上 `DefaultDomainName='.'` 后第三启动实测。
+
+### 25.10 step52–86：认证打通，121 秒墙锁定为宿主 LCU 回归（2026-10-15 20:03 的 RollupFix 9711）/ Autologon authenticated; the 121s wall is a host-LCU regression
+
+**step52–54**：`AutoLogonSID` 毒值（烘进镜像的 SID 与容器 SAM 真实 SID 不符）删除、`DefaultDomainName='.'` 补上后仍无认证事件 → 该门也排除；镜像 SOFTWARE 里发现 **`AutoLogonCount=0`**（语义=不再自动登录），是 §10.3 时代留下的毒值之一。
+
+**step55–67（SAM 事故与恢复）**：一次离线 SAM 手术把镜像 `SAM_BASE` 写坏（容器无法启动）；用 `SAM_BASE.orig`（MCR 原始字节）做字节级回滚并 md5 验证，镜像恢复。结论：SAM 不做离线手术，密码只走运行时 `net user`（写容器 scratch 层）。
+
+**step68–77（空密码实验链）**：把镜像 `DefaultPassword` 置空 + `LimitBlankPasswordUse=0` 后，首启动即出现一次 4625（LogonType 2、Logon Process **User32**、空密码 → `0xC000006D/0xC000006A` 密码错——证明 winlogon 确实在启动瞬间尝试了自动登录，只是镜像 SAM 里 Administrator 密码非空未知）。双启动烘密码后第二启动反而不提交任何认证。step77 容器内 `LogonUser('Administrator','Wsm!Container2025',type 2/3)` **ok=True**：烘密码成功、账户激活、凭据完全有效。
+
+**step78（突破，`artifacts/live-step78.log`）**：镜像 SOFTWARE 写入 **`AutoLogonCount=99`（REG_SZ）** 后，winlogon 每启动都提交认证并**成功**——Security 4624：`Administrator`、`LogonType 2`、`Elevated Token Yes`、`User32/Negotiate`、成对 linked logon。认证环节自此完全打通。**但** LSM **#21（Session logon succeeded）从未出现**，会话停在 `Conn`，t+121s 被 #39/#40（reason 11 = winlogon 主动断开）拆除；`AutoLogonCount` 停在 99 不递减（winlogon 未判定登录完成）。
+
+**step79–84（卡点二分定位）**：
+- ProfSvc RUNNING，Administrator 配置文件加载/卸载时间戳都在（State=0x304）→ profile 不是瓶颈；
+- 悬挂窗口期进程表：session 里 csrss/conhost/fontdrvhost/**LogonUI**/winlogon 都在，**userinit / shell 全程从未启动**；
+- 把 `Userinit` 末尾的 `wsm-winlogon-wrap.cmd` 换成「写一行日志即退出」的 no-op tracer：**日志从未出现 → userinit 从未被启动**，我们的 payload 完全无嫌疑；
+- 卡点精确定义：**认证 4624 成功 → LSM #41/#42 仲裁 → winlogon 等待某物 121 秒（LogonUI 留守）→ winlogon 主动断开**。「#42 之后、启动 userinit 之前」；
+- `tscon <id> /dest:console` 在仲裁悬挂期间报 **error 5023**（组或资源状态不正确），不可强接；窗口期杀 LogonUI 会让整个会话瞬间拆除（LogonUI 是关键进程，不能杀）。
+
+**step85**：把镜像 `SessionEnv`/`TermService` 的 `Start` 从 2 改回 MCR 默认 3（排除 step32 时代 EnableSessionServices 补丁的嫌疑）→ **墙原样**（4624 成功、#41/#42、无 #21、121s 拆除）。该假说排除。
+
+**step86（根因锁定，决定性时间线）**：§11.7 的成功样本与今天的失败之间，**镜像没变**（`C:\wsm-images\servercore-ltsc2022` 自 2026-10-15 01:09 拉取后未重拉，容器内 winlogon/LSM 均为镜像内 build 20348.4294 的二进制），**变的是宿主内核**：
+
+| 时间 | 事件 |
+|---|---|
+| 10-13 10:42:57 | 宿主最后一次旧启动（System 日志 6005）——此后连续运行无重启 |
+| 10-14 02:15–02:46 | KB5127694 / KB5121794 / KB5127648 暂存（Setup 日志），`winlogon.exe/lsm.dll/termsrv.dll/vmcompute.exe/win32k.sys` 等新文件 02:22 落盘，挂起待重启 |
+| **10-15 白天（≤15:58 提交 379c2f6）** | **§11.7 成功**：#41/#42 → #21 → #22、`console Administrator 5 Active`、shell 启动——跑在 **10-13 启动的旧内核**上 |
+| **10-15 20:01 / 20:03** | **两次重启，LCU 完成安装**（Setup 日志 id=2：`Package_for_RollupFix … 26100.9711.1.30` 已安装，KB5121794 26100.9544 已安装） |
+| 10-16 起（step32–85，含今日 10-23 11:11 崩溃后启动） | 全部复现同一堵墙：认证可成功（step78 起）但 #21 不到、userinit 不启动、121s 拆除——跑在 **9711 内核**上 |
+
+即：**「进程隔离容器 console 会话自动登录」在 UBR ~9457 时代内核上工作，在 RollupFix 26100.9711.1.30（2026-10-15 20:03 生效）上回归**——挂起点在 winlogon 仲裁之后、userinit 之前，与镜像内容、TermService/SessionEnv、AutoLogon* 各值、我们的全部 payload 均无关（逐一证伪）。唯一未经受控实验的剩余变量就是宿主 LCU 本身。
+
+**下一步（决定性验证，需用户授权重启）**：`dism /online /remove-package /packagename:Package_for_RollupFix~31bf3856ad364e35~amd64~~26100.9711.1.30`（必要时连带 `Package_for_KB5121794~…~26100.9544.1.2`）→ 重启回 ~9457 内核 → 重跑 step85 流程。若自动登录恢复 → 回归实锤，可据此决定「停留旧内核 / 追踪修复版本」；若仍失败 → 排除 LCU，转 win32k 会话空间方向。备选路线：Windows Update 向更新版本升级（赌新版已修复），同样以重启为代价。
+
+### 25.11 step87+：宿主环境修复——官方 Windows Sandbox 0x80370106 的真正原因 / Host repair: the real cause of the Sandbox failure
+
+背景：2026-10-23 微软官方 Windows Sandbox 在本机报「虚拟机或容器意外退出 (0x80370106)」，其他电脑正常。排查结果：
+
+- VMMS/Admin 事件 **15280「无法装载虚拟磁盘」**（10-23 19:59:45、20:02:57，即用户尝试启动沙盒的时刻）——失败点是**挂载沙盒基底 VHDX**，不是 Guest 内部崩溃；
+- `C:\ProgramData\Microsoft\Windows\Containers\BaseImages` **目录为空**——沙盒基底镜像整个丢失。Setup 日志显示 2026-10-20 09:52 有一次 CBS 大动作（`KB5124007` 被改为 Absent、大量包被暂存，Client=CbsTask），基底镜像很可能在那时被移除且替换品未落地；
+- 可选功能 `Containers-DisposableClientVM` 等全部 Enabled——功能开关没问题，缺的是基底镜像文件本身；
+- 修复路径（不动 Windows 更新）：`dism /online /cleanup-image /restorehealth` 修复组件存储 → 禁用/重启用 `Containers-DisposableClientVM` 重建基底镜像 → 重启验证。
+
+**关于 LCU（按用户决定，不动更新）**：曾尝试卸载 `Package_for_RollupFix 26100.9711.1.30`（KB5127648）验证 §25.10 的回归假说——首次被 `CBS_E_CANNOT_REMOVE_CONTAINER_DEPENDENCY` 拒绝（沙盒基底镜像把 `HKLM\...\Component Based Servicing\ContainerAI\BaseImageVersion=10.0.26100.9711` 钉住）；删除该钉后卸载暂存成功（exit=3010，待重启生效）。**用户明确要求不卸载更新**，已用 `dism /online /cleanup-image /revertpendingactions` 回滚挂起卸载（包状态恢复「已安装」，系统保持 26300.9711），`ContainerAI` 的值/所有者/ACL 与 WU 暂停键已全部还原（备份：`artifacts/ContainerAI-backup.reg`）。§25.10 的「LCU 回归」作为**强相关性假说**保留，未经受控回滚实验证实；若未来某次更新后容器桌面自动登录自行恢复，即侧证。
+
+**已做的无害清理**：删除 40 个 WSM 测试容器的孤儿 scratch 目录（`WsmContainers\livedesk*` 等），释放 3.2 GB；`wsm image release` 解除镜像/陈旧 scratch 层占用。这些与本故障无关，纯属磁盘卫生。
+
+---
+
+## 26. 产品化复核与当前阻塞（2026-10-26）/ Product verification and the remaining blocker
+
+### 26.1 已实测可用 / Verified working
+
+- **完整镜像目录**：MCR `windows/server:ltsc2022` 与 `ltsc2025` 都返回 manifest list，且均有
+  `windows/amd64` manifest。基础层分别为：
+  - 2022：`sha256:cc43a3999819693100c63928ab8fd6e55db37d22882d04244da3497e39aafe52`，3,042,472,970 bytes；
+  - 2025：`sha256:e5dcf3bc996337655b83ea98c2e05a33a75e36a0357b01d7d433dbabcd1509a7`，4,481,593,239 bytes。
+  这些是压缩下载大小，不是安装后的磁盘占用；没有据此声称 Server 2025 已在本机启动。
+- **完整 Server 2022**：已有的 `C:\wsm-images\server-full-ltsc2022` 经 `ProcessBaseImage` 和
+  `wsm image session` 准备成功（`Hives`、读侧、`explorer.exe` 均存在），并多次完成
+  `create/start`。容器内命令把 `qwinsta`、事件日志写入卷，再经宿主挂载点读取成功。
+- **镜像与 GUI**：用原生 `Wsm.Ui.WinUI.exe`（x64 输出目录）实测：
+  - 「使用此镜像」选中 `C:\wsm-images\server-full-ltsc2022` 并写入 `ui-settings.json`；
+  - 「准备桌面镜像」调用现有 WCOW 释放逻辑与 `EnableDesktopSession`，对 Server Core 镜像成功返回，
+    状态为桌面支持已安装；
+  - 创建 window-mirror 实例后，清单含 `Engine=2`、`Desktop.Kind=2`、`InteractiveSession=true`、
+    `ContainerImagePath=C:\wsm-images\server-full-ltsc2022`。因此选择不再只存在于 GUI 进程的环境变量，
+    agent 已运行时也能从清单取得同一路径。
+- **回归**：`dotnet test WindowsSandboxManager.slnx --no-restore` 为 **440/440**；
+  `dotnet build WindowsSandboxManager.slnx --no-restore` 为 **0 error**。
+- **主机状态**：`ContainerAI\BaseImageVersion` 已恢复存在（`0xa000065f425ef`），无需再次改注册表；
+  未卸载或暂停 Windows 更新。
+
+### 26.2 仍未打通：交互登录与第一次重启 / Still blocked: interactive logon and the first restart
+
+`wsm image session` 只准备镜像；首次创建 scratch 后，仍需在容器里用 `net user` 对齐账号密码。
+因此首次启动后的重启是桌面链路的必要环节，不能把镜像准备成功等同于桌面成功。
+
+Server Core 在本机仍复现：LSM #41/#42 后没有 #21/#22，`userinit`/读侧未启动，约 121 秒拆除。
+完整 Server 2022 的首次重启又被 HCS 生命周期挡住，逐项实测如下：
+
+| 尝试 | 本机结果 |
+|---|---|
+| `HcsTerminateComputeSystem` 后等待 operation | 原生 terminate 返回 0；`uint.MaxValue` 等待不返回，有限等待得到 **`0x80370118`（timeout）**；`hcsdiag` 仍列 `Stopped` |
+| `HcsDeleteComputeSystem` | 返回 0，但等待得到 **`0x80370115`（operation not started）**，ID 未删除 |
+| 对 stopped 系统 `Open + Start` | **`0x80370105`（invalid state）** |
+| 对 stopped 系统再次 `Create` | **`0x8037010F`（already exists）** |
+| `logoff <console-id>` 只重登录会话 | 会话变成 `Down`，没有新的 `shell.log` 或 `read.log`，不是有效的重登路径 |
+| modern system callback | `options=4/1` 为 `E_INVALIDARG`；`options=0` 可注册但 15 秒内无退出事件。主创建句柄上注册后，30 秒内仍无事件 |
+| legacy `HcsRegisterComputeSystemCallback` | `E_INVALIDARG`，没有开始终止操作 |
+
+**错误码不得再混用**：`0x80370115` 是 operation not started，`0x80370118` 是 timeout，
+`0x80370107` 才是 terminated。代码已删除「timeout 就是停止成功」「`Open + Start` 复用」等错误尝试，
+不保留未验证的 callback/Delete 路线。终止/重启现在有界并明确报错，不再无限等待或伪报成功。
+
+### 26.3 因而尚不能宣称的能力 / What is not being claimed
+
+- **没有**在本机完成容器内 console 登录并持续产出像素；
+- **没有**完成容器内 `regedit` → 宿主 RAIL 窗口 → 拖动/键盘输入的端到端链路；
+- **没有**完成整屏远程桌面会话、pagefile 穿透或动态分辨率验证；
+- **没有**在本机启动完整 Server 2025。上述 MCR manifest 只证明来源和镜像形状可用。
+
+宿主侧的 mirror 协议、查看器和 440 个测试仍有效，但不能替代这些真实容器验证。
+下一步应在已知正常的另一台主机或运行时被修复后的本机，用一个新容器复测同一条链路；
+不卸载 Windows 更新，也不继续堆叠已被证伪的注册表项或 HCS 调用。
+
+### 26.4 验证工具注意事项 / Probe cautions
+
+- 当前容器 `ExecuteAsync` 只返回退出码，不能假定 `wsm exec ... | Out-String` 会返回 guest stdout。
+  本次有效取证让容器内命令重定向到 `C:\wsm\*.txt`，再读取宿主可见的 scratch 挂载卷；
+  空 stdout 的探针一律不当作会话不存在的证据。
+- WinUI 验证使用解决方案的 **x64 `bin\x64\Debug` 原生 `.exe`**。`dotnet <dll>` 在本项目
+  WinUI 自包含应用上不是有效的验证方式；它会混淆基线与当前版本的比较。
+- UI Automation 设置文本框后要移动焦点以提交绑定；选择容器引擎后要重新枚举桌面 ComboBox；
+  重复运行前关闭旧设置对话框。找不到隐藏按钮不等于按钮没有实现。
+

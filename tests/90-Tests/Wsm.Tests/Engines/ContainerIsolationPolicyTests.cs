@@ -121,6 +121,25 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
         Assert.Equal("Container.Reason.UnknownImage", result.ReasonKey);
     }
 
+    [Fact]
+    public void A_manual_server_image_uses_kernel_build_and_folder_name_enrichment()
+    {
+        var image = Path.Combine(_root, "servercore-ltsc2022");
+        var system32 = Directory.CreateDirectory(Path.Combine(image, "Files", "Windows", "System32"));
+        Directory.CreateDirectory(Path.Combine(image, "Hives"));
+        File.Copy(
+            Path.Combine(Environment.SystemDirectory, "notepad.exe"),
+            Path.Combine(system32.FullName, "ntoskrnl.exe"));
+        var imageBuild = ContainerImageMetadata.TryReadBuildFromKernel(image)!.Value;
+
+        var result = Evaluate(hostBuild: imageBuild + 1, isWindows11Client: true, image: image);
+
+        Assert.True(result.IsSupported);
+        Assert.Equal("Container.Reason.SupportedServer", result.ReasonKey);
+        Assert.True(result.ImageIsServer);
+        Assert.True(ContainerImageMetadata.TryRead(image)!.IsServer);
+    }
+
     [Theory]
     [InlineData("mcr.microsoft.com/windows/servercore:ltsc2022", true)]
     [InlineData("mcr.microsoft.com/windows/nanoserver:ltsc2025", true)]
@@ -130,6 +149,34 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
     {
         var repository = reference[(reference.IndexOf('/') + 1)..reference.IndexOf(':')];
         Assert.Equal(expected, ContainerImageImporter.IsServerRepository(repository));
+    }
+
+    [Theory]
+    [InlineData("metadata-only")]
+    [InlineData("missing-hives")]
+    [InlineData("malformed-metadata")]
+    public void An_incomplete_or_invalid_explicit_image_is_unknown(string fixture)
+    {
+        var image = Path.Combine(_root, fixture);
+        Directory.CreateDirectory(image);
+        if (fixture != "metadata-only")
+        {
+            Directory.CreateDirectory(Path.Combine(image, "Files", "Windows"));
+        }
+
+        if (fixture == "malformed-metadata")
+        {
+            File.WriteAllText(Path.Combine(image, ContainerImageMetadata.FileName), "not json");
+        }
+        else
+        {
+            new ContainerImageMetadata { Build = 20348, IsServer = true, SourceReference = "test" }.Write(image);
+        }
+
+        var result = Evaluate(hostBuild: 26300, isWindows11Client: true, image: image);
+
+        Assert.False(result.IsSupported);
+        Assert.Equal("Container.Reason.UnknownImage", result.ReasonKey);
     }
 
     [Fact]
@@ -210,7 +257,8 @@ public sealed class ContainerIsolationPolicyTests : IDisposable
     private string CreateImage(int build, bool isServer)
     {
         var path = Path.Combine(_root, $"img-{build}-{isServer}");
-        Directory.CreateDirectory(path);
+        Directory.CreateDirectory(Path.Combine(path, "Files", "Windows"));
+        Directory.CreateDirectory(Path.Combine(path, "Hives"));
         new ContainerImageMetadata { Build = build, IsServer = isServer, SourceReference = "test" }.Write(path);
         return path;
     }

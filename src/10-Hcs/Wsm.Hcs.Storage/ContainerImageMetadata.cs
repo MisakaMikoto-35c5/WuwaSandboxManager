@@ -34,8 +34,9 @@ public sealed record ContainerImageMetadata
 
     /// <summary>
     /// Reads the metadata for a layer folder, or null when it is absent/unreadable.
-    /// Falls back to deriving the build from the layer's <c>ntoskrnl.exe</c> and
-    /// treating the SKU as client (safe: it then requires an exact build match).
+    /// When no side-car exists, falls back to deriving the build from the layer's
+    /// <c>ntoskrnl.exe</c> and treating the SKU as client (safe: it then requires
+    /// an exact build match). A malformed side-car is never hidden by that fallback.
     /// </summary>
     public static ContainerImageMetadata? TryRead(string layerPath)
     {
@@ -54,7 +55,7 @@ public sealed record ContainerImageMetadata
         }
         catch
         {
-            // Fall through to the ntoskrnl probe.
+            return null;
         }
 
         var build = TryReadBuildFromKernel(layerPath);

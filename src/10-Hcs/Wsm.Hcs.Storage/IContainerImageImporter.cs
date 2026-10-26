@@ -80,31 +80,100 @@ public enum ContainerImageImportStage
 
     /// <summary>The import finished.</summary>
     Done,
+
+    /// <summary>Unrecognized text supplied through the legacy string constructor.</summary>
+    Unknown,
 }
 
 /// <summary>
-/// Progress of an image import: the current <see cref="Stage"/>, the completed
-/// fraction in <c>[0,1]</c> while downloading (null when unknown or not
-/// applicable), and the byte counters while downloading (null when unknown).
+/// Progress of an image import: a localizable <see cref="StageKind"/>, the legacy
+/// string <see cref="Stage"/>, an optional download fraction and byte counters.
 /// </summary>
-public sealed record ContainerImageImportProgress(
-    ContainerImageImportStage Stage,
-    double? Fraction = null,
-    long? BytesReceived = null,
-    long? TotalBytes = null)
+public sealed record ContainerImageImportProgress
 {
-    /// <summary>
-    /// The legacy English stage text, kept for callers written against the
-    /// original string-based record. New callers should localize
-    /// <see cref="Stage"/> instead.
-    /// </summary>
-    public string Message => Stage switch
+    /// <summary>Preserves the original string-based progress contract.</summary>
+    public ContainerImageImportProgress(string Stage, double? Fraction = null)
+    {
+        this.Stage = Stage;
+        this.Fraction = Fraction;
+        StageKind = ParseLegacyStage(Stage);
+    }
+
+    /// <summary>Creates progress with a stage that callers can localize.</summary>
+    public ContainerImageImportProgress(
+        ContainerImageImportStage Stage,
+        double? Fraction = null,
+        long? BytesReceived = null,
+        long? TotalBytes = null)
+    {
+        this.Stage = LegacyStageText(Stage);
+        this.Fraction = Fraction;
+        this.BytesReceived = BytesReceived;
+        this.TotalBytes = TotalBytes;
+        StageKind = Stage;
+    }
+
+    /// <summary>The original stage text supplied by legacy callers.</summary>
+    public string Stage { get; init; }
+
+    /// <summary>The structured stage used by new callers for localization.</summary>
+    public ContainerImageImportStage StageKind { get; init; }
+
+    /// <summary>The completed fraction in <c>[0,1]</c>, when known.</summary>
+    public double? Fraction { get; init; }
+
+    /// <summary>Bytes downloaded so far, when available.</summary>
+    public long? BytesReceived { get; init; }
+
+    /// <summary>Total bytes to download, when available.</summary>
+    public long? TotalBytes { get; init; }
+
+    /// <summary>The legacy English stage text.</summary>
+    public string Message => Stage;
+
+    /// <summary>Preserves deconstruction by original string-stage callers.</summary>
+    public void Deconstruct(out string stage, out double? fraction)
+    {
+        stage = Stage;
+        fraction = Fraction;
+    }
+
+    /// <summary>Preserves deconstruction by enum-stage callers.</summary>
+    public void Deconstruct(
+        out ContainerImageImportStage stage,
+        out double? fraction,
+        out long? bytesReceived,
+        out long? totalBytes)
+    {
+        stage = StageKind;
+        fraction = Fraction;
+        bytesReceived = BytesReceived;
+        totalBytes = TotalBytes;
+    }
+
+    private static ContainerImageImportStage ParseLegacyStage(string stage)
+    {
+        switch (stage)
+        {
+            case "Resolving the image manifest": return ContainerImageImportStage.ResolvingManifest;
+            case "Downloading the base layer": return ContainerImageImportStage.Downloading;
+            case "Extracting the layer": return ContainerImageImportStage.Extracting;
+            case "Preparing the layer": return ContainerImageImportStage.Preparing;
+            case "Done": return ContainerImageImportStage.Done;
+        }
+
+        return Enum.TryParse<ContainerImageImportStage>(stage, ignoreCase: true, out var parsed)
+            ? parsed
+            : ContainerImageImportStage.Unknown;
+    }
+
+    private static string LegacyStageText(ContainerImageImportStage stage) => stage switch
     {
         ContainerImageImportStage.ResolvingManifest => "Resolving the image manifest",
         ContainerImageImportStage.Downloading => "Downloading the base layer",
         ContainerImageImportStage.Extracting => "Extracting the layer",
         ContainerImageImportStage.Preparing => "Preparing the layer",
         ContainerImageImportStage.Done => "Done",
-        _ => Stage.ToString(),
+        _ => stage.ToString(),
     };
 }

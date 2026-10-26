@@ -250,7 +250,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             "memory={MemoryMb}MB, cpus={CpuCount}, namespace={Namespace})",
             id, baseLayers[0], scratchPath, definition.MemoryMb, definition.CpuCount, namespaceId);
 
-        IDisposable system;
+        IDisposable? system = null;
         try
         {
             system = _hcs.Create(key, json);
@@ -258,6 +258,18 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
         }
         catch (Exception ex)
         {
+            if (system is not null)
+            {
+                try
+                {
+                    system.Dispose();
+                }
+                catch (Exception disposeError)
+                {
+                    _logger.LogDebug(disposeError, "Disposing the failed initial handle for {SandboxId} failed.", key);
+                }
+            }
+
             await TeardownOnFailedStartAsync(key, scratchPath, namespaceId, endpointId, ex);
             throw;
         }
@@ -275,63 +287,111 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             Redirections = recipe.Redirections,
         };
 
-        RememberContainer(key, system, runtime, scratchPath, baseLayers, namespaceId, endpointId, adopted: false);
+        RememberContainer(key, system!, runtime, scratchPath, baseLayers, namespaceId, endpointId, adopted: false);
 
         // The image is stripped down; bring up the configured services. Best
         // effort: a service that cannot start is logged, not fatal.
         await EnsureContainerServicesAsync(id, _options.Value.RequiredServices, cancellationToken);
 
-        // Opt-in desktop session (shell, auto-logon) and the experimental RDP
-        // attempt. Also best effort: the container stays usable without either.
-        if (_options.Value.Desktop.ShouldConfigureFor(recipe.Desktop))
+        var configureInteractiveSession = _options.Value.Desktop.ShouldConfigureFor(recipe.Desktop);
+        if (configureInteractiveSession)
         {
-            await ConfigureDesktopAsync(id, _options.Value.Desktop, cancellationToken);
-
-            // The first boot of a scratch cannot complete auto-logon: winlogon makes
-            // its attempt seconds after smss starts, long before HCS exec can set the
-            // SAM password, fails once and flips AutoAdminLogon to 0 (measured). The
-            // password and every winlogon value live in the scratch layer, so a single
-            // extra boot over the same scratch logs on by itself. The marker keeps the
-            // restart to exactly one per scratch.
             var marker = Path.Combine(mountPath, "wsm", ".desktop-password-armed");
-            if (!File.Exists(marker))
+            IDisposable? pendingSecondBoot = null;
+            try
             {
-                await File.WriteAllTextAsync(
-                    marker, DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
-                _logger.LogInformation(
-                    "Restarting container {SandboxId} once: the console session's auto-logon " +
-                    "needs the account password persisted in the scratch layer before winlogon " +
-                    "makes its attempt.",
-                    id);
+                await ConfigureDesktopAsync(
+                    id,
+                    _options.Value.Desktop,
+                    baseLayers[0],
+                    configureInteractiveSession,
+                    cancellationToken);
 
-                _containers.TryRemove(key, out var firstBoot);
-                try
+                // The first boot of a scratch cannot complete auto-logon: winlogon makes
+                // its attempt seconds after smss starts, long before HCS exec can set the
+                // SAM password, fails once and flips AutoAdminLogon to 0 (measured). The
+                // password and every winlogon value live in the scratch layer, so a single
+                // extra boot over the same scratch logs on by itself. The marker keeps the
+                // restart to exactly one per scratch.
+                if (!File.Exists(marker))
                 {
-                    _logger.LogDebug("Requesting termination of the first boot for {SandboxId}.", id);
-                    _hcs.Terminate(key);
-                    _logger.LogDebug("Termination returned for {SandboxId}; closing its primary handle.", id);
+                    _logger.LogInformation(
+                        "Restarting container {SandboxId} once: the console session's auto-logon " +
+                        "needs the account password persisted in the scratch layer before winlogon " +
+                        "makes its attempt.",
+                        id);
+
+                    _containers.TryRemove(key, out var firstBoot);
+                    try
+                    {
+                        _logger.LogDebug("Requesting termination of the first boot for {SandboxId}.", id);
+                        _hcs.Terminate(key);
+                        _logger.LogDebug("Termination returned for {SandboxId}; closing its primary handle.", id);
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            firstBoot?.Handle.Dispose();
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Disposing the first-boot handle for container {SandboxId} failed.", key);
+                        }
+                    }
+
+                    await WaitForComputeSystemGoneAsync(id, key, cancellationToken);
+
+                    _logger.LogDebug("Creating the second boot for {SandboxId}.", id);
+                    pendingSecondBoot = _hcs.Create(key, json);
+                    _logger.LogDebug("Second-boot compute system created for {SandboxId}; starting it.", id);
+                    _hcs.Start(key);
+                    _logger.LogDebug("Second boot started for {SandboxId}.", id);
+                    RememberContainer(
+                        key, pendingSecondBoot, runtime, scratchPath, baseLayers, namespaceId, endpointId, adopted: false);
+                    pendingSecondBoot = null;
+                    await EnsureContainerServicesAsync(id, _options.Value.RequiredServices, cancellationToken);
+                    await File.WriteAllTextAsync(
+                        marker, DateTimeOffset.UtcNow.ToString("O"), cancellationToken);
                 }
-                finally
+            }
+            catch (Exception ex)
+            {
+                if (pendingSecondBoot is not null)
                 {
                     try
                     {
-                        firstBoot?.Handle.Dispose();
+                        pendingSecondBoot.Dispose();
                     }
-                    catch (Exception ex)
+                    catch (Exception disposeError)
                     {
-                        _logger.LogDebug(ex, "Disposing the first-boot handle for container {SandboxId} failed.", key);
+                        _logger.LogDebug(disposeError, "Disposing the second-boot handle for {SandboxId} failed.", key);
                     }
                 }
 
-                await WaitForComputeSystemGoneAsync(id, key, cancellationToken);
+                if (_containers.TryRemove(key, out var failed))
+                {
+                    try
+                    {
+                        failed.Handle.Dispose();
+                    }
+                    catch (Exception disposeError)
+                    {
+                        _logger.LogDebug(disposeError, "Disposing the failed container handle for {SandboxId} failed.", key);
+                    }
+                }
 
-                _logger.LogDebug("Creating the second boot for {SandboxId}.", id);
-                system = _hcs.Create(key, json);
-                _logger.LogDebug("Second-boot compute system created for {SandboxId}; starting it.", id);
-                _hcs.Start(key);
-                _logger.LogDebug("Second boot started for {SandboxId}.", id);
-                RememberContainer(key, system, runtime, scratchPath, baseLayers, namespaceId, endpointId, adopted: false);
-                await EnsureContainerServicesAsync(id, _options.Value.RequiredServices, cancellationToken);
+                try
+                {
+                    File.Delete(marker);
+                }
+                catch (Exception markerError)
+                {
+                    _logger.LogWarning(markerError, "Failed to clear the desktop restart marker for {SandboxId}.", key);
+                }
+
+                await TeardownOnFailedStartAsync(key, scratchPath, namespaceId, endpointId, ex);
+                throw;
             }
         }
 
@@ -508,11 +568,11 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
         if (!string.IsNullOrWhiteSpace(configured))
         {
             var root = Path.GetFullPath(configured);
-            if (!Directory.Exists(Path.Combine(root, "Files")))
+            if (!ContainerImagePaths.IsPreparedLayer(root))
             {
                 throw new SandboxNotSupportedException(
-                    $"The configured container base image layer '{root}' does not look like a WCOW layer " +
-                    "(it has no 'Files' folder). Import a Windows Server 2022/2025 image first.");
+                    $"The configured container base image layer '{root}' is not a prepared WCOW layer " +
+                    "with 'Files\\Windows', 'Hives' and valid image metadata. Import a Windows Server 2022/2025 image first.");
             }
 
             var supportForConfigured = _isolation.Evaluate(root);
@@ -532,7 +592,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
         if (support.IsSupported && !string.IsNullOrWhiteSpace(support.ImagePath))
         {
             var imported = Path.GetFullPath(support.ImagePath);
-            if (Directory.Exists(Path.Combine(imported, "Files")))
+            if (ContainerImagePaths.IsPreparedLayer(imported))
             {
                 return [imported];
             }
@@ -547,7 +607,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             layerPath = files is null ? null : Path.GetDirectoryName(files.TrimEnd('\\', '/'));
         }
 
-        if (string.IsNullOrWhiteSpace(layerPath))
+        if (string.IsNullOrWhiteSpace(layerPath) || !ContainerImagePaths.IsPreparedLayer(layerPath))
         {
             throw new SandboxNotSupportedException(
                 "No usable base OS image layer was found. Set WindowsContainerEngineOptions.BaseImageLayerPath " +
@@ -760,25 +820,22 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
     }
 
     /// <summary>
-    /// Opt-in desktop session inside the container: <c>winlogon</c>'s shell, an
-    /// optional auto-logon, and the experimental RDP attempt. Everything is best
-    /// effort — a container whose image was not prepared for a console session
-    /// simply has no desktop to log into, and that must not fail the start.
+    /// Configures the shell and auto-logon. Their registry and account writes are required;
+    /// only the experimental RDP attempt is allowed to fail without failing the start.
     /// </summary>
     private async Task ConfigureDesktopAsync(
-        SandboxInstanceId id, ContainerDesktopOptions desktop, CancellationToken cancellationToken)
+        SandboxInstanceId id,
+        ContainerDesktopOptions desktop,
+        string baseLayerPath,
+        bool configureInteractiveSession,
+        CancellationToken cancellationToken)
     {
         const string winlogon = @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
 
-        // An explicitly enabled desktop with no configured password uses the shared default
-        // that 'wsm image session' baked into the image: auto-logon only completes when the
-        // two match (measured, doc section 11.7). The env-var switch counts the same as the
-        // option (ShouldConfigure); without any desktop request, no password means no
-        // auto-logon, exactly as before.
         var password = desktop.Password;
-        if (string.IsNullOrEmpty(password) && desktop.ShouldConfigure)
+        if (string.IsNullOrEmpty(password) && configureInteractiveSession)
         {
-            password = ContainerDesktopSessionDefaults.DefaultPassword;
+            password = ContainerDesktopSessionDefaults.GetPassword(baseLayerPath);
         }
 
         _logger.LogInformation(
@@ -787,7 +844,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
 
         // The container images ship no explorer.exe, so winlogon's default shell
         // cannot start; point it at something that is actually in the image.
-        await RunInContainerAsync(
+        await RunRequiredInContainerAsync(
             id, RegAdd(winlogon, "Shell", desktop.Shell), cancellationToken);
 
         if (!string.IsNullOrEmpty(password))
@@ -797,19 +854,19 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             // the image cannot log on an account that does not have it). Set it first, then
             // the winlogon values. /ACTIVE:YES is belt and braces: the image's Administrator
             // can ship disabled.
-            await RunInContainerAsync(
+            await RunRequiredInContainerAsync(
                 id, $"net.exe user \"{desktop.UserName}\" \"{password}\"", cancellationToken);
-            await RunInContainerAsync(
+            await RunRequiredInContainerAsync(
                 id, $"net.exe user \"{desktop.UserName}\" /ACTIVE:YES", cancellationToken);
 
-            await RunInContainerAsync(id, RegAdd(winlogon, "AutoAdminLogon", "1"), cancellationToken);
-            await RunInContainerAsync(
+            await RunRequiredInContainerAsync(id, RegAdd(winlogon, "AutoAdminLogon", "1"), cancellationToken);
+            await RunRequiredInContainerAsync(
                 id, RegAdd(winlogon, "DefaultUserName", desktop.UserName), cancellationToken);
-            await RunInContainerAsync(
+            await RunRequiredInContainerAsync(
                 id, RegAdd(winlogon, "DefaultPassword", password), cancellationToken);
             // Without ForceAutoLogon winlogon can stay at LogonUI after the first attempt,
             // and in a container there is nobody to type credentials.
-            await RunInContainerAsync(id, RegAdd(winlogon, "ForceAutoLogon", "1"), cancellationToken);
+            await RunRequiredInContainerAsync(id, RegAdd(winlogon, "ForceAutoLogon", "1"), cancellationToken);
         }
         else
         {
@@ -822,7 +879,14 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
 
         if (desktop.ShouldAttemptTcpRdp)
         {
-            await AttemptTcpRdpAsync(id, cancellationToken);
+            try
+            {
+                await AttemptTcpRdpAsync(id, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Experimental RDP setup for container {SandboxId} failed (continuing).", id);
+            }
         }
     }
 
@@ -906,7 +970,7 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
             var fields = command.Split('"');
             return fields.Length >= 4
                 ? $"{fields[0]}\"{fields[1]}\"{fields[2]}\"<redacted>\""
-                : "net.exe user <credentials redacted>";
+                : command;
         }
 
         if (command.Contains("/v DefaultPassword ", StringComparison.OrdinalIgnoreCase))
@@ -920,7 +984,32 @@ internal sealed class WindowsContainerEngine : ISandboxEngine, IContainerFileSys
         return command;
     }
 
-    /// <summary>Runs a command in the container and returns its exit code (-1 when it could not run).</summary>
+    /// <summary>Runs a desktop command whose failure must abort the container start.</summary>
+    private async Task RunRequiredInContainerAsync(
+        SandboxInstanceId id, string command, CancellationToken cancellationToken)
+    {
+        var logCommand = RedactCommandForLog(command);
+        int exitCode;
+        try
+        {
+            exitCode = await _process.ExecuteAsync(id.ToString(), command, ct: cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            throw new SandboxBackendException(
+                $"Required desktop command '{logCommand}' could not be run in container {id}.", 0, ex);
+        }
+
+        _logger.LogDebug(
+            "Container {SandboxId}: '{Command}' exited with {ExitCode}.", id, logCommand, exitCode);
+        if (exitCode != 0)
+        {
+            throw new SandboxBackendException(
+                $"Required desktop command '{logCommand}' exited with code {exitCode} in container {id}.", 0);
+        }
+    }
+
+    /// <summary>Runs a best-effort command and returns its exit code (-1 when it could not run).</summary>
     private async Task<int> RunInContainerAsync(
         SandboxInstanceId id, string command, CancellationToken cancellationToken)
     {

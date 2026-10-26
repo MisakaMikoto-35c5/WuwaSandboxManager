@@ -104,6 +104,26 @@ public sealed class ContainerImageImportTests : IDisposable
     }
 
     [Fact]
+    public void Progress_preserves_the_legacy_string_stage_constructor_and_property()
+    {
+        var progress = new ContainerImageImportProgress("Downloading the base layer", 0.25);
+
+        Assert.Equal("Downloading the base layer", progress.Stage);
+        Assert.Equal("Downloading the base layer", progress.Message);
+        Assert.Equal(ContainerImageImportStage.Downloading, progress.StageKind);
+        Assert.Equal(0.25, progress.Fraction);
+    }
+
+    [Fact]
+    public void Progress_exposes_the_enum_stage_separately_from_the_legacy_string()
+    {
+        var progress = new ContainerImageImportProgress(ContainerImageImportStage.Preparing);
+
+        Assert.Equal(ContainerImageImportStage.Preparing, progress.StageKind);
+        Assert.Equal("Preparing the layer", progress.Stage);
+    }
+
+    [Fact]
     public void Progress_carries_optional_fraction_and_byte_counters()
     {
         var bare = new ContainerImageImportProgress(ContainerImageImportStage.Extracting);
@@ -132,12 +152,49 @@ public sealed class ContainerImageImportTests : IDisposable
     }
 
     [Fact]
-    public void The_install_state_is_installed_when_the_metadata_file_exists()
+    public void The_install_state_is_installed_for_a_prepared_layer_with_valid_metadata()
     {
-        var folder = Directory.CreateDirectory(Path.Combine(_root, "installed"));
-        File.WriteAllText(Path.Combine(folder.FullName, ContainerImageMetadata.FileName), "{}");
+        var folder = Directory.CreateDirectory(Path.Combine(_root, "installed")).FullName;
+        Directory.CreateDirectory(Path.Combine(folder, "Files", "Windows"));
+        Directory.CreateDirectory(Path.Combine(folder, "Hives"));
+        new ContainerImageMetadata { Build = 20348, IsServer = true, SourceReference = "test" }.Write(folder);
 
-        Assert.Equal(ContainerImageInstallState.Installed, ContainerImagePaths.GetInstallState(folder.FullName));
+        Assert.Equal(ContainerImageInstallState.Installed, ContainerImagePaths.GetInstallState(folder));
+    }
+
+    [Theory]
+    [InlineData("metadata-only")]
+    [InlineData("missing-hives")]
+    [InlineData("malformed-metadata")]
+    [InlineData("zero-build")]
+    public void The_install_state_is_occupied_for_an_incomplete_or_invalid_layer(string fixture)
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(_root, fixture)).FullName;
+        if (fixture != "metadata-only")
+        {
+            Directory.CreateDirectory(Path.Combine(folder, "Files", "Windows"));
+        }
+
+        if (fixture != "missing-hives")
+        {
+            Directory.CreateDirectory(Path.Combine(folder, "Hives"));
+        }
+
+        if (fixture == "malformed-metadata")
+        {
+            File.WriteAllText(Path.Combine(folder, ContainerImageMetadata.FileName), "not json");
+            var system32 = Directory.CreateDirectory(Path.Combine(folder, "Files", "Windows", "System32"));
+            File.Copy(
+                Path.Combine(Environment.SystemDirectory, "notepad.exe"),
+                Path.Combine(system32.FullName, "ntoskrnl.exe"));
+        }
+        else
+        {
+            var build = fixture == "zero-build" ? 0 : 20348;
+            new ContainerImageMetadata { Build = build, IsServer = true, SourceReference = "test" }.Write(folder);
+        }
+
+        Assert.Equal(ContainerImageInstallState.Occupied, ContainerImagePaths.GetInstallState(folder));
     }
 
     [Fact]

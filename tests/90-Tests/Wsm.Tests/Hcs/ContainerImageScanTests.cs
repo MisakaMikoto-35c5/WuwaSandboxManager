@@ -51,6 +51,8 @@ public sealed class ContainerImageScanTests : IDisposable
         Directory.CreateDirectory(noWindows);
         new ContainerImageMetadata { Build = 20348, IsServer = true, SourceReference = "test" }.Write(noWindows);
 
+        CreateLayer("zero-build", build: 0, isServer: true);
+
         // Files in the root are not folders.
         File.WriteAllText(Path.Combine(_root, "a-file.txt"), "x");
 
@@ -90,9 +92,13 @@ public sealed class ContainerImageScanTests : IDisposable
     [InlineData("servercore-ltsc2022", true)]
     [InlineData("server-full-ltsc2022", true)]
     [InlineData("mcr.microsoft.com-windows-server-ltsc2025", true)]
+    [InlineData("mcr.microsoft.com/windows/servercore", true)]
+    [InlineData("mcr.microsoft.com/windows/nanoserver", true)]
     [InlineData("nanoserver-ltsc2025", true)]
     [InlineData("windows/server", true)]
     [InlineData("windows-ltsc2022", false)]
+    [InlineData("notserver", false)]
+    [InlineData("observer", false)]
     [InlineData("sandbox-base", false)]
     public void Server_skus_are_recognized_from_a_repository_or_folder_name(string name, bool expected)
         => Assert.Equal(expected, ContainerImagePaths.IsServerImageName(name));
@@ -100,12 +106,19 @@ public sealed class ContainerImageScanTests : IDisposable
     [Fact]
     public void The_kernel_fallback_sku_is_inferred_from_the_folder_name_and_written_back()
     {
-        var folder = Directory.CreateDirectory(Path.Combine(_root, "servercore-ltsc2022")).FullName;
-        var fallback = new ContainerImageMetadata { Build = 20348, IsServer = false };
+        var folder = Path.Combine(_root, "servercore-ltsc2022");
+        var system32 = Directory.CreateDirectory(Path.Combine(folder, "Files", "Windows", "System32"));
+        Directory.CreateDirectory(Path.Combine(folder, "Hives"));
+        File.Copy(
+            Path.Combine(Environment.SystemDirectory, "notepad.exe"),
+            Path.Combine(system32.FullName, "ntoskrnl.exe"));
+        var build = ContainerImageMetadata.TryReadBuildFromKernel(folder)!.Value;
 
-        var enriched = ContainerImagePaths.EnrichMetadataFromFolderName(folder, fallback);
+        var candidate = Assert.Single(ContainerImagePaths.FindImportedImages([_root]));
 
-        Assert.True(enriched.IsServer);
+        Assert.Equal(build, candidate.Metadata.Build);
+        Assert.True(candidate.Metadata.IsServer);
+        Assert.Equal(ContainerImageInstallState.Installed, ContainerImagePaths.GetInstallState(folder));
         var written = ContainerImageMetadata.TryRead(folder);
         Assert.NotNull(written);
         Assert.True(written!.IsServer);

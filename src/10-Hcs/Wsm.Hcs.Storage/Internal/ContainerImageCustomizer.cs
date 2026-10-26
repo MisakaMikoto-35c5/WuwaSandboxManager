@@ -65,7 +65,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         "wsm-desktop-read.ps1",
     };
 
-    /// <summary>The persistent shell payload, installed additionally by the desktop-session patch.</summary>
+    /// <summary>The persistent shell payload installed by every interactive-session payload path.</summary>
     private const string ShellPayloadFile = "wsm-shell.cmd";
 
     private readonly ILogger<ContainerImageCustomizer> _logger;
@@ -117,6 +117,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
             }
         }
 
+        InstallShellPayload(layerPath, out _);
         _logger.LogInformation(
             "The base image at '{Layer}' now boots an interactive console session ({Count} control set(s) updated: {Sets}).",
             layerPath, updated.Count, string.Join(", ", updated));
@@ -177,7 +178,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         string layerPath, ContainerImageDesktopOptions? options = null)
     {
         var hiveFile = ResolveSoftwareHive(layerPath);
-        InstallPayload(layerPath, PayloadFiles, out var payloadPaths);
+        InstallWindowMirrorPayload(layerPath, out var payloadPaths);
 
         string before;
         string after;
@@ -280,10 +281,15 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
         // seconds later loses the write (measured).
         EnableSessionServices(layerPath);
 
-        var payloadFiles = options.InstallWindowMirrorReadSide
-            ? PayloadFiles.Append(ShellPayloadFile).ToArray()
-            : new[] { ShellPayloadFile };
-        InstallPayload(layerPath, payloadFiles, out var payloadPaths);
+        IReadOnlyList<string> payloadPaths;
+        if (options.InstallWindowMirrorReadSide)
+        {
+            InstallWindowMirrorPayload(layerPath, out payloadPaths);
+        }
+        else
+        {
+            InstallShellPayload(layerPath, out payloadPaths);
+        }
 
         var hiveFile = ResolveSoftwareHive(layerPath);
         using (var hive = OfflineRegistryHive.Load(hiveFile))
@@ -298,7 +304,7 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
 
             // All writes go through reg.exe (see EnableWindowMirror for why the managed
             // write is refused).
-            WriteDesktopLogon(options, (name, value, type) =>
+            WriteDesktopLogon(options, layerPath, (name, value, type) =>
                 WriteWithRegExe(hive.MountName, WinlogonSubKey, name, value, type));
 
             // No one can press Ctrl+Alt+Del inside a container: keep LogonUI from ever
@@ -324,12 +330,15 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
 
     /// <summary>Writes the Winlogon values shared by the image patch and its regression tests.</summary>
     internal static void WriteDesktopLogon(
-        DesktopSessionOptions options, Action<string, string, string> write)
+        DesktopSessionOptions options, string layerPath, Action<string, string, string> write)
     {
+        var password = string.IsNullOrEmpty(options.Password)
+            ? ContainerDesktopSessionDefaults.GetPassword(layerPath)
+            : options.Password;
         write(ShellValue, ContainerDesktopPaths.ShellCommand, "REG_SZ");
         write(AutoAdminLogonValue, "1", "REG_SZ");
         write(DefaultUserNameValue, options.UserName, "REG_SZ");
-        write(DefaultPasswordValue, options.Password, "REG_SZ");
+        write(DefaultPasswordValue, password, "REG_SZ");
         write(ForceAutoLogonValue, "1", "REG_SZ");
 
         // A string zero left in an image suppresses auto-logon entirely; keep retrying
@@ -458,6 +467,12 @@ internal sealed class ContainerImageCustomizer : IContainerImageCustomizer, ISin
 
         return string.Join(",", entries);
     }
+
+    internal string InstallShellPayload(string layerPath, out IReadOnlyList<string> containerPaths) =>
+        InstallPayload(layerPath, [ShellPayloadFile], out containerPaths);
+
+    internal string InstallWindowMirrorPayload(string layerPath, out IReadOnlyList<string> containerPaths) =>
+        InstallPayload(layerPath, PayloadFiles.Append(ShellPayloadFile).ToArray(), out containerPaths);
 
     private string InstallPayload(string layerPath, IReadOnlyList<string> files, out IReadOnlyList<string> containerPaths)
     {

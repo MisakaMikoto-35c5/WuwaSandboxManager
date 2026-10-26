@@ -33,9 +33,10 @@ public static class ContainerImagePaths
     /// a Windows 11 host). Shared by the importer and the import scan.
     /// </summary>
     public static bool IsServerImageName(string name)
-        => name.Contains("servercore", StringComparison.OrdinalIgnoreCase)
-           || name.Contains("nanoserver", StringComparison.OrdinalIgnoreCase)
-           || name.Contains("server", StringComparison.OrdinalIgnoreCase);
+        => name.Split(['/', '\\', '-', ':'], StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => segment.Equals("server", StringComparison.OrdinalIgnoreCase)
+                            || segment.Equals("servercore", StringComparison.OrdinalIgnoreCase)
+                            || segment.Equals("nanoserver", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Scans the default root and the <see cref="LegacyImportRoots"/> for
@@ -43,7 +44,7 @@ public static class ContainerImagePaths
     /// <c>Files\Windows</c> tree, the <c>Hives</c> links left by
     /// <c>ProcessBaseImage</c> (measured: <c>CreateSandboxLayer</c> answers
     /// <c>0x80070003</c> for a parent layer without them, so a half-imported
-    /// folder is not a usable base) and a readable build/SKU
+    /// folder is not a usable base) and a readable positive build/SKU
     /// (<see cref="ContainerImageMetadata"/>); when only the kernel fallback can
     /// read the build, the SKU is inferred from the folder name and an upgraded
     /// <c>wsm-image.json</c> is written back best-effort. Candidates are ordered
@@ -92,14 +93,13 @@ public static class ContainerImagePaths
     {
         try
         {
-            if (!Directory.Exists(Path.Combine(folder, "Files", "Windows"))
-                || !Directory.Exists(Path.Combine(folder, "Hives")))
+            if (!IsPreparedLayer(folder))
             {
                 return null;
             }
 
             var metadata = ContainerImageMetadata.TryRead(folder);
-            if (metadata is null)
+            if (metadata is not { Build: > 0 })
             {
                 return null;
             }
@@ -122,7 +122,7 @@ public static class ContainerImagePaths
     /// infers the SKU from the folder name (<see cref="IsServerImageName"/>) and
     /// writes the enriched metadata back best-effort.
     /// </summary>
-    internal static ContainerImageMetadata EnrichMetadataFromFolderName(
+    public static ContainerImageMetadata EnrichMetadataFromFolderName(
         string folder, ContainerImageMetadata metadata)
     {
         if (metadata.IsServer
@@ -139,7 +139,7 @@ public static class ContainerImagePaths
         }
         catch
         {
-            // Best effort; the inference still applies to this scan.
+            // Best effort; the inference still applies to the caller.
         }
 
         return enriched;
@@ -156,10 +156,33 @@ public static class ContainerImagePaths
             : reference.Trim().Replace(':', '-').Replace('/', '-');
 
     /// <summary>
+    /// True only for a complete WCOW base layer with a readable positive build.
+    /// The build may come from <c>wsm-image.json</c> or the manual-import kernel fallback.
+    /// </summary>
+    public static bool IsPreparedLayer(string? layerPath)
+    {
+        if (string.IsNullOrWhiteSpace(layerPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return Directory.Exists(Path.Combine(layerPath, "Files", "Windows"))
+                   && Directory.Exists(Path.Combine(layerPath, "Hives"))
+                   && ContainerImageMetadata.TryRead(layerPath) is { Build: > 0 };
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Inspects a candidate layer folder: <see cref="ContainerImageInstallState.Installed"/>
-    /// when it holds image metadata, <see cref="ContainerImageInstallState.Occupied"/>
-    /// when it exists with other content (the importer would refuse it), and
-    /// <see cref="ContainerImageInstallState.Missing"/> when it is absent or empty.
+    /// only when <see cref="IsPreparedLayer"/> accepts it,
+    /// <see cref="ContainerImageInstallState.Occupied"/> when it exists with other content,
+    /// and <see cref="ContainerImageInstallState.Missing"/> when it is absent or empty.
     /// </summary>
     public static ContainerImageInstallState GetInstallState(string? layerPath)
     {
@@ -168,14 +191,14 @@ public static class ContainerImagePaths
             return ContainerImageInstallState.Missing;
         }
 
-        if (File.Exists(Path.Combine(layerPath, ContainerImageMetadata.FileName)))
+        if (!Directory.EnumerateFileSystemEntries(layerPath).Any())
         {
-            return ContainerImageInstallState.Installed;
+            return ContainerImageInstallState.Missing;
         }
 
-        return Directory.EnumerateFileSystemEntries(layerPath).Any()
-            ? ContainerImageInstallState.Occupied
-            : ContainerImageInstallState.Missing;
+        return IsPreparedLayer(layerPath)
+            ? ContainerImageInstallState.Installed
+            : ContainerImageInstallState.Occupied;
     }
 }
 
@@ -185,7 +208,7 @@ public enum ContainerImageInstallState
     /// <summary>The folder does not exist or is empty; an import can target it.</summary>
     Missing,
 
-    /// <summary>The folder holds a completed import (<c>wsm-image.json</c>).</summary>
+    /// <summary>The folder holds a prepared layer with a readable positive build.</summary>
     Installed,
 
     /// <summary>The folder exists with content that is not an imported image.</summary>

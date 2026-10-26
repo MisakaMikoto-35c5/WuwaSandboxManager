@@ -137,12 +137,18 @@ internal sealed class ContainerIsolationPolicy : IContainerIsolationPolicy, ISin
             return Unsupported(host, "Container.Reason.NoImage");
         }
 
-        var metadata = ContainerImageMetadata.TryRead(imagePath);
-        if (metadata is null)
+        if (!ContainerImagePaths.IsPreparedLayer(imagePath))
         {
             return Unsupported(host, "Container.Reason.UnknownImage", imagePath);
         }
 
+        var metadata = ContainerImageMetadata.TryRead(imagePath);
+        if (metadata is not { Build: > 0 })
+        {
+            return Unsupported(host, "Container.Reason.UnknownImage", imagePath);
+        }
+
+        metadata = ContainerImagePaths.EnrichMetadataFromFolderName(imagePath, metadata);
         if (IsCompatible(host, metadata))
         {
             var reason = metadata.Build == host.Build

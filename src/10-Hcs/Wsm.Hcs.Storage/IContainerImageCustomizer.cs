@@ -15,7 +15,8 @@ public interface IContainerImageCustomizer
     /// Makes a prepared base image layer boot an interactive <b>console</b>
     /// session, by setting
     /// <c>ControlSet*\Control\Session Manager\NumberOfInitialSessions</c> to
-    /// <c>2</c> in every control set of the image's <c>SYSTEM</c> hive.
+    /// <c>2</c> in every control set of the image's <c>SYSTEM</c> hive. The persistent
+    /// <c>C:\wsm\wsm-shell.cmd</c> payload is installed even when no mirror read side is requested.
     /// <para>
     /// <c>NumberOfInitialSessions</c> tells <c>smss.exe</c> how many initial
     /// sessions to create: <c>2</c> = the services session <b>and</b> the
@@ -45,9 +46,9 @@ public interface IContainerImageCustomizer
     /// <summary>
     /// Installs the <b>window-mirror</b> payload into a prepared base image layer: the
     /// logon hook (<c>C:\wsm\wsm-winlogon-wrap.cmd</c>) is appended to
-    /// <c>Winlogon\Userinit</c> in the image's <c>SOFTWARE</c> hive, and the read side
-    /// (<c>C:\wsm\wsm-desktop-read.ps1</c> + its launcher) is copied into
-    /// <c>Files\wsm\</c>.
+    /// <c>Winlogon\Userinit</c> in the image's <c>SOFTWARE</c> hive. The read side
+    /// (<c>C:\wsm\wsm-desktop-read.ps1</c> + its launcher) and the persistent
+    /// <c>wsm-shell.cmd</c> are copied into <c>Files\wsm\</c>.
     /// <para>
     /// This is what makes the read side run <b>inside the container's own interactive
     /// session</b>, which is the only place the container's windows can be enumerated
@@ -88,8 +89,8 @@ public interface IContainerImageCustomizer
     /// A known password is required, not optional: auto-logon with a blank password is
     /// refused, and the logon only completes when the baked-in <c>DefaultPassword</c>
     /// matches the account's runtime password (the engine sets it with <c>net user</c>
-    /// at container start; both sides default to
-    /// <see cref="ContainerDesktopSessionDefaults.DefaultPassword"/>).
+    /// at container start). When <see cref="DesktopSessionOptions.Password"/> is null,
+    /// both sides derive the same credential from the image path.
     /// </para>
     /// <para>
     /// Requires elevation; stop any container built from this image first. A container
@@ -136,7 +137,8 @@ public sealed record ContainerImageSessionPrep(string HiveFile, IReadOnlyList<st
 /// <param name="UserName">The account auto-logon signs in as.</param>
 /// <param name="Password">
 /// That account's password. Must match what the engine sets with <c>net user</c> at
-/// container start, or auto-logon fails and the session stays on LogonUI.
+/// container start, or auto-logon fails and the session stays on LogonUI. Null derives
+/// a strong credential from the image's layer path; an explicit value wins.
 /// </param>
 /// <param name="InstallWindowMirrorReadSide">
 /// Also install the window-mirror payload (<c>wsm-desktop-read.ps1</c> and its launchers)
@@ -144,7 +146,7 @@ public sealed record ContainerImageSessionPrep(string HiveFile, IReadOnlyList<st
 /// </param>
 public sealed record DesktopSessionOptions(
     string UserName = ContainerDesktopSessionDefaults.DefaultUserName,
-    string Password = ContainerDesktopSessionDefaults.DefaultPassword,
+    string? Password = null,
     bool InstallWindowMirrorReadSide = true);
 
 /// <summary>Result of <see cref="IContainerImageCustomizer.EnableDesktopSession"/>.</summary>

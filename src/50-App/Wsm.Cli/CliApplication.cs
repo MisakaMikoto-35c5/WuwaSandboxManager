@@ -971,18 +971,18 @@ public sealed class CliApplication
         var lastStage = ContainerImageImportStage.Done;
         var progress = new Progress<ContainerImageImportProgress>(report =>
         {
-            if (report.Stage == ContainerImageImportStage.Downloading && report.Fraction is { } fraction)
+            if (report.StageKind == ContainerImageImportStage.Downloading && report.Fraction is { } fraction)
             {
                 Console.Write($"\r{report.Message} ... {fraction * 100:F0}%   ");
             }
-            else if (report.Stage != lastStage)
+            else if (report.StageKind != lastStage)
             {
-                Console.WriteLine(report.Stage == ContainerImageImportStage.Downloading
+                Console.WriteLine(report.StageKind == ContainerImageImportStage.Downloading
                     ? report.Message
                     : $"{Environment.NewLine}{report.Message}");
             }
 
-            lastStage = report.Stage;
+            lastStage = report.StageKind;
         });
 
         string result;

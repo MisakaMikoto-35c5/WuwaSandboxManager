@@ -496,10 +496,10 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        await RunImageDownloadAsync(deleteExisting: false);
+        await RunImageDownloadAsync(replaceExisting: false);
     }
 
-    /// <summary>Deletes the installed image and downloads it again.</summary>
+    /// <summary>Stages a new download and replaces the installed image only after success.</summary>
     [RelayCommand]
     private async Task RedownloadContainerImageAsync()
     {
@@ -508,7 +508,7 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        await RunImageDownloadAsync(deleteExisting: true);
+        await RunImageDownloadAsync(replaceExisting: true);
     }
 
     /// <summary>Cancels the running download; the partial layer is removed.</summary>
@@ -630,8 +630,11 @@ public sealed partial class MainViewModel : ObservableObject
         return true;
     }
 
-    private async Task RunImageDownloadAsync(bool deleteExisting)
+    private async Task RunImageDownloadAsync(bool replaceExisting)
     {
+        _imageDownloadCts = new CancellationTokenSource();
+        var ct = _imageDownloadCts.Token;
+        string? staging = null;
         try
         {
             IsContainerImageDownloading = true;
@@ -641,18 +644,21 @@ public sealed partial class MainViewModel : ObservableObject
             ContainerImageProgressDetailText = string.Empty;
             Status = _l["Status.ImageImporting.Text"];
 
-            if (deleteExisting && Directory.Exists(ContainerImageFolder))
-            {
-                // A WCOW layer holds reparse points that can be slow to delete;
-                // keep the UI thread free.
-                await Task.Run(() => Directory.Delete(ContainerImageFolder, recursive: true));
-                RefreshContainerImageInstallState();
-            }
-
+            var reference = SelectedContainerImageReference!;
+            var destination = Path.GetFullPath(ContainerImageFolder);
+            staging = replaceExisting
+                ? destination.TrimEnd('\\', '/') + ".wsm-staging-" + Guid.NewGuid().ToString("N") + ".tmp"
+                : null;
+            var importPath = staging ?? destination;
             var progress = CreateImageImportProgress();
-            _imageDownloadCts = new CancellationTokenSource();
-            var path = await _imageImporter.ImportBaseLayerAsync(
-                SelectedContainerImageReference!, ContainerImageFolder, progress, _imageDownloadCts.Token);
+            var path = await Task.Run(
+                () => _imageImporter.ImportBaseLayerAsync(reference, importPath, progress, ct), ct);
+
+            if (staging is not null)
+            {
+                await Task.Run(() => ReplaceDownloadedImage(staging, destination, ct), ct);
+                path = destination;
+            }
 
             // Effective immediately (the engine reads the override at start) and
             // persisted so it survives a restart.
@@ -696,6 +702,11 @@ public sealed partial class MainViewModel : ObservableObject
         }
         finally
         {
+            if (staging is not null)
+            {
+                await Task.Run(() => TryDeleteDirectory(staging));
+            }
+
             _imageDownloadCts?.Dispose();
             _imageDownloadCts = null;
             IsContainerImageDownloading = false;
@@ -703,6 +714,61 @@ public sealed partial class MainViewModel : ObservableObject
             ContainerImageProgressText = string.Empty;
             ContainerImageProgressDetailText = string.Empty;
             RefreshContainerImageInstallState();
+        }
+    }
+
+    private static void ReplaceDownloadedImage(string staging, string destination, CancellationToken ct)
+    {
+        var backup = destination.TrimEnd('\\', '/') + ".wsm-backup-" + Guid.NewGuid().ToString("N") + ".tmp";
+        var movedExisting = false;
+        var movedStaging = false;
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Directory.Exists(destination))
+            {
+                Directory.Move(destination, backup);
+                movedExisting = true;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            Directory.Move(staging, destination);
+            movedStaging = true;
+            ct.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            if (movedStaging && Directory.Exists(destination) && !Directory.Exists(staging))
+            {
+                Directory.Move(destination, staging);
+            }
+
+            if (movedExisting && Directory.Exists(backup) && !Directory.Exists(destination))
+            {
+                Directory.Move(backup, destination);
+            }
+
+            throw;
+        }
+
+        if (movedExisting)
+        {
+            TryDeleteDirectory(backup);
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort; this is always a unique path owned by this operation.
         }
     }
 
@@ -721,14 +787,14 @@ public sealed partial class MainViewModel : ObservableObject
 
         return new Progress<ContainerImageImportProgress>(report =>
         {
-            ContainerImageProgressText = _l[$"ContainerImageStage.{report.Stage}.Text"];
+            ContainerImageProgressText = _l[$"ContainerImageStage.{report.StageKind}.Text"];
             ContainerImageProgressIndeterminate = report.Fraction is null;
             if (report.Fraction is { } fraction)
             {
                 ContainerImageProgress = fraction * 100;
             }
 
-            if (report is { Stage: ContainerImageImportStage.Downloading, BytesReceived: { } received })
+            if (report is { StageKind: ContainerImageImportStage.Downloading, BytesReceived: { } received })
             {
                 var now = stopwatch.Elapsed;
                 var elapsed = now - lastSample;

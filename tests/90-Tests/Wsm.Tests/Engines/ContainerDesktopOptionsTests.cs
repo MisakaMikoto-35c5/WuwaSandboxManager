@@ -58,7 +58,7 @@ public sealed class ContainerDesktopOptionsTests
         var options = new ContainerDesktopOptions();
 
         Assert.Equal("Administrator", options.UserName);
-        Assert.False(string.IsNullOrEmpty(ContainerDesktopSessionDefaults.DefaultPassword));
+        Assert.Null(options.Password);
     }
 
     [Fact]
@@ -153,6 +153,14 @@ public sealed class ContainerDesktopOptionsTests
             WindowsContainerEngine.RegAdd("key", "Shell", "cmd.exe"),
             WindowsContainerEngine.RedactCommandForLog(
                 WindowsContainerEngine.RegAdd("key", "Shell", "cmd.exe")));
+    }
+
+    [Fact]
+    public void Account_activation_without_a_password_is_not_redacted()
+    {
+        const string command = "net.exe user \"Administrator\" /ACTIVE:YES";
+
+        Assert.Equal(command, WindowsContainerEngine.RedactCommandForLog(command));
     }
 
     /// <summary>

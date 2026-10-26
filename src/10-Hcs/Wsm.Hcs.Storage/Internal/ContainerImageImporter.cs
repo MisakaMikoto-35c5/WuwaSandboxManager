@@ -78,11 +78,21 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
 
     private readonly IWcowLayerService _layers;
     private readonly ILogger<ContainerImageImporter> _logger;
+    private readonly HttpMessageHandler? _httpHandler;
 
     public ContainerImageImporter(IWcowLayerService layers, ILogger<ContainerImageImporter> logger)
     {
         _layers = layers;
         _logger = logger;
+    }
+
+    internal ContainerImageImporter(
+        IWcowLayerService layers,
+        ILogger<ContainerImageImporter> logger,
+        HttpMessageHandler httpHandler)
+        : this(layers, logger)
+    {
+        _httpHandler = httpHandler;
     }
 
     public IReadOnlyList<string> SuggestedImages => Catalog.Select(image => image.Reference).ToArray();
@@ -97,25 +107,23 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
     {
         var image = ImageReference.Parse(string.IsNullOrWhiteSpace(reference) ? DefaultReference : reference);
         var destination = Path.GetFullPath(layerPath);
+        EnsureDestinationIsEmpty(destination);
 
-        if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any())
-        {
-            throw new SandboxValidationException(
-                $"The target layer directory '{destination}' is not empty; choose a new path.");
-        }
+        var parent = Path.GetDirectoryName(destination)
+            ?? throw new SandboxValidationException($"The target layer path '{destination}' has no parent directory.");
+        Directory.CreateDirectory(parent);
+        var work = destination.TrimEnd('\\', '/') + ".wsm-" + Guid.NewGuid().ToString("N") + ".tmp";
+        Directory.CreateDirectory(work);
 
-        Directory.CreateDirectory(destination);
-
-        // The folder was empty (or absent) at entry, so everything in it from
-        // here on is ours: a cancelled or failed import removes it again rather
-        // than leaving a partial layer that a retry would refuse.
         try
         {
-            await ImportCoreAsync(image, destination, progress, ct);
+            await ImportCoreAsync(image, work, progress, ct);
+            ct.ThrowIfCancellationRequested();
+            FinalizeImport(work, destination, ct);
         }
         catch
         {
-            TryDeleteDirectory(destination);
+            TryDeleteDirectory(work);
             throw;
         }
 
@@ -124,13 +132,55 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         return destination;
     }
 
+    private static void EnsureDestinationIsEmpty(string destination)
+    {
+        if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any())
+        {
+            throw new SandboxValidationException(
+                $"The target layer directory '{destination}' is not empty; choose a new path.");
+        }
+    }
+
+    private static void FinalizeImport(string work, string destination, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            EnsureDestinationIsEmpty(destination);
+            if (Directory.Exists(destination))
+            {
+                try
+                {
+                    Directory.Delete(destination, recursive: false);
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // Another finalizer removed the still-empty directory.
+                }
+            }
+
+            ct.ThrowIfCancellationRequested();
+            Directory.Move(work, destination);
+        }
+        catch (IOException) when (Directory.Exists(destination)
+                                  && Directory.EnumerateFileSystemEntries(destination).Any())
+        {
+            throw new SandboxValidationException(
+                $"The target layer directory '{destination}' is not empty; choose a new path.");
+        }
+    }
+
     private async Task ImportCoreAsync(
         ImageReference image,
         string destination,
         IProgress<ContainerImageImportProgress>? progress,
         CancellationToken ct)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        ct.ThrowIfCancellationRequested();
+        using var http = new HttpClient(_httpHandler ?? new HttpClientHandler(), disposeHandler: _httpHandler is null)
+        {
+            Timeout = TimeSpan.FromMinutes(30),
+        };
 
         // 1. Resolve the platform-specific manifest.
         progress?.Report(new ContainerImageImportProgress(ContainerImageImportStage.ResolvingManifest));
@@ -143,19 +193,23 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
             "Importing base layer {Digest} ({SizeMb} MB) of {Image} into '{Destination}'.",
             digest, size / (1024 * 1024), image, destination);
 
-        // 2. Download the base layer blob next to the destination.
-        var tarball = destination.TrimEnd('\\', '/') + ".layer.tgz";
+        // 2. Download the base layer blob into this import's unique work directory.
+        var tarball = Path.Combine(destination, Guid.NewGuid().ToString("N") + ".layer.tgz");
         try
         {
             await DownloadAsync(http, image, digest, tarball, progress, ct);
 
-            // 3. Extract (Files/, UtilityVM/, ...) with the in-box tar.
+            // 3. Extract (Files/, UtilityVM/, ...).
+            ct.ThrowIfCancellationRequested();
             progress?.Report(new ContainerImageImportProgress(ContainerImageImportStage.Extracting));
             await ExtractWithTarAsync(tarball, destination, ct);
 
             // 4. Prepare it as a WCOW base layer (Hives links + blank VHDX).
+            ct.ThrowIfCancellationRequested();
             progress?.Report(new ContainerImageImportProgress(ContainerImageImportStage.Preparing));
+            ct.ThrowIfCancellationRequested();
             _layers.ProcessBaseImage(destination);
+            ct.ThrowIfCancellationRequested();
 
             // 5. Record build/SKU so the isolation policy can evaluate it.
             var build = ContainerImageMetadata.TryReadBuildFromKernel(destination);
@@ -355,8 +409,7 @@ internal sealed class ContainerImageImporter : IContainerImageImporter, ISinglet
         }
         catch
         {
-            // Best effort: a leftover partial layer is reported by the install
-            // state probe, and the user can delete it from the GUI.
+            // Best effort; this path belongs only to the failed import.
         }
     }
 

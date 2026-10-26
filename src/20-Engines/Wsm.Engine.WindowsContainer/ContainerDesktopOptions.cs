@@ -39,11 +39,8 @@ public sealed class ContainerDesktopOptions
     /// <summary>
     /// Password for auto-logon. It must match the <c>DefaultPassword</c> baked into the
     /// image (the engine sets it on the account with <c>net user</c> at start, so the
-    /// two agree). When desktop is enabled and no password is configured, the shared
-    /// default (<see cref="Wsm.Hcs.Storage.ContainerDesktopSessionDefaults.DefaultPassword"/>)
-    /// is used; without any password no auto-logon is configured and the console session
-    /// stays on the logon screen — which is itself a desktop (<c>LogonUI</c>), just not a
-    /// logged-in one.
+    /// two agree). Null derives a credential from the resolved base-image path through
+    /// <see cref="Wsm.Hcs.Storage.ContainerDesktopSessionDefaults.GetPassword"/>.
     /// </summary>
     public string? Password { get; set; }
 

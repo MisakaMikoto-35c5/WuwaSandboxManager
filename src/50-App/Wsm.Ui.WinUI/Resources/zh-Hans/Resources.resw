@@ -257,4 +257,13 @@
   <data name="DesktopKind.WindowMirror.Text" xml:space="preserve"><value>窗口镜像 (RAIL)</value></data>
   <data name="Status.DesktopStarting.Text" xml:space="preserve"><value>正在启动容器桌面…</value></data>
   <data name="Status.DesktopLaunched.Text" xml:space="preserve"><value>容器桌面查看器已启动。</value></data>
+  <data name="ContainerImageUseButton.Content" xml:space="preserve"><value>使用此镜像</value></data>
+  <data name="ContainerDesktopPrepareButton.Content" xml:space="preserve"><value>准备桌面镜像</value></data>
+  <data name="ContainerDesktopPrepareHint.Text" xml:space="preserve"><value>可直接选择已安装的镜像，也可在创建 GUI 容器前写入交互登录和桌面代理。</value></data>
+  <data name="ContainerImageSelected.Text" xml:space="preserve"><value>已选择容器镜像：{0}</value></data>
+  <data name="ContainerImageUseFailed.Text" xml:space="preserve"><value>无法选择此镜像：{0}</value></data>
+  <data name="ContainerImageError.Incompatible.Text" xml:space="preserve"><value>此镜像不能在此主机上用于进程隔离。</value></data>
+  <data name="ContainerDesktopPreparing.Text" xml:space="preserve"><value>正在将桌面支持写入镜像…</value></data>
+  <data name="ContainerDesktopPrepared.Text" xml:space="preserve"><value>桌面支持已写入，新容器将使用此镜像。</value></data>
+  <data name="ContainerDesktopPrepareFailed.Text" xml:space="preserve"><value>无法准备镜像。请停止使用它的容器后重试。{0}</value></data>
 </root>

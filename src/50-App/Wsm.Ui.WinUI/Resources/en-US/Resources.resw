@@ -257,4 +257,13 @@
   <data name="DesktopKind.WindowMirror.Text" xml:space="preserve"><value>Window mirror (RAIL)</value></data>
   <data name="Status.DesktopStarting.Text" xml:space="preserve"><value>Starting the container desktop…</value></data>
   <data name="Status.DesktopLaunched.Text" xml:space="preserve"><value>Container desktop viewer launched.</value></data>
+  <data name="ContainerImageUseButton.Content" xml:space="preserve"><value>Use image</value></data>
+  <data name="ContainerDesktopPrepareButton.Content" xml:space="preserve"><value>Prepare desktop</value></data>
+  <data name="ContainerDesktopPrepareHint.Text" xml:space="preserve"><value>Select an installed image directly, or install interactive logon and the desktop agent before creating a GUI container.</value></data>
+  <data name="ContainerImageSelected.Text" xml:space="preserve"><value>Container image selected: {0}</value></data>
+  <data name="ContainerImageUseFailed.Text" xml:space="preserve"><value>Could not select this image: {0}</value></data>
+  <data name="ContainerImageError.Incompatible.Text" xml:space="preserve"><value>This image cannot run with process isolation on this host.</value></data>
+  <data name="ContainerDesktopPreparing.Text" xml:space="preserve"><value>Installing desktop support into the image…</value></data>
+  <data name="ContainerDesktopPrepared.Text" xml:space="preserve"><value>Desktop support is installed. The image is selected for new containers.</value></data>
+  <data name="ContainerDesktopPrepareFailed.Text" xml:space="preserve"><value>Could not prepare the image. Stop containers that use it and try again. {0}</value></data>
 </root>

@@ -361,11 +361,13 @@
                                    FontSize="11"
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                        <TextBlock Text="{Binding ContainerIsolationStatus}"
+                        <TextBlock x:Name="ContainerIsolationStatusText"
+                                   Text="{Binding ContainerIsolationStatus}"
                                    FontSize="12"
                                    TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <ComboBox HorizontalAlignment="Stretch"
+                        <ComboBox x:Name="ContainerImageReferenceCombo"
+                                  HorizontalAlignment="Stretch"
                                   ItemsSource="{Binding ContainerImageOptions}"
                                   IsEditable="True"
                                   Text="{Binding SelectedContainerImageReference, Mode=TwoWay}"
@@ -391,7 +393,8 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBox Text="{Binding ContainerImageFolder, Mode=TwoWay}"
+                            <TextBox x:Name="ContainerImageFolderBox"
+                                     Text="{Binding ContainerImageFolder, Mode=TwoWay}"
                                      IsEnabled="{Binding CanManageContainerImage}" />
                             <Button Grid.Column="1"
                                     x:Uid="BrowseButton"
@@ -406,6 +409,23 @@
                                        FontSize="12"
                                        TextWrapping="Wrap"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Uid="ContainerDesktopPrepareHint"
+                                       Text="Select an installed image, or install interactive logon and the desktop agent before creating a GUI container."
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="UseContainerImageButton"
+                                        x:Uid="ContainerImageUseButton"
+                                        Content="Use image"
+                                        Command="{Binding UseContainerImageCommand}"
+                                        IsEnabled="{Binding CanUseContainerImage}" />
+                                <Button x:Name="PrepareContainerDesktopButton"
+                                        x:Uid="ContainerDesktopPrepareButton"
+                                        Content="Prepare desktop"
+                                        Command="{Binding PrepareContainerDesktopCommand}"
+                                        IsEnabled="{Binding CanUseContainerImage}" />
+                            </StackPanel>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Button x:Uid="ContainerImageRedownloadButton"
                                         Content="Re-download"

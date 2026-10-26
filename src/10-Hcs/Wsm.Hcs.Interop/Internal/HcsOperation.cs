@@ -123,7 +123,8 @@ internal static class HcsErrors
 
         if (hresult == HcsETerminated)
         {
-            return new SandboxDomainException($"The compute system has already terminated ({operationName}).{suffix}");
+            return new SandboxBackendException(
+                $"The compute system has already terminated ({operationName}).{suffix}", hresult);
         }
 
         if (hresult == HcsEOperationTimeout || hresult == HcsELegacyOperationTimeout)

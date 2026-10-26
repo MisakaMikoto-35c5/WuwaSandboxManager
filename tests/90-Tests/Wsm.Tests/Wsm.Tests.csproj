@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <RootNamespace>Wsm.Tests</RootNamespace>
     <AssemblyName>Wsm.Tests</AssemblyName>
     <IsPackable>false</IsPackable>
@@ -38,6 +38,7 @@
     <ProjectReference Include="..\..\..\src\40-Host\Wsm.Host.Environment\Wsm.Host.Environment.csproj" />
     <ProjectReference Include="..\..\..\src\40-Host\Wsm.Persistence\Wsm.Persistence.csproj" />
     <ProjectReference Include="..\..\..\src\40-Host\Wsm.Localization\Wsm.Localization.csproj" />
+    <ProjectReference Include="..\..\..\src\50-App\Wsm.Ui.WinUI\Wsm.Ui.WinUI.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -122,9 +122,11 @@ public class WsbRecipeSerializerTests
         // survive persistence - otherwise the manifest-driven choice would be lost.
         var original = SandboxRecipe.Default with
         {
+            ContainerImagePath = @"C:\wsm-images\server-full-ltsc2022",
             Desktop = new SandboxDesktopPlan
             {
                 Kind = ContainerDesktopKind.WindowMirror,
+                InteractiveSession = true,
                 Provider = ContainerDesktopProviderIds.WindowMirror,
                 PresentToInteractiveSession = false,
                 DirtyRegions = false,
@@ -138,9 +140,12 @@ public class WsbRecipeSerializerTests
         Assert.Contains("<ContainerDesktop>", xml);
         Assert.Contains("<Kind>WindowMirror</Kind>", xml);
         Assert.Contains("<Provider>window-mirror</Provider>", xml);
+        Assert.Contains("<InteractiveSession>Enable</InteractiveSession>", xml);
+        Assert.Contains("<ContainerImagePath>C:\\wsm-images\\server-full-ltsc2022</ContainerImagePath>", xml);
 
         var restored = serializer.Deserialize(xml);
         Assert.Equal(original.Desktop, restored.Desktop);
+        Assert.Equal(original.ContainerImagePath, restored.ContainerImagePath);
 
         return Task.CompletedTask;
     });

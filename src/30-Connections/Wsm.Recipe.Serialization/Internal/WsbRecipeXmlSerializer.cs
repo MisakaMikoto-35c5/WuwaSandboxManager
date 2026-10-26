@@ -89,6 +89,7 @@ internal sealed class WsbRecipeXmlSerializer : ISandboxRecipeSerializer, ITransi
                 desktop.Add(new XElement("Provider", recipe.Desktop.Provider));
             }
 
+            AddBool(desktop, "InteractiveSession", recipe.Desktop.InteractiveSession);
             AddBool(desktop, "PresentToInteractiveSession", recipe.Desktop.PresentToInteractiveSession);
             AddBool(desktop, "DirtyRegions", recipe.Desktop.DirtyRegions);
             if (recipe.Desktop.Width > 0)
@@ -107,6 +108,11 @@ internal sealed class WsbRecipeXmlSerializer : ISandboxRecipeSerializer, ITransi
             }
 
             root.Add(desktop);
+        }
+
+        if (!string.IsNullOrWhiteSpace(recipe.ContainerImagePath))
+        {
+            root.Add(new XElement("ContainerImagePath", recipe.ContainerImagePath));
         }
 
         return root.ToString(SaveOptions.DisableFormatting);
@@ -157,6 +163,7 @@ internal sealed class WsbRecipeXmlSerializer : ISandboxRecipeSerializer, ITransi
             AccountUser = root.Element("AccountUser")?.Value,
             AccountPassword = root.Element("AccountPassword")?.Value,
             Desktop = ParseDesktop(root.Element("ContainerDesktop")),
+            ContainerImagePath = root.Element("ContainerImagePath")?.Value,
         };
     }
 
@@ -171,6 +178,7 @@ internal sealed class WsbRecipeXmlSerializer : ISandboxRecipeSerializer, ITransi
         return new SandboxDesktopPlan
         {
             Kind = ReadEnum(element, "Kind", ContainerDesktopKind.FrameBuffer),
+            InteractiveSession = ReadBool(element, "InteractiveSession") ?? false,
             Provider = element.Element("Provider")?.Value,
             PresentToInteractiveSession = ReadBool(element, "PresentToInteractiveSession") ?? true,
             DirtyRegions = ReadBool(element, "DirtyRegions") ?? true,

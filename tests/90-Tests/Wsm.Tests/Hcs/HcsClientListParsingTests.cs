@@ -100,6 +100,7 @@ public sealed class HcsClientListParsingTests
         var terminated = HcsErrors.ToException(unchecked((int)0x80370107), "Terminate", null);
         var timeout = HcsErrors.ToException(unchecked((int)0x80370118), "Wait", null);
 
+        Assert.IsType<Wsm.Domain.Exceptions.SandboxBackendException>(terminated);
         Assert.Contains("already terminated", terminated.Message);
         Assert.Contains("did not complete within", timeout.Message);
     }

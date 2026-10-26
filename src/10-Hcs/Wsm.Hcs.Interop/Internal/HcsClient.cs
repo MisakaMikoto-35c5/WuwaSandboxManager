@@ -40,7 +40,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
     {
         using var operation = new HcsOperation();
         var hr = HcsNative.HcsEnumerateComputeSystems(query ?? "{}", operation.Handle);
-        var document = operation.Complete(hr, nameof(HcsNative.HcsEnumerateComputeSystems));
+        var document = operation.Complete(hr, nameof(HcsNative.HcsEnumerateComputeSystems), 30_000);
         return ParseList(document);
     }
 
@@ -173,7 +173,7 @@ internal sealed class HcsClient : IHcsClient, ISingletonDependency
             }
 
             using var operation = new HcsOperation();
-            var hr = HcsNative.HcsTerminateComputeSystem(system.Handle, operation.Handle, "");
+            var hr = HcsNative.HcsTerminateComputeSystem(system.Handle, operation.Handle, null);
             try
             {
                 operation.Complete(hr, nameof(HcsNative.HcsTerminateComputeSystem), 30_000);

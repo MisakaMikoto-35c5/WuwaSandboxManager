@@ -28,6 +28,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
     private readonly ISandboxManager _manager;
     private readonly MainViewModel _owner;
     private readonly IAppLocalizer _l;
+    private SandboxRecipe _recipe = SandboxRecipe.Default;
 
     /// <summary>
     /// Set when the user explicitly disconnects: suppresses auto-connect and keeps
@@ -197,6 +198,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
 
     public void Apply(SandboxInstanceDto dto)
     {
+        _recipe = dto.Recipe;
         Id = dto.Id;
         Name = dto.Name;
         MemoryMb = dto.Recipe.Memory.MemoryMb;
@@ -273,7 +275,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
         OnPropertyChanged(nameof(SandboxFolder));
     }
 
-    public SandboxRecipe BuildRecipe() => new()
+    public SandboxRecipe BuildRecipe() => _recipe with
     {
         Name = new SandboxName(string.IsNullOrWhiteSpace(Name) ? SandboxName.DefaultValue : Name),
         Memory = new SandboxMemoryConfiguration((int)MemoryMb),

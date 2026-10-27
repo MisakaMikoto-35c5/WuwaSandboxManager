@@ -1802,3 +1802,38 @@ Server Core 在本机仍复现：LSM #41/#42 后没有 #21/#22，`userinit`/读�
   WinUI 自包含应用上不是有效的验证方式；它会混淆基线与当前版本的比较。
 - UI Automation 设置文本框后要移动焦点以提交绑定；选择容器引擎后要重新枚举桌面 ComboBox；
   重复运行前关闭旧设置对话框。找不到隐藏按钮不等于按钮没有实现。
+
+---
+
+## 27. HCS 实验后的官方 Sandbox 恢复（2026-10-27）/ Official Sandbox recovery after HCS experiments
+
+### 27.1 操作审计 / Audit
+
+本轮 HCS VM 调试反复使用了手写 HCS JSON、直接 `ManagedWindowsVM` 和 gRPC 自定义启动。
+这些 VM 均以 `0x80370106` / GuestOS Reset 失败；又误把 gRPC 的空 StartReply、运行时 ID 映射和
+service/console 会话差异混在一起，形成了多轮不能持续运行的实验。**这些路径没有形成或保留为产品修复。**
+
+未验证的 HCS 回退、CLI 开关和 VNC 代码已撤回或删除，没有把失败实现提交到分支。
+此前已经提交的容器修复不在本次撤回范围内。
+
+本次没有卸载、回滚或暂停 Windows 更新，也没有禁用 Windows Sandbox、Containers 或 Hyper-V。
+审计时 `ContainerAI\BaseImageVersion` 仍在，注册层为
+`Layers\e9e94cf0-4f4c-4708-bfc7-5bbcd457d989`（`10.0.26300.9711`），
+`vmcompute`、`vmms`、`hns` 与 `CmService` 均在运行。`HcsGrantVmAccess` 只增加访问授权；
+测试 VHDX 只复制到 `artifacts/` 或实例目录，没有证据表明这些操作改写了平台基底镜像内容。
+
+### 27.2 恢复与实测 / Recovery and verification
+
+重启前，官方 Sandbox、直接 HCS、直接 UDK 和自定义 gRPC 均进入反复失败状态；
+重启后先确认 HCS 列表为空，再直接使用官方 `WindowsSandbox.exe` 启动一个简化 WSB，成功显示真实桌面。
+随后执行关闭并再次启动：
+
+- 第一次 `WindowsSandboxRemoteSession`（PID 17592，18:13:02）为 `Responding=True`；
+- 关闭后第二次（PID 24624，18:14:47）同样为 `Responding=True`；
+- 两次截图都包含 Sandbox 窗口、桌面图标和实际像素，不是黑屏或仅有进程；
+- 验证用实例最后已关闭，没有继续占用单实例许可或后台任务。
+
+结论：**官方 Windows Sandbox 已恢复可用。** 重启清除了实验遗留的运行时状态；
+没有证据支持需要再次重装功能、修复 CBS 或修改 Windows 更新。
+手写 HCS VM JSON 与自定义 UDK/gRPC 启动仍未被证明可用，不能把这个官方应用恢复结果
+写成自定义 HCS VM 引擎已修复。后续应先停止影响主机的实验，再在任何新 VM 测试前确认官方基线。

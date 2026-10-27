@@ -1837,3 +1837,48 @@ service/console 会话差异混在一起，形成了多轮不能持续运行的�
 没有证据支持需要再次重装功能、修复 CBS 或修改 Windows 更新。
 手写 HCS VM JSON 与自定义 UDK/gRPC 启动仍未被证明可用，不能把这个官方应用恢复结果
 写成自定义 HCS VM 引擎已修复。后续应先停止影响主机的实验，再在任何新 VM 测试前确认官方基线。
+
+---
+
+## 28. `0x80370106` 时间线、误判与禁止规则 / Error timeline and guardrails
+
+### 28.1 何时出现、当时做了什么 / When it happened and what ran
+
+- **2026-10-27 09:35**：直接 `HcsStartComputeSystem` 首次在本轮复现 `0x80370106`，归因包含
+  `SystemExit(Shutdown, GuestOS)` 与 `WorkerExit(StoppedOnReset, Reset, GuestOS)`。
+  当时官方基底曾被修复，但自定义 HCS JSON 启动失败。随后没有立即停止，而是继续比较旧版 WSM 和配置变体。
+- **09:53–10:16**：逐个尝试内存选项、许可 ID、SCSI 选项、`GuestConnection`、`StopOnReset`、Owner、
+  schema、`SharedMemoryAccessSids` 等。全部仍为同一 GuestOS Reset。
+  随后尝试 `RestoreState.TemplateSystemId`；得到的 vSMB 保存状态错误只是另一条失败路径，
+  **不是**“模板恢复接近成功”的证据。使用过期模板和父盘关系本身也不可靠。
+- **12:48 起**：直接 `ManagedWindowsVM` 也返回 `0x80370106`。gRPC 的 `StartSandbox` 出现空
+  `RdpClientConfig`，随后查询曾得到真实 VM ID、执行和停止也返回成功，但 VM 很快消失。
+  这证明空 StartReply 需要后查询，**不证明自定义 VM 已可持续运行**。
+- **13:41 起**：平台启动曾返回成功，但独立 `exec` 和 `connect` 找不到沙盒。
+  后续官方进程启动只创建进程而未发布 VM，继续调 service/console、WSB 字段、运行时枚举及 120/300 秒等待。
+  这些操作没有形成有效修复，反而增加了错误路径和运行时扰动。
+- **18:04 重启后**：官方 `WindowsSandboxRemoteSession` 曾两次显示窗口和实际桌面，
+  但之后出现 HCS 列表为空、没有 `vmwp` 的状态。因此只能证明当时官方窗口可用，
+  **不能**据此宣称自定义 HCS VM 已恢复，也不能证明平台之后一直处于可用状态。
+- **20:03**：一次回退启动在准备用户数据时失败：prepared base image 不存在。
+  这是存储准备错误，不能与 `0x80370106` 混为同一个根因。
+- **20:30–20:45**：尝试 `DISM RestoreHealth`，Windows Update 下载停在 50%；改用 `/LimitAccess`
+  后 CBS 仍在下载并停在 49%。随后 optional-feature 重建在 600 秒超时。
+  这些修复尝试已停止，不再继续执行。
+
+### 28.2 现在确认的规则 / Mandatory rules
+
+1. **一旦再次看到 `0x80370106`，立即停止所有相关 HCS/UDK/gRPC/官方 Sandbox 启动与功能重置。**
+   不再做字段矩阵、旧版对照、模板试探或“换一种错误看看”的实验。
+2. 先保留错误原文、时间、调用、镜像/模板 ID 和平台状态，再按用户验证过的恢复流程处理。
+   在恢复前，任何成功迹象都不能当作有效路径；不同错误码也不能自动视为进展。
+3. 不卸载、回滚或暂停 Windows 更新，不删除基底镜像、模板、prepared storage 或注册表项。
+   不重复执行 `RestoreHealth`、optional-feature 禁用/启用或服务重启作为试错。
+4. 官方 `WindowsSandbox.exe`、UDK 和 gRPC **不是本项目的替代引擎或验收捷径**。
+   进程存在、窗口存在、Start 返回 0、后续查询得到 ID，都不能代替持续运行的 VM 与实际 RDP/RAIL 验收。
+5. 新实验必须先证明当前官方基线稳定，且每次只改变一个可回滚变量；不得并发进行 DISM、
+   功能重置和 HCS 启动。失败实现不得提交，未验证代码必须撤回。
+6. 恢复后首先检查 `vmwp` 与持续运行的 HCS VM，再检查 guest 命令、RDP 窗口和输入。
+   若这些条件不满足，继续工作只会增加系统风险，应停止而不是扩大测试范围。
+
+用户已按验证过的流程另行处理当前 `0x80370106`。本记录之后不再执行上述高风险启动或修复操作。

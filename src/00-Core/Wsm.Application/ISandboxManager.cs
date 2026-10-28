@@ -66,7 +66,7 @@ public interface ISandboxManager
     Task<SandboxRuntimeInfo> PrepareConnectAsync(Guid id, CancellationToken cancellationToken = default);
 
     /// <summary>Opens the user-visible session for a running instance.</summary>
-    Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, CancellationToken cancellationToken = default);
+    Task ConnectAsync(Guid id, SandboxConnectionMode mode, string? remoteAppProgram = null, string? remoteAppArguments = null, CancellationToken cancellationToken = default);
 
     /// <summary>Returns the guest IP addresses of an instance.</summary>
     Task<IReadOnlyList<string>> GetIpAddressesAsync(Guid id, CancellationToken cancellationToken = default);

@@ -1,13 +1,13 @@
-namespace Wsm.Connection.RdpHost.Internal;
+namespace Wsm.Connection.RdpBase;
 
 /// <summary>
-/// Last-resort session-event capture for the mstscax presentation. The WinUI
-/// host has no console, so the ActiveX events (<c>OnDisconnected</c>,
-/// <c>OnFatalError</c>, <c>OnLogonError</c>) would leave no trace anywhere;
-/// they are appended to <c>rdp-events.log</c> under
+/// Last-resort session-event capture for the RDP presentation kits. The GUI
+/// child processes have no console, so the ActiveX events (connected,
+/// disconnected, fatal error, logon error) would leave no trace anywhere; they
+/// are appended to <c>rdp-events.log</c> under
 /// <c>%LOCALAPPDATA%\WindowsSandboxManager</c>. Never throws.
 /// </summary>
-internal static class RdpEventLog
+public static class ConnectionEventLog
 {
     private static readonly string LogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

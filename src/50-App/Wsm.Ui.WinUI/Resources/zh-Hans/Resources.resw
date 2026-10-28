@@ -230,13 +230,40 @@
   <data name="Status.ManifestMissing.Text" xml:space="preserve"><value>尚无可用清单。</value></data>
   <!-- Quick launch (RAIL) -->
   <data name="QuickLaunchSection.Text" xml:space="preserve"><value>快速启动</value></data>
-  <data name="QuickLaunchCaption.Text" xml:space="preserve"><value>以 RemoteApp 窗口方式打开常用程序。</value></data>
+  <data name="QuickLaunchCaption.Text" xml:space="preserve"><value>以 RemoteApp 窗口方式打开程序（窗口可像本机应用一样自由拖动、层叠）。</value></data>
   <data name="QuickLaunch.Explorer.Text" xml:space="preserve"><value>文件资源管理器</value></data>
   <data name="QuickLaunch.Registry.Text" xml:space="preserve"><value>注册表编辑器</value></data>
   <data name="QuickLaunch.CommandPrompt.Text" xml:space="preserve"><value>命令提示符</value></data>
   <data name="QuickLaunch.PowerShell.Text" xml:space="preserve"><value>PowerShell</value></data>
   <data name="QuickLaunch.Notepad.Text" xml:space="preserve"><value>记事本</value></data>
   <data name="QuickLaunch.TaskManager.Text" xml:space="preserve"><value>任务管理器</value></data>
+  <data name="AddAppButton.Content" xml:space="preserve"><value>添加应用程序...</value></data>
+  <data name="CreateShortcutButton.Content" xml:space="preserve"><value>创建快捷方式...</value></data>
+  <data name="AddAppDialog.Title" xml:space="preserve"><value>添加应用程序</value></data>
+  <data name="AddAppDialog.PrimaryButtonText" xml:space="preserve"><value>添加</value></data>
+  <data name="AddAppDialog.CloseButtonText" xml:space="preserve"><value>取消</value></data>
+  <data name="AddAppNameBox.Header" xml:space="preserve"><value>名称</value></data>
+  <data name="AddAppNameBox.PlaceholderText" xml:space="preserve"><value>我的工具</value></data>
+  <data name="AddAppProgramBox.Header" xml:space="preserve"><value>程序（沙箱内路径）</value></data>
+  <data name="AddAppProgramBox.PlaceholderText" xml:space="preserve"><value>C:\tools\app.exe</value></data>
+  <data name="AddAppArgumentsBox.Header" xml:space="preserve"><value>参数（可选）</value></data>
+  <data name="AddAppScopeHint.Text" xml:space="preserve"><value>应用程序将加入所有沙箱的启动列表；仅针对单个沙箱的应用程序在该沙箱的设置中管理。</value></data>
+  <data name="AppsSection.Text" xml:space="preserve"><value>应用程序</value></data>
+  <data name="AppsHint.Text" xml:space="preserve"><value>以 RemoteApp 窗口方式打开这些应用程序；它们与内置默认项和全局启动列表一起显示。</value></data>
+  <data name="NewRailAppNameBox.PlaceholderText" xml:space="preserve"><value>名称</value></data>
+  <data name="NewRailAppProgramBox.PlaceholderText" xml:space="preserve"><value>C:\path\to\app.exe</value></data>
+  <data name="NewRailAppArgsBox.PlaceholderText" xml:space="preserve"><value>参数</value></data>
+  <data name="ShortcutDialog.Title" xml:space="preserve"><value>创建快捷方式</value></data>
+  <data name="ShortcutDialog.PrimaryButtonText" xml:space="preserve"><value>创建</value></data>
+  <data name="ShortcutDialog.CloseButtonText" xml:space="preserve"><value>取消</value></data>
+  <data name="ShortcutAppBox.Header" xml:space="preserve"><value>应用程序</value></data>
+  <data name="ShortcutNameBox.Header" xml:space="preserve"><value>快捷方式名称</value></data>
+  <data name="ShortcutFolderBox.Header" xml:space="preserve"><value>目标文件夹</value></data>
+  <data name="ShortcutBrowseButton.Content" xml:space="preserve"><value>浏览...</value></data>
+  <data name="ShortcutHint.Text" xml:space="preserve"><value>快捷方式会连接到沙箱并以 RemoteApp 窗口打开该应用程序。沙箱需要处于运行状态。</value></data>
+  <data name="Status.AppAdded.Text" xml:space="preserve"><value>已添加应用程序。</value></data>
+  <data name="Status.AppRemoved.Text" xml:space="preserve"><value>已移除应用程序。</value></data>
+  <data name="Status.ShortcutCreated.Text" xml:space="preserve"><value>已创建快捷方式：{0}</value></data>
   <data name="RailProgramBox.Header" xml:space="preserve"><value>默认 RAIL 程序</value></data>
   <data name="CreateRailProgramBox.Header" xml:space="preserve"><value>默认 RAIL 程序</value></data>
   <data name="RailProgramHint.Text" xml:space="preserve"><value>RAIL 会话启动的程序。WDAG 客户机没有桌面，因此显示的就是该程序。</value></data>

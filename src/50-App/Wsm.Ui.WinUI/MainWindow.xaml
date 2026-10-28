@@ -209,13 +209,14 @@
                         </StackPanel>
 
                         <!-- Quick launch (RAIL): the WDAG guest is RemoteApp-only, so
-                             a program is what actually appears on screen. -->
+                             a program is what actually appears on screen. RAIL sessions
+                             are presented by mstsc with a generated .rdp document. -->
                         <Border Style="{StaticResource SectionCard}"
                                 Visibility="{Binding Selected.RailMode, Converter={StaticResource BoolToVisibility}}">
                             <StackPanel Spacing="10">
                                 <TextBlock x:Uid="QuickLaunchSection" Text="Quick launch" Style="{StaticResource SectionTitle}" />
                                 <TextBlock x:Uid="QuickLaunchCaption"
-                                           Text="Open a common program as a RemoteApp window."
+                                           Text="Open a program as a RemoteApp window."
                                            FontSize="11"
                                            TextWrapping="Wrap"
                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
@@ -237,6 +238,14 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Uid="AddAppButton"
+                                            Content="Add application..."
+                                            Click="OnAddGlobalAppClick" />
+                                    <Button x:Uid="CreateShortcutButton"
+                                            Content="Create shortcut..."
+                                            Click="OnCreateShortcutClick" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 
@@ -907,6 +916,68 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- Application launch list (RemoteApp) -->
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel Spacing="10">
+                            <TextBlock x:Uid="AppsSection" Text="Applications" Style="{StaticResource SectionTitle}" />
+                            <TextBlock x:Uid="AppsHint"
+                                       Text="Open these applications as RemoteApp windows. They are offered next to the built-in defaults and the global launch list."
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            <ItemsControl ItemsSource="{Binding Selected.RailApps}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vo:RailApp">
+                                        <Grid ColumnSpacing="8" Padding="0,3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{x:Bind Name}"
+                                                       FontWeight="SemiBold"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{x:Bind Program}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            <Button Grid.Column="2"
+                                                    x:Uid="RemoveButton"
+                                                    Content="Remove"
+                                                    Command="{Binding DataContext.Selected.RemoveRailAppCommand, ElementName=Root}"
+                                                    CommandParameter="{x:Bind}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Uid="NewRailAppNameBox"
+                                         Width="96"
+                                         PlaceholderText="Name"
+                                         Text="{Binding Selected.NewRailAppName, Mode=TwoWay}" />
+                                <TextBox Grid.Column="1"
+                                         x:Uid="NewRailAppProgramBox"
+                                         PlaceholderText="C:\path\to\app.exe"
+                                         Text="{Binding Selected.NewRailAppProgram, Mode=TwoWay}" />
+                                <TextBox Grid.Column="2"
+                                         x:Uid="NewRailAppArgsBox"
+                                         PlaceholderText="Arguments"
+                                         Text="{Binding Selected.NewRailAppArguments, Mode=TwoWay}" />
+                                <Button Grid.Column="3"
+                                        x:Uid="AddButton"
+                                        Content="Add"
+                                        Command="{Binding Selected.AddRailAppCommand}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
                     <!-- Checkpoints -->
                     <Border Style="{StaticResource SectionCard}">
                         <StackPanel Spacing="10">
@@ -1010,6 +1081,73 @@
             <TextBlock x:Uid="ConfirmDeleteBody"
                        Text="This permanently removes the sandbox definition."
                        TextWrapping="Wrap" />
+        </ContentDialog>
+
+        <!-- ======================= Add application (global list) ======================= -->
+        <ContentDialog x:Name="AddAppDialog"
+                       x:Uid="AddAppDialog"
+                       Title="Add application"
+                       PrimaryButtonText="Add"
+                       CloseButtonText="Cancel"
+                       DefaultButton="Primary"
+                       PrimaryButtonClick="OnAddGlobalAppPrimary">
+            <StackPanel Spacing="10" Width="420">
+                <TextBox x:Uid="AddAppNameBox"
+                         Header="Name"
+                         PlaceholderText="My tool"
+                         Text="{Binding NewGlobalAppName, Mode=TwoWay}" />
+                <TextBox x:Uid="AddAppProgramBox"
+                         Header="Program (path in the sandbox)"
+                         PlaceholderText="C:\tools\app.exe"
+                         Text="{Binding NewGlobalAppProgram, Mode=TwoWay}" />
+                <TextBox x:Uid="AddAppArgumentsBox"
+                         Header="Arguments (optional)"
+                         Text="{Binding NewGlobalAppArguments, Mode=TwoWay}" />
+                <TextBlock x:Uid="AddAppScopeHint"
+                           Text="The application is added to the launch list for every sandbox. Sandbox-specific applications are managed in a sandbox's settings."
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </StackPanel>
+        </ContentDialog>
+
+        <!-- ======================= Create shortcut ======================= -->
+        <ContentDialog x:Name="ShortcutDialog"
+                       x:Uid="ShortcutDialog"
+                       Title="Create shortcut"
+                       PrimaryButtonText="Create"
+                       CloseButtonText="Cancel"
+                       DefaultButton="Primary"
+                       PrimaryButtonClick="OnCreateShortcutPrimary">
+            <StackPanel Spacing="10" Width="460">
+                <ComboBox x:Name="ShortcutAppCombo"
+                          x:Uid="ShortcutAppBox"
+                          Header="Application"
+                          HorizontalAlignment="Stretch"
+                          DisplayMemberPath="DisplayName" />
+                <TextBox x:Name="ShortcutNameBox"
+                         x:Uid="ShortcutNameBox"
+                         Header="Shortcut name" />
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ShortcutFolderBox"
+                             x:Uid="ShortcutFolderBox"
+                             Header="Folder" />
+                    <Button Grid.Column="1"
+                            x:Uid="ShortcutBrowseButton"
+                            Content="Browse..."
+                            VerticalAlignment="Bottom"
+                            Click="OnBrowseShortcutFolderClick" />
+                </Grid>
+                <TextBlock x:Uid="ShortcutHint"
+                           Text="The shortcut connects to the sandbox and opens the application as a RemoteApp window. The sandbox must be running."
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </StackPanel>
         </ContentDialog>
     </Grid>
 </Window>

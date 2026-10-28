@@ -49,6 +49,12 @@ public sealed record SandboxRecipe
     /// </summary>
     public string? RailProgram { get; init; }
 
+    /// <summary>
+    /// Applications offered as one-click RAIL launches for this sandbox (the
+    /// per-sandbox additions on top of the GUI's global launch list).
+    /// </summary>
+    public IReadOnlyList<RailApp> Apps { get; init; } = Array.Empty<RailApp>();
+
     /// <summary>Boot the session in full screen mode.</summary>
     public bool FullScreen { get; init; }
 

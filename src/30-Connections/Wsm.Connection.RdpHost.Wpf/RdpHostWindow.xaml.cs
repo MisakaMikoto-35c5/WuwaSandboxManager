@@ -144,8 +144,14 @@ public partial class RdpHostWindow : Window
 
     // ----------------------------- Session events -----------------------------
 
+    /// <summary>The pipe or TCP endpoint shown in the log, e.g. <c>\\.\pipe\&lt;VmId&gt;</c>.</summary>
+    private string EndpointLabel => _request.ServerAddress is { Length: > 0 }
+        ? $"{_request.ServerAddress}:{_request.ServerPort}"
+        : _request.PipeName;
+
     private void OnSessionConnected(object? sender, EventArgs e)
     {
+        ConnectionEventLog.Write("Connected", EndpointLabel);
         SetStatus(Text("RdpConnector.Connected", "Connected"));
         UpdateToolbarState();
         Dispatcher.InvokeAsync(() => _rdpControl?.UpdateRemoteDesktopSize());
@@ -153,6 +159,7 @@ public partial class RdpHostWindow : Window
 
     private void OnSessionDisconnected(object? sender, RdpDisconnectEventArgs e)
     {
+        ConnectionEventLog.Write("Disconnected", $"reason {e.Reason} at {EndpointLabel}");
         _logger.LogInformation("RDP session disconnected (reason {Reason}).", e.Reason);
         UpdateToolbarState();
         ShowOverlay(
@@ -163,6 +170,7 @@ public partial class RdpHostWindow : Window
 
     private void OnSessionFatalError(object? sender, int errorCode)
     {
+        ConnectionEventLog.Write("FatalError", $"code {errorCode} at {EndpointLabel}");
         _logger.LogError("RDP session fatal error {Error}.", errorCode);
         UpdateToolbarState();
         ShowOverlay(
@@ -173,6 +181,7 @@ public partial class RdpHostWindow : Window
 
     private void OnSessionLogonError(object? sender, int errorCode)
     {
+        ConnectionEventLog.Write("LogonError", $"code {errorCode} at {EndpointLabel}");
         // Arbitration codes (-2..-7) are logon progress events, not errors.
         if (errorCode is >= -7 and <= -2)
         {

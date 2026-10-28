@@ -9,6 +9,7 @@ using Windows.Storage.Pickers;
 using WinRT.Interop;
 using Wsm.Application;
 using Wsm.Connection.ContainerDesktop;
+using Wsm.Connection.RemoteApp;
 using Wsm.Domain.ValueObjects;
 using Wsm.Engine.WindowsContainer;
 using Wsm.Engines.Abstractions;
@@ -34,6 +35,7 @@ public sealed partial class MainWindow : Window
 {
     private readonly IAppLocalizer _localizer;
     private readonly IElevationService _elevation;
+    private readonly IRemoteAppShortcutWriter _shortcutWriter;
     private readonly string? _openManifestPath;
     private bool _initialized;
     private bool _languageReady;
@@ -47,6 +49,7 @@ public sealed partial class MainWindow : Window
 
         _localizer = services.GetRequiredService<IAppLocalizer>();
         _elevation = services.GetRequiredService<IElevationService>();
+        _shortcutWriter = services.GetRequiredService<IRemoteAppShortcutWriter>();
         _openManifestPath = openManifestPath;
         _appliedCulture = LanguageOption.Resolve(_localizer.CurrentCulture.Name).CultureName;
 
@@ -361,6 +364,106 @@ public sealed partial class MainWindow : Window
         if (result == ContentDialogResult.Primary && ViewModel.Selected is { } vm)
         {
             await vm.DeleteCommand.ExecuteAsync(null);
+        }
+    }
+
+    // ----------------------------- Launch list -----------------------------
+
+    private async void OnAddGlobalAppClick(object sender, RoutedEventArgs e)
+    {
+        ViewModel.NewGlobalAppName = string.Empty;
+        ViewModel.NewGlobalAppProgram = string.Empty;
+        ViewModel.NewGlobalAppArguments = string.Empty;
+
+        AddAppDialog.XamlRoot = Root.XamlRoot;
+        AddAppDialog.DataContext = ViewModel;
+        await AddAppDialog.ShowAsync();
+    }
+
+    private void OnAddGlobalAppPrimary(ContentDialog sender, ContentDialogButtonClickEventArgs args)
+    {
+        try
+        {
+            ViewModel.AddGlobalRailApp(new RailApp(
+                ViewModel.NewGlobalAppName,
+                ViewModel.NewGlobalAppProgram,
+                ViewModel.NewGlobalAppArguments));
+            ViewModel.Status = _localizer["Status.AppAdded.Text"];
+        }
+        catch (Exception ex)
+        {
+            // Keep the dialog open so the message stays visible.
+            args.Cancel = true;
+            ViewModel.Status = ex.Message;
+        }
+    }
+
+    private void OnCreateShortcutClick(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.Selected is not { } vm)
+        {
+            return;
+        }
+
+        ShortcutAppCombo.ItemsSource = vm.QuickLaunchPrograms;
+        ShortcutAppCombo.SelectedIndex = vm.QuickLaunchPrograms.Count > 0 ? 0 : -1;
+        ShortcutNameBox.Text = string.Empty;
+        ShortcutFolderBox.Text = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+
+        ShortcutDialog.XamlRoot = Root.XamlRoot;
+        _ = ShortcutDialog.ShowAsync();
+    }
+
+    private async void OnBrowseShortcutFolderClick(object sender, RoutedEventArgs e)
+    {
+        var path = await PickFolderAsync();
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            ShortcutFolderBox.Text = path;
+        }
+    }
+
+    private void OnCreateShortcutPrimary(ContentDialog sender, ContentDialogButtonClickEventArgs args)
+    {
+        try
+        {
+            var vm = ViewModel.Selected
+                ?? throw new InvalidOperationException("Select a sandbox first.");
+            var program = ShortcutAppCombo.SelectedItem as QuickLaunchProgram
+                ?? throw new InvalidOperationException("Select an application.");
+            var cli = WsmCliLocator.Find()
+                ?? throw new InvalidOperationException(_localizer["Status.CliMissing.Text"]);
+
+            var folder = ShortcutFolderBox.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(folder))
+            {
+                folder = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            }
+
+            var name = ShortcutNameBox.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                name = $"{vm.Name} - {program.DisplayName}";
+            }
+
+            var linkPath = System.IO.Path.Combine(folder, $"{name}.lnk");
+            _shortcutWriter.Create(new RemoteAppShortcutRequest
+            {
+                LinkPath = linkPath,
+                CliExecutablePath = cli,
+                SandboxId = vm.Id,
+                Program = program.Path,
+                ProgramArguments = program.Arguments,
+                Description = $"{vm.Name}: {program.DisplayName}",
+            });
+
+            ViewModel.Status = _localizer.Get("Status.ShortcutCreated.Text", linkPath);
+        }
+        catch (Exception ex)
+        {
+            // Keep the dialog open so the message stays visible.
+            args.Cancel = true;
+            ViewModel.Status = ex.Message;
         }
     }
 

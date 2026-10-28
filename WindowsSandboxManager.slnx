@@ -31,6 +31,8 @@
     <Project Path="src/30-Connections/Wsm.Connection.RdpHost.Ax/Wsm.Connection.RdpHost.Ax.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.RdpHost.Wpf/Wsm.Connection.RdpHost.Wpf.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.RdpHost.WinUi/Wsm.Connection.RdpHost.WinUi.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RailClient/Wsm.Connection.RailClient.csproj" />
+    <Project Path="src/30-Connections/Wsm.Connection.RemoteApp/Wsm.Connection.RemoteApp.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Session/Wsm.Connection.Session.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.Legacy/Wsm.Connection.Legacy.csproj" />
     <Project Path="src/30-Connections/Wsm.Connection.ContainerDesktop/Wsm.Connection.ContainerDesktop.csproj" />

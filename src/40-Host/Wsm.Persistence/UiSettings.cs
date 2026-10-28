@@ -23,11 +23,19 @@ public sealed record UiSettings
     public string? ConfigDataFolder { get; init; }
 
     /// <summary>
+    /// <summary>
     /// The imported container base image layer the process-isolation engine is
     /// built from (a WCOW layer folder, e.g. an imported Windows Server 2022
     /// image), or null to fall back to the Windows Sandbox image.
     /// </summary>
     public string? ContainerBaseImagePath { get; init; }
+
+    /// <summary>
+    /// The global application launch list added by the user (offered as
+    /// quick-launch buttons for every sandbox, on top of the built-in defaults
+    /// and each sandbox's own additions).
+    /// </summary>
+    public IReadOnlyList<RailApp> QuickLaunchApps { get; init; } = Array.Empty<RailApp>();
 
     /// <summary>An empty settings instance (system defaults).</summary>
     public static UiSettings Default { get; } = new();

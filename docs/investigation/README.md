@@ -39,6 +39,7 @@
 | 11 | [11-project-mapping.md](11-project-mapping.md) | 本项目（WindowsSandboxManager）映射与能力矩阵 / How this project maps to the above |
 | 12 | [12-modular-architecture.md](12-modular-architecture.md) | ABP 模块化架构：程序集分层、约定规约、多引擎抽象、本地化 / ABP modular architecture |
 | 13 | [13-container-desktop-and-rdp.md](13-container-desktop-and-rdp.md) | 进程隔离容器里的桌面/会话与 RDP：`NumberOfInitialSessions` 让 console 会话起来、`termsrv` 容器门禁让 RDP 无法建立 / Container desktop, sessions and RDP in a process-isolated container |
+| 14 | [14-hcs-0x80370106.md](14-hcs-0x80370106.md) | HCS `0x80370106`：强制停止规则、触发记录、证据边界与人工恢复 / HCS hard-stop rules, incident evidence and manual recovery |
 
 > 早前的单文件汇总版仍保留在 [`../investigation.md`](../investigation.md)。
 >

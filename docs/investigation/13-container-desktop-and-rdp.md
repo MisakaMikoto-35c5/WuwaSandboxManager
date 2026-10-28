@@ -1912,3 +1912,32 @@ RED/GREEN；HCS 聚焦套件最后为 164/164 通过。这些测试只验证代�
 证据选择下一项修复。所有未通过真实验收的产品及测试改动均已撤回，未提交、未合并；RDP、RAIL
 和后续 VNC 尚未开始验收。原始日志保存在 `artifacts/hcs-vm-fix-20261028/`。后续不得把上述不同
 HRESULT 当作进展，也不得在缺少新实现依据时继续变换字段。
+
+---
+
+## 30. 非 `0x80370106` 错误的继续修复与配置捕获（2026-10-28）/ Continued debugging and CMS capture
+
+用户明确指出只有 `0x80370106` 才是停止条件，其他 HRESULT 应继续处理。本轮随后完成了以下实现和真实启动，
+**没有出现 `0x80370106`**：
+
+1. 为模板补齐 `BaseImages` 目录链接后，Construct 的路径错误消失，但 Start 仍为 `0xC0370400`。
+   临时链接已按目标和类型核验，但提权清理启动器无响应并已停止等待；链接目前仍存在、待人工清理，
+   没有删除基底内容，也没有绕过 UAC。
+2. 模板恢复使用实际 `Layers` 路径并恢复空 `GuestConnection`，仍为同一 vSMB 错误。
+3. 同时传 `TemplateSystemId` 和当前 `SnapshotSavedState.vmrs` 在 Create 返回 `0x8007000D`；
+   单独传 VMRS 又回到 `0xC0370400`。为 VMRS 增加 `HcsGrantVmAccess` 不改变结果。
+4. 补齐旧公开配置的共享内存参数、为父盘和基底目录增加 additive 授权、使用 schema 2.6，均仍为
+   `0xC0370400 / VirtualDeviceFailure / PowerOnRestore / Virtual SMB Device`。这些变化没有形成修复。
+5. 用 ETW 捕获当前 CMS 启动，`Hyper-V-Compute` 证实成功实例
+   `74eebf4d-4140-4c3c-93c8-ca520d0e096b` 的 `RuntimeTemplateId` 正是本轮模板
+   `b24a3fff-3991-45e4-aeec-e677de0355c7`，并记录到运行后内存和 vSMB 修改事件。
+   `ComputeLib`、`ComputeCExec` 未提供完整创建 JSON；只读属性查询和定向内存扫描也未取得它。
+   官方程序只用于配置捕获，没有成为产品引擎或验收替代，捕获窗口和跟踪会话均已关闭。
+
+本轮新增回归曾达到 HCS 164/164 和全套 521/521 通过，但这些只是代码级结果，不能证明 VM 可用；
+随后一次全套运行又出现既有 `WindowMirrorHealthTests` 时序失败。所有未通过真实验收的产品和测试
+改动已再次撤回，未提交、未合并。RDP/RAIL 与 VNC 仍未验收。
+
+**当前技术阻塞**：当前 CMS 的模板/vSMB 保存状态恢复契约仍未由手写 JSON 满足。继续采用进程注入或
+API 钩子抓取配置会增加破坏宿主 HCS 的风险，因此没有执行。其他 HRESULT 本身不是停止条件，但
+也不应被解释为接近成功；后续需要安全地取得当前 CMS 创建契约或改用不同的直接 HCS 启动架构。

@@ -1882,3 +1882,33 @@ service/console 会话差异混在一起，形成了多轮不能持续运行的�
    若这些条件不满足，继续工作只会增加系统风险，应停止而不是扩大测试范围。
 
 用户已按验证过的流程另行处理当前 `0x80370106`。本记录之后不再执行上述高风险启动或修复操作。
+
+---
+
+## 29. 直接 HCS 修复实现与撤回（2026-10-28）/ Direct HCS implementation attempts and rollback
+
+用户要求停止继续取证并直接实现后，本轮只使用直接 `HcsSandboxEngine`，没有回退到官方
+Windows Sandbox、UDK 或 gRPC，也没有执行 DISM、功能重置、服务重启或 Windows 更新操作。
+三次真实启动均未返回 `0x80370106`，但也都没有形成可持续运行的 VM：
+
+1. **移除空 `GuestConnection` 并增加启动后验活**：`HcsStartComputeSystem` 返回后，VM 随后消失，
+   guest-ready 探测最终报 `HcsOpenComputeSystem: compute system was not found`。新增的验活避免把这种
+   情况误报为 Running，但没有修复 VM。实例：`e76e4d72-6c13-48d9-8b1b-6c401aacfbc4`。
+2. **选择当前 CmService `SavedAsTemplate`**：使用现场枚举到的模板
+   `b24a3fff-3991-45e4-aeec-e677de0355c7`，不是历史模板 ID；基底仍为 `Layers\...\Files`。
+   Start 返回 `0xC0370400`，Attribution 为 `VirtualDeviceFailure / PowerOnRestore / Virtual SMB Device`，
+   即 vSMB 保存状态恢复失败。实例：`6d8765f5-900e-4a83-9dc6-2f6a638b9473`。
+3. **模板启动改用旧公开配置中的 `BaseImages\<layer>\BaseLayer\Files` 形态**：Construct 返回
+   `0x80070003`，说明本机当前没有该路径。这证明不能把 2021 年公开配置的路径直接套到本机。
+   实例：`8231aeaf-8585-403d-91b4-f2bc12aa0707`。
+
+测试先行完成了空 GuestConnection、启动后消失、guest probe 失败、当前模板选择和基底路径的
+RED/GREEN；HCS 聚焦套件最后为 164/164 通过。这些测试只验证代码行为，**不证明真实 VM 可用**。
+完整套件曾两次为 518/519，通过外唯一失败为既有的
+`WindowMirrorHealthTests.Attach_adopts_an_advancing_live_writer` 时序测试，单测重跑通过。
+
+**结论与撤回**：当前直接手写配置既不能冷启动，也没有形成与当前 CMS 模板/vSMB 保存状态匹配的
+恢复链路。三次失败后的可能原因仍包括模板与其 CMS 创建的资源路径/保存状态不匹配，但没有足够
+证据选择下一项修复。所有未通过真实验收的产品及测试改动均已撤回，未提交、未合并；RDP、RAIL
+和后续 VNC 尚未开始验收。原始日志保存在 `artifacts/hcs-vm-fix-20261028/`。后续不得把上述不同
+HRESULT 当作进展，也不得在缺少新实现依据时继续变换字段。

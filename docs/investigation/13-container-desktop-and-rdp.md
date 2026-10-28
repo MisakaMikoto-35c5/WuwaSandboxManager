@@ -1941,3 +1941,33 @@ HRESULT 当作进展，也不得在缺少新实现依据时继续变换字段。
 **当前技术阻塞**：当前 CMS 的模板/vSMB 保存状态恢复契约仍未由手写 JSON 满足。继续采用进程注入或
 API 钩子抓取配置会增加破坏宿主 HCS 的风险，因此没有执行。其他 HRESULT 本身不是停止条件，但
 也不应被解释为接近成功；后续需要安全地取得当前 CMS 创建契约或改用不同的直接 HCS 启动架构。
+
+---
+
+## 31. 空 guest state 单变量启动触发硬停止（2026-10-28）/ Hard stop after fresh guest-state start
+
+本轮先将 `main` 合并到 `feat/windows-container-desktop`（merge commit `35b680a`），修复一处合并后的
+RAIL 启动列表空引用（`9081451`），标准完整测试达到 **543/543 通过**。随后依据本机
+`hcs-rdp-074400` 曾以空 guest state 越过 Start 并写盘的证据，只试验一个变量：新差分 VHD 仍引用平台
+prepared base，保留当前 `GuestConnection`，但新 VM 的 `sandbox.vmgs` 改由
+`HcsCreateEmptyGuestStateFile` 创建，不再复制 donor vmgs。没有加入 `RestoreState`、VMRS 或模板参数。
+
+TDD 的 RED 为 23/24（期望 `empty-vmgs`、实际 `child-vmgs`）；最小实现后的存储/JSON 测试为 37/37，
+完整测试为 543/543。随后仅执行一次直接 HCS 启动，实例为
+`45ffa743-2a62-4e93-ae7b-0b9bccaa07aa`。Create 成功，但约 6.5 秒后
+`HcsStartComputeSystem` 返回 **0x80370106**：
+
+```text
+SystemExit: Detail=Shutdown, Initiator=GuestOS
+WorkerExit: Type=StoppedOnReset, Detail=Reset, Initiator=GuestOS
+```
+
+发现该错误后已立即停止全部 HCS/VM/Sandbox 启动、查询和进一步实验，没有重试、清理平台资源、
+重启服务或进行 RDP/RAIL 验收。未通过真实验收的产品及测试改动已撤回，未提交、未合并；文档提交
+不包含失败实现。完整操作记录见 `.superpowers/sdd/2026-10-28-direct-hcs-vm-rdp-rail/task-1-report.md`，
+错误原文见 `artifacts/hcs-vm-fix-20261028/stopped-error.txt`。
+
+**可能原因（未证实）**：HCS 返回的归因只证明 guest OS 在 Start 期间 Shutdown/Reset。可能是空 guest
+state 与 prepared-base/当前直接 HCS 配置的首次启动或特化契约不匹配，也可能是当前平台 HCS 已再次进入
+故障状态；现有证据不能区分，也不能断言该单一改动就是宿主环境损坏的根因。按用户规则，在人工完成
+卸载、重启、再安装及官方恢复检查之前，不再继续任何实现或验收实验。

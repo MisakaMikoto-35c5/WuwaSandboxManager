@@ -4,7 +4,7 @@
 
 **Goal:** Make the direct HCS VM engine boot from the shared Windows Sandbox base, persist its writable state beside its manifest, and provide working full-desktop RDP and WDAG-style RAIL windows.
 
-**Architecture:** Keep `Wsm.Engine.Hcs`, the existing differencing-VHD provisioner, enhanced-session/HvSocket configuration, and the RDP/RAIL clients merged from `main`. Replace only the unsupported inheritance of another compute system's guest state with a fresh per-VM guest state. Resolve VM storage from the manifest recipe for both start and cleanup; do not copy the platform base or change process-isolation code.
+**Architecture:** Keep `Wsm.Engine.Hcs`, the existing differencing-VHD provisioner, enhanced-session/HvSocket configuration, and the RDP/RAIL clients merged from `main`. Preserve the historically successful contract: the prepared base supplies both the VHD parent and the initial guest-state copy, while each VM keeps its own writable copies thereafter. Resolve VM storage from the manifest recipe for both start and cleanup; do not copy the platform base or change process-isolation code.
 
 **Tech Stack:** .NET/C#, Host Compute System API, Hyper-V differencing VHDX, HvSocket/enhanced-session RDP, mstscax RemoteApp, xUnit.
 
@@ -30,22 +30,21 @@
 
 ---
 
-### Task 1: Fresh guest state for direct HCS VM cold start
+### Task 1: Restore and verify the known-good direct HCS VM start contract
 
 **Files:**
-- Modify: `src/10-Hcs/Wsm.Hcs.Storage/Internal/SandboxStorageProvisioner.cs`
+- Verify: `src/10-Hcs/Wsm.Hcs.Storage/Internal/SandboxStorageProvisioner.cs`
+- Verify: `src/10-Hcs/Wsm.Hcs.Json.Sandbox/Internal/SandboxVmJsonBuilder.cs`
 - Test: `tests/90-Tests/Wsm.Tests/Hcs/StorageProvisioningTests.cs`
+- Test: `tests/90-Tests/Wsm.Tests/Hcs/SandboxVmJsonBuilderTests.cs`
 
 **Interfaces:**
-- Consumes: existing `IHcsClient.CreateEmptyGuestStateFile`, prepared-base discovery, and `SandboxVmJsonBuilder.GuestState.GuestStateFilePath`.
-- Produces: a newly provisioned VM whose `sandbox.vmgs` is created empty rather than copied from the platform prepared base; existing VM state remains reusable.
+- Consumes: the platform prepared base and its initial `sandbox.vmgs`, matching the historically successful direct-HCS configuration.
+- Produces: a new differencing VHD and per-VM guest-state copy, with no `RestoreState`; existing VM files remain reusable.
 
-- [ ] **Step 1: Write failing provisioning tests.** Assert that a new differencing disk calls `CreateEmptyGuestStateFile` and never copies donor `sandbox.vmgs`; assert that an existing disk and guest state do not recreate either file.
-- [ ] **Step 2: Run the focused tests and confirm the new cold-start assertion fails.** Use the repository's normal `dotnet test` filter for `StorageProvisioningTests`.
-- [ ] **Step 3: Implement the minimal guest-state change.** For a new VM, create an empty guest-state file. Keep the platform base exclusively as the VHD parent and read-only OS layer; preserve existing guest state on restart. Do not add `RestoreState`, VMRS, template IDs, or new JSON fields.
-- [ ] **Step 4: Run focused HCS storage and JSON tests.** Expect all selected tests to pass and the emitted ordinary-start JSON to retain the current `GuestConnection` contract without `RestoreState`.
-- [ ] **Step 5: Perform one direct-HCS start using the current code plus this single change.** Preserve logs before running scripts in `artifacts/hcs-vm-fix-20261028/`. Require HCS Running and `vmwp` for at least 140 seconds and a successful guest command. On `0x80370106`, stop immediately. On another error, diagnose that result before any further change.
-- [ ] **Step 6: Commit only if the runtime gate passes.** Commit the focused code/tests and evidence with `fix(hcs): cold start with per-vm guest state`; otherwise revert the product/test experiment and record evidence without claiming success.
+- [ ] **Step 1: Verify the corrected evidence and existing regression tests.** The prepared base supplies the VHD parent and initial guest state; do not create an empty guest state for a new VM. Run the storage/JSON tests and confirm that ordinary start retains `GuestConnection` and omits `RestoreState`.
+- [ ] **Step 2: Perform one direct-HCS start with the unmodified known-good code.** Preserve logs before running scripts in `artifacts/hcs-vm-fix-20261028/`. Require HCS Running and `vmwp` for at least 140 seconds and a successful guest command. On `0x80370106`, stop immediately. On another error, diagnose that result before any further change.
+- [ ] **Step 3: Do not change product code if the known-good baseline passes.** Record the runtime evidence and proceed to persistence. If it fails, do not reintroduce the disproved empty-guest-state experiment or try a field matrix; report the new evidence and re-plan.
 
 ### Task 2: Manifest-local persistent VM storage
 

@@ -559,7 +559,7 @@ public sealed partial class SandboxInstanceViewModel : ObservableObject
             .Select(p => (p.Path.ToLowerInvariant(), p.Arguments ?? string.Empty))
             .ToHashSet();
 
-        foreach (var app in _owner.GlobalRailApps.Concat(RailApps))
+        foreach (var app in (_owner?.GlobalRailApps ?? []).Concat(RailApps))
         {
             if (!seen.Add((app.Program.ToLowerInvariant(), app.Arguments ?? string.Empty)))
             {
